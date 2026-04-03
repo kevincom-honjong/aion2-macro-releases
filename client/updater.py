@@ -23,7 +23,7 @@ import requests  # pip install requests
 # TODO: Railway 배포 후 아래 URL을 실제 주소로 교체
 # Railway #1 (업데이터 서버) 배포 완료 후:
 #   UPDATE_SERVER = "https://실제주소.railway.app"
-UPDATE_SERVER    = "https://TODO_UPDATER_RAILWAY_URL.railway.app"  # ← 교체 필요
+UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 TIMEOUT_CONNECT  = 5     # 서버 연결 타임아웃 (초)
 TIMEOUT_DOWNLOAD = 60    # 파일 다운로드 타임아웃 (초)
 
