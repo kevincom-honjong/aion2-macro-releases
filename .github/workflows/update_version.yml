@@ -1,0 +1,41 @@
+name: Auto Update version.json
+
+# exe 또는 이미지 파일이 변경될 때 자동 실행
+on:
+  push:
+    branches: [main]
+    paths:
+      - "exe/**"
+      - "images2/**"
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # version.json 커밋 권한
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Calculate hashes and update version.json
+        run: python version_scripts/update_version.py
+
+      - name: Commit updated version.json
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add version.json
+          if git diff --staged --quiet; then
+            echo "version.json 변경 없음 — 커밋 스킵"
+          else
+            git commit -m "chore: auto-update version.json [skip ci]"
+            git push
+          fi

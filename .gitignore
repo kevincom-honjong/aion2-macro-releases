@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.log
+*.bak
+.venv/
+venv/
+dist/
+build/
+*.spec
+
+# exe 바이너리는 직접 업로드 (빌드 결과물)
+# images2/ 도 직접 업로드
+# 단, .gitkeep 파일은 포함 (빈 폴더 유지용)
