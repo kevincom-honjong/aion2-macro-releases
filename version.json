@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "",
+    "sha256": "97efe0ee59773c91d9e6b1160eefdd8bd14cd3804b4e4b7c16bef098754db7e6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/혼종_통합_자동.exe"
   },
   "images": {
@@ -48,6 +48,9 @@
     "fraud.png": "f5810e68ea79162a577396a3801a6487eb4486e7d305feede666ab266d7cdcb5",
     "full_screen.png": "8d1bda2bad8b0d06a3badf49ba35a40277237216571bc6da5c6b10dfffbf2291",
     "game_start_btn.png": "c42479b28e13ca7243c504b83984a953f60758eb5ea6d7189d62643900ca13c2",
+    "gung_5.png": "99736d6af3d0064ea3430e5e1ef86e1d431d7e02b65d0f024af89350e669fbc0",
+    "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
+    "gung_7.png": "a9aa69708522dadeeef80f1ba6f077a4a7e0757eef0c6ea92f6b266e6387640e",
     "gungsung.png": "1efc7e6fe4b1042d768c05b223dbba75664f3b1ed204f8d5ac19dedeb27f05f6",
     "ingame.png": "beea96978bb876b21e5f30d432fd36f9aff9fe97540f7af889a0d6331c392d9a",
     "jump_skill.png": "b73e275c607b7aadb35b15008e5e5cdcf6acd0e506e5284e2e3af6caa8ebcd24",
@@ -105,7 +108,7 @@
     "화면 캡처 2026-01-14 011016.png": "34cdc0cb2078d857e63773e4e23ad9f69ccb920f568513fbf51d5e9b36a9965d",
     "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb"
   },
-  "images_version": "20260403100554",
-  "updated_at": "2026-04-03T10:05:54",
+  "images_version": "20260404223453",
+  "updated_at": "2026-04-04T22:34:53",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
