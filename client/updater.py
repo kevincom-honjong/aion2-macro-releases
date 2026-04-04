@@ -127,6 +127,8 @@ def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool
                 return False
 
         shutil.move(tmp_path, dest_path)
+        # 파일 수정 날짜를 현재 시간으로 강제 갱신 (shutil.move 후 타임스탬프 보장)
+        os.utime(dest_path, None)
         return True
 
     except requests.exceptions.ConnectionError:
@@ -182,13 +184,17 @@ def run_updater():
 
     # ── exe 업데이트 ───────────────────────────────
     exe_info = result.get("exe_update")
+    local_ver = local.get("exe_version", "없음")
+    server_ver = result.get("latest_exe_version", "알 수 없음")
+
     if exe_info:
         new_ver = exe_info["version"]
-        old_ver = local.get("exe_version", "없음")
-        log(f"[업데이터] exe 새 버전 발견: {old_ver} → {new_ver}")
+        log(f"[버전] 로컬={local_ver}  서버={server_ver}  → 업데이트 필요")
 
-        # 기존 exe 백업
+        # 기존 exe 수정 날짜 기록
+        old_mtime = None
         if os.path.exists(MACRO_EXE):
+            old_mtime = os.path.getmtime(MACRO_EXE)
             try:
                 shutil.copy2(MACRO_EXE, MACRO_EXE_BACKUP)
                 log(f"[업데이터] 기존 exe 백업: {MACRO_EXE_BACKUP}")
@@ -204,10 +210,14 @@ def run_updater():
         if ok:
             local["exe_version"] = new_ver
             any_update = True
-            log(f"[업데이터] ✓ exe 업데이트 완료 → v{new_ver}")
+            new_mtime = os.path.getmtime(MACRO_EXE)
+            import datetime
+            old_dt = datetime.datetime.fromtimestamp(old_mtime).strftime('%Y-%m-%d %H:%M:%S') if old_mtime else "없음"
+            new_dt = datetime.datetime.fromtimestamp(new_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            log(f"[버전] exe 업데이트 완료: v{local_ver} → v{new_ver}")
+            log(f"[버전] 파일 날짜: {old_dt} → {new_dt}")
         else:
             err("[업데이터] exe 업데이트 실패")
-            # 백업 복구
             if os.path.exists(MACRO_EXE_BACKUP):
                 try:
                     shutil.copy2(MACRO_EXE_BACKUP, MACRO_EXE)
@@ -215,7 +225,7 @@ def run_updater():
                 except Exception as e:
                     err(f"[업데이터] 복구 실패: {e}")
     else:
-        log("[업데이터] exe 최신 버전 유지")
+        log(f"[버전] 로컬={local_ver}  서버={server_ver}  → 최신 버전 (업데이트 없음)")
 
     # ── 이미지 업데이트 ────────────────────────────
     images_to_update = result.get("images_update", [])
@@ -231,7 +241,9 @@ def run_updater():
             if ok:
                 local_image_hashes[img["filename"]] = img["sha256"]
                 success += 1
-                log(f"[업데이터] ✓ 이미지: {img['filename']}")
+                import datetime
+                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(dest)).strftime('%Y-%m-%d %H:%M:%S')
+                log(f"[업데이터] ✓ 이미지: {img['filename']} (수정날짜: {mtime})")
             else:
                 fail += 1
                 err(f"[업데이터] ✗ 이미지: {img['filename']}")
