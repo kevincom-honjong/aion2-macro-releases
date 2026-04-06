@@ -433,6 +433,17 @@ def _status_thread():
             with _state_lock:
                 state = macro_state
                 pid = macro_proc.pid if macro_proc and macro_proc.poll() is None else None
+            # info.txt에서 token 읽기 (설정 완료 여부 확인)
+            _token = ""
+            try:
+                if os.path.exists(INFO_TXT):
+                    with open(INFO_TXT, 'r', encoding='utf-8') as _f:
+                        for _ln in _f:
+                            if _ln.strip().startswith("token="):
+                                _token = _ln.split("=", 1)[1].strip()
+            except Exception:
+                pass
+            _setup_ok = (pc_id not in ("PC-??", "PC-?", "") and _token != "")
             requests.post(
                 f"{CONTROL_SERVER}/updater/status/{pc_id}",
                 json={
@@ -440,6 +451,7 @@ def _status_thread():
                     "macro_state": state,
                     "macro_pid": pid,
                     "updater_version": UPDATER_VERSION,
+                    "setup_complete": _setup_ok,
                 },
                 headers=_headers(),
                 timeout=(TIMEOUT_CONNECT, 5),
