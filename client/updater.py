@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.7"
+UPDATER_VERSION  = "2.0.8"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -370,10 +370,55 @@ def check_and_update() -> bool:
 
 
 # ==================================================
-# 스크린샷 (Ctrl+Q)
+# 스크린샷 핫키
+# info.txt 에 screenshot_key=f12 이렇게 설정 가능
+# 기본값: ctrl+q
+# 지원 형식: ctrl+q / ctrl+f12 / f9 / f10 / f11 / f12 / pause 등
 # ==================================================
+
+# VK 코드 테이블
+_VK_MAP = {
+    'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,'f5':0x74,'f6':0x75,
+    'f7':0x76,'f8':0x77,'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B,
+    'pause':0x13,'scroll':0x91,'insert':0x2D,'home':0x24,
+    'a':0x41,'b':0x42,'c':0x43,'d':0x44,'e':0x45,'f':0x46,'g':0x47,
+    'h':0x48,'i':0x49,'j':0x4A,'k':0x4B,'l':0x4C,'m':0x4D,'n':0x4E,
+    'o':0x4F,'p':0x50,'q':0x51,'r':0x52,'s':0x53,'t':0x54,'u':0x55,
+    'v':0x56,'w':0x57,'x':0x58,'y':0x59,'z':0x5A,
+}
+
+def _parse_hotkey(key_str: str):
+    """'ctrl+f12' → (MOD, VK) / 'f12' → (0, VK)"""
+    MOD_ALT     = 0x0001
+    MOD_CONTROL = 0x0002
+    MOD_SHIFT   = 0x0004
+    parts = [p.strip().lower() for p in key_str.split('+')]
+    mod = 0
+    vk  = 0
+    for p in parts:
+        if p == 'ctrl':  mod |= MOD_CONTROL
+        elif p == 'alt': mod |= MOD_ALT
+        elif p == 'shift': mod |= MOD_SHIFT
+        else:
+            vk = _VK_MAP.get(p, 0)
+    return mod, vk
+
+
+def _read_screenshot_key() -> str:
+    """info.txt 의 screenshot_key= 값 읽기. 없으면 ctrl+q"""
+    try:
+        if os.path.exists(INFO_TXT):
+            with open(INFO_TXT, 'r', encoding='utf-8') as f:
+                for ln in f:
+                    if ln.strip().startswith('screenshot_key='):
+                        return ln.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return 'ctrl+q'
+
+
 def take_bug_screenshot():
-    """Ctrl+Q → 전체화면 캡처 후 bugs 폴더에 저장"""
+    """핫키 → 전체화면 캡처 후 bugs 폴더에 저장"""
     try:
         os.makedirs(BUGS_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -387,20 +432,21 @@ def take_bug_screenshot():
 
 
 def _hotkey_thread():
-    """
-    RegisterHotKey 방식 — keyboard 라이브러리와 달리
-    RDP 풀스크린 / DirectX 풀스크린에서도 동작함
-    """
-    user32 = ctypes.windll.user32
-    MOD_CONTROL = 0x0002
-    VK_Q        = 0x51
-    HOTKEY_ID   = 9001   # 충돌 없는 임의 ID
-    WM_HOTKEY   = 0x0312
+    """RegisterHotKey — RDP 풀스크린 / DirectX 풀스크린에서도 동작"""
+    user32   = ctypes.windll.user32
+    HOTKEY_ID = 9001
+    WM_HOTKEY = 0x0312
 
-    if not user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL, VK_Q):
-        err("[단축키] RegisterHotKey 실패 — 이미 다른 프로그램이 Ctrl+Q 점유 중일 수 있음")
+    key_str = _read_screenshot_key()
+    mod, vk = _parse_hotkey(key_str)
+    if not vk:
+        err(f"[단축키] 알 수 없는 키: {key_str} → 스크린샷 단축키 비활성화")
         return
-    log("[단축키] Ctrl+Q → 버그 스크린샷 등록 (RegisterHotKey)")
+
+    if not user32.RegisterHotKey(None, HOTKEY_ID, mod, vk):
+        err(f"[단축키] RegisterHotKey 실패 ({key_str}) — 다른 프로그램이 점유 중일 수 있음")
+        return
+    log(f"[단축키] {key_str.upper()} → 버그 스크린샷 등록")
 
     msg = wintypes.MSG()
     try:
@@ -596,8 +642,12 @@ def main():
             with open(INFO_TXT, 'w', encoding='utf-8') as f:
                 f.write("pc_id=PC-??\n")
                 f.write("token=\n")
+                f.write("char1=\n")
+                f.write("char2=\n")
+                f.write("char3=\n")
+                f.write("screenshot_key=ctrl+q\n")
             log(f"[업데이터] info.txt 기본 양식 생성됨 → {INFO_TXT}")
-            log("[업데이터] ※ info.txt 에서 pc_id 를 수정하고 updater를 재시작하세요")
+            log("[업데이터] ※ info.txt 에서 pc_id / char1~3 을 수정하고 updater를 재시작하세요")
         except Exception as e:
             err(f"[업데이터] info.txt 생성 실패: {e}")
 
