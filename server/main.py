@@ -887,13 +887,16 @@ function renderInfoContent(info) {
     awakening_ticket: '각성전 도전횟수',
     daily_ticket:     '일일던전 티켓',
   };
+  // odd_energy는 "195(+1,985)/840" 형식 문자열 → fmtNum 제외
+  const RAW_FIELDS = new Set(['odd_energy']);
   const charsHtml = (info.chars||[]).map((c,i) => {
     const rows = Object.entries(LABELS).map(([k,lbl]) => {
       const v = c[k];
-      if (v == null) return '';
+      if (v == null || v === '') return '';
+      const display = RAW_FIELDS.has(k) ? v : fmtNum(v);
       return `<div class="flex justify-between text-xs py-0.5 border-b border-gray-800/60">
         <span class="text-gray-500">${lbl}</span>
-        <span class="text-gray-200 font-medium">${fmtNum(v)}</span>
+        <span class="text-gray-200 font-medium">${display}</span>
       </div>`;
     }).join('');
     return `<div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
