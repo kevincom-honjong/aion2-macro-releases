@@ -47,14 +47,10 @@ def main():
         new_hash    = sha256_file(updater_path)
         old_updater = ver.get("updater", {})
         if new_hash != old_updater.get("sha256", ""):
-            old_ver = old_updater.get("version", "2.0.0")
-            new_ver = bump_patch(old_ver)
-            ver["updater"] = {
-                "version":      new_ver,
-                "sha256":       new_hash,
-                "download_url": f"{GITHUB_RAW_BASE}/exe/{UPDATER_FILENAME}",
-            }
-            print(f"[updater] 버전 업데이트: {old_ver} → {new_ver}")
+            # 버전은 수동 관리 (exe 안의 UPDATER_VERSION과 일치시켜야 함)
+            ver["updater"]["sha256"] = new_hash
+            ver["updater"]["download_url"] = f"{GITHUB_RAW_BASE}/exe/{UPDATER_FILENAME}"
+            print(f"[updater] SHA256 업데이트 (v{old_updater.get('version','?')} 유지)")
             changed = True
         else:
             print(f"[updater] 변경 없음 (v{old_updater.get('version','?')})")
