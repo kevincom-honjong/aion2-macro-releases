@@ -24,7 +24,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.5"
+UPDATER_VERSION  = "2.0.6"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -261,7 +261,13 @@ def self_update(updater_info: dict):
     try:
         with open(bat_path, 'w', encoding='ascii') as f:
             f.write(bat)
-        subprocess.Popen(bat_path, shell=True, close_fds=True)
+        # DETACHED_PROCESS: 부모 종료 후에도 독립적으로 계속 실행
+        subprocess.Popen(
+            bat_path,
+            shell=False,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
         log(f"[자가업데이트] 교체 스크립트 실행 → 2초 후 재시작됩니다.")
         time.sleep(1)
         sys.exit(0)
