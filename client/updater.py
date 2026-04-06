@@ -21,7 +21,7 @@ import requests  # pip install requests
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.0"
+UPDATER_VERSION  = "2.0.4"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -555,7 +555,26 @@ def main():
     except Exception as e:
         err(f"[업데이터] 시작 업데이트 실패 (무시하고 계속): {e}")
 
-    log("[업데이터] 대시보드에서 ▶ 시작 명령을 보내면 매크로 실행됩니다.")
+    # ── 업데이트 완료 후 매크로 자동 실행 ───────────────────────────────────
+    _token_for_start = ""
+    try:
+        if os.path.exists(INFO_TXT):
+            with open(INFO_TXT, 'r', encoding='utf-8') as _f:
+                for _ln in _f:
+                    if _ln.strip().startswith("token="):
+                        _token_for_start = _ln.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    _setup_ok_for_start = (pc_id not in ("PC-??", "PC-?", "") and _token_for_start != "")
+
+    if not _setup_ok_for_start:
+        log("[업데이터] ※ info.txt 에 pc_id / token 미설정 → 매크로 자동 실행 생략")
+        log("[업데이터] info.txt 설정 후 updater를 재시작하세요")
+    elif not os.path.exists(MACRO_EXE):
+        log(f"[업데이터] 매크로 EXE 없음 ({MACRO_EXE}) → 대시보드에서 수동 시작하세요")
+    else:
+        log("[업데이터] 업데이트 완료 → 매크로 자동 실행")
+        start_macro()
 
     threads = [
         threading.Thread(target=_poll_thread,        daemon=True, name="poll"),
