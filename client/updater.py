@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.1.0"
+UPDATER_VERSION  = "2.2.0"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
