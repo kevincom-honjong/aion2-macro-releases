@@ -114,8 +114,8 @@
     "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb"
   },
   "updater": {
-    "version": "2.0.9",
-    "sha256": "34beb41c2729cf764da230f999e6cb9b983ecc382eee8eea37c5aa6c1600aa43",
+    "version": "2.1.0",
+    "sha256": "7949bd15e113b3af656459b031cc064a2204588039d90d409a31aa44218ac9fc",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260406141928",
