@@ -357,7 +357,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="bg-gray-900 w-full max-w-lg h-full flex flex-col border-l border-gray-800 shadow-2xl">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
       <h2 class="font-bold text-indigo-400" id="log-modal-title">로그</h2>
-      <button onclick="closeLogModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+      <div class="flex items-center gap-2">
+        <button onclick="requestLogs()" class="text-xs px-2 py-1 bg-cyan-700/60 hover:bg-cyan-600/80 text-cyan-200 rounded">📥 로그 요청</button>
+        <button onclick="closeLogModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+      </div>
     </div>
     <div id="log-entries" class="flex-1 overflow-y-auto p-4 log-box text-xs space-y-0.5 scrollbar-thin"></div>
   </div>
@@ -745,6 +748,14 @@ function appendLogLine(level, msg) {
 }
 function closeLogModal(){logModalPc=null;document.getElementById('log-modal').classList.add('hidden');}
 
+async function requestLogs() {
+  if (!logModalPc) return;
+  await sendCmd(logModalPc, 'get_logs', {});
+  showToast(`📥 ${logModalPc} 로그 요청 전송`);
+  // 3초 후 자동 새로고침
+  setTimeout(() => { if (logModalPc) openLogModal(logModalPc); }, 3000);
+}
+
 // ─── 토스트 ──────────────────────────────────────────────────────────────────
 let _toastTimer;
 function showToast(msg) {
@@ -1004,6 +1015,24 @@ async def pc_logs(pc_id: str, request: Request):
         raise HTTPException(status_code=401)
     logs = await get_logs(pc_id, limit=200)
     return JSONResponse({"logs": logs})
+
+
+@app.post("/log/{pc_id}")
+async def receive_logs(pc_id: str, request: Request):
+    """매크로가 보내는 로그 배치 수신"""
+    if not check_api_key(request):
+        raise HTTPException(status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400)
+    logs = data.get("logs", [])
+    for entry in logs[:50]:   # 배치당 최대 50개
+        level   = str(entry.get("level", "info"))[:10]
+        message = str(entry.get("message", ""))[:500]
+        if message:
+            await insert_log(pc_id, level, message)
+    return JSONResponse({"ok": True, "count": len(logs)})
 
 
 @app.get("/commands/recent")
