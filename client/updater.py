@@ -253,9 +253,12 @@ def self_update(updater_info: dict):
         return
 
     bat_path = current_exe + "_selfupdate.bat"
+    # PyInstaller --onefile 임시폴더 정리 후 재시작
     bat = (
         "@echo off\r\n"
         "timeout /t 3 /nobreak > nul\r\n"
+        # 이전 프로세스의 _MEI 임시폴더 정리
+        f'for /d %%i in ("%TEMP%\\_MEI*") do rmdir /s /q "%%i" 2>nul\r\n'
         f'move /y "{new_exe_tmp}" "{current_exe}"\r\n'
         f'if errorlevel 1 (\r\n'
         f'  timeout /t 2 /nobreak > nul\r\n'
