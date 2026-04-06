@@ -162,13 +162,13 @@ async def _build_full_state() -> list[dict]:
             # updater 기록 자체가 없으면 offline
             pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(pid, 0)
-        # char_info 이름 카드에 반영
-        if pid and not pc.get("chars"):
+        # char_info 이름 항상 로드 (OCR 수집값 우선)
+        if pid:
             ci = await get_char_info(pid)
             if ci and ci.get("chars"):
                 pc["chars"] = [
                     c.get("name") or c.get("char_name") or ""
-                    for i, c in enumerate(ci["chars"])
+                    for c in ci["chars"]
                 ]
 
     for pid, u in updater_map.items():
@@ -551,9 +551,9 @@ function buildCard(pc) {
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
-        <span class="inline-flex items-center gap-1 text-xs font-semibold ${cfg.text}">
-          <span class="w-2 h-2 rounded-full ${cfg.badge}${pulse}"></span>
-          <span class="hidden sm:inline">${cfg.label}</span>
+        <span class="inline-flex items-center gap-1.5 text-sm font-bold ${cfg.text}">
+          <span class="w-2.5 h-2.5 rounded-full ${cfg.badge}${pulse}"></span>
+          ${cfg.label}
         </span>
       </div>
     </div>
