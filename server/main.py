@@ -9,6 +9,7 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from urllib.parse import quote
 import httpx
 import os
 import json
@@ -191,7 +192,7 @@ async def check_updates(req: CheckRequest):
             images_update.append(ImageUpdateInfo(
                 filename=filename,
                 sha256=server_hash,
-                download_url=f"{RAW_BASE}/images2/{filename}",
+                download_url=f"{RAW_BASE}/images2/{quote(filename, safe='')}",
             ))
 
     if images_update:
