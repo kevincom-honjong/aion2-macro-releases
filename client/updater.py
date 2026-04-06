@@ -1,6 +1,6 @@
-# updater.py - AION2 매크로 자동 업데이터 클라이언트
+# updater.py - 매크로 상주형 업데이터 데몬 v2.0
 # PyInstaller로 updater.exe 빌드 후 각 PC에 배포
-# 동작: 버전 체크 → 업데이트 다운로드 → 혼종_통합_자동.exe 자동 실행
+# 동작: 항상 상주, 대시보드 명령 수신 → 매크로 시작/정지/재시작/업데이트
 #
 # 빌드 명령:
 #   pyinstaller --onefile --noconsole updater.py
@@ -13,26 +13,35 @@ import shutil
 import subprocess
 import logging
 import time
+import threading
 from pathlib import Path
 
 import requests  # pip install requests
 
 # ==================================================
-# 설정 — 배포 전에 UPDATE_SERVER만 실제 URL로 교체
+# 설정
 # ==================================================
-# TODO: Railway 배포 후 아래 URL을 실제 주소로 교체
-# Railway #1 (업데이터 서버) 배포 완료 후:
-#   UPDATE_SERVER = "https://실제주소.railway.app"
+UPDATER_VERSION  = "2.0.0"
+
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
-TIMEOUT_CONNECT  = 5     # 서버 연결 타임아웃 (초)
-TIMEOUT_DOWNLOAD = 60    # 파일 다운로드 타임아웃 (초)
+CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
+CONTROL_API_KEY  = "aion2_secret_2026"
+
+TIMEOUT_CONNECT  = 5
+TIMEOUT_DOWNLOAD = 60
 
 MACRO_EXE        = r"C:\auto\혼종_통합_자동.exe"
 MACRO_EXE_BACKUP = r"C:\auto\혼종_통합_자동.exe.bak"
 IMAGES_DIR       = r"C:\auto\images2"
 LOCAL_VERSION    = r"C:\auto\version.json"
 LOG_FILE         = r"C:\auto\updater.log"
-INFO_TXT         = r"C:\auto\info.txt"   # 건드리지 않음
+INFO_TXT         = r"C:\auto\info.txt"
+BUGS_DIR         = r"C:\auto\bugs"
+
+POLL_INTERVAL    = 10   # 명령 폴링 간격 (초)
+STATUS_INTERVAL  = 30   # 상태 보고 간격 (초)
+BUG_INTERVAL     = 60   # 버그 업로드 간격 (초)
+CRASH_CHECK_INT  = 5    # 크래시 체크 간격 (초)
 
 # ==================================================
 # 로깅
@@ -50,12 +59,45 @@ logging.basicConfig(
 log = logging.info
 err = logging.error
 
+# ==================================================
+# 전역 상태
+# ==================================================
+pc_id: str = "PC-?"
+macro_proc: subprocess.Popen | None = None
+macro_state: str = "stopped"   # stopped / running / updating / crashed
+_state_lock = threading.Lock()
+
 
 # ==================================================
-# 유틸 함수
+# PC ID 로드
 # ==================================================
+def load_pc_id() -> str:
+    global pc_id
+    try:
+        if os.path.exists(INFO_TXT):
+            with open(INFO_TXT, 'r', encoding='utf-8') as f:
+                lines = f.read().strip().splitlines()
+            kv = {}
+            for ln in lines:
+                if '=' in ln:
+                    k, v = ln.split('=', 1)
+                    kv[k.strip()] = v.strip()
+            pc_id = (kv.get('pc_id') or kv.get('pc_name')
+                     or (lines[0].strip() if lines else 'PC-?'))
+            log(f"[업데이터] PC ID: {pc_id}")
+    except Exception as e:
+        err(f"[업데이터] info.txt 읽기 실패: {e}")
+    return pc_id
+
+
+# ==================================================
+# 유틸
+# ==================================================
+def _headers() -> dict:
+    return {"X-Api-Key": CONTROL_API_KEY}
+
+
 def sha256_file(path: str) -> str:
-    """파일의 SHA256 해시 반환"""
     h = hashlib.sha256()
     with open(path, 'rb') as f:
         for chunk in iter(lambda: f.read(65536), b''):
@@ -64,7 +106,6 @@ def sha256_file(path: str) -> str:
 
 
 def load_local_version() -> dict:
-    """로컬 version.json 로드"""
     try:
         if os.path.exists(LOCAL_VERSION):
             with open(LOCAL_VERSION, 'r', encoding='utf-8') as f:
@@ -75,7 +116,6 @@ def load_local_version() -> dict:
 
 
 def save_local_version(data: dict):
-    """로컬 version.json 저장"""
     try:
         with open(LOCAL_VERSION, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -84,7 +124,6 @@ def save_local_version(data: dict):
 
 
 def get_local_image_hashes() -> dict:
-    """C:\\auto\\images2 내 모든 파일의 SHA256 해시 반환"""
     hashes = {}
     if not os.path.exists(IMAGES_DIR):
         return hashes
@@ -99,201 +138,356 @@ def get_local_image_hashes() -> dict:
 
 
 def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool:
-    """
-    URL에서 파일 다운로드.
-    임시파일에 받은 후 해시 검증 → 교체.
-    실패 시 False 반환.
-    """
     tmp_path = dest_path + ".tmp"
     try:
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        r = requests.get(
-            url, stream=True,
-            timeout=(TIMEOUT_CONNECT, TIMEOUT_DOWNLOAD)
-        )
+        r = requests.get(url, stream=True,
+                         timeout=(TIMEOUT_CONNECT, TIMEOUT_DOWNLOAD))
         r.raise_for_status()
-
         with open(tmp_path, 'wb') as f:
             for chunk in r.iter_content(chunk_size=65536):
                 f.write(chunk)
-
-        # SHA256 검증
         if expected_sha256:
             actual = sha256_file(tmp_path)
             if actual != expected_sha256:
-                err(f"[다운로드] 해시 불일치 {os.path.basename(dest_path)}: "
-                    f"expected={expected_sha256[:12]}... actual={actual[:12]}...")
+                err(f"[다운로드] 해시 불일치: {os.path.basename(dest_path)}")
                 os.remove(tmp_path)
                 return False
-
         shutil.move(tmp_path, dest_path)
-        # 파일 수정 날짜를 현재 시간으로 강제 갱신 (shutil.move 후 타임스탬프 보장)
         os.utime(dest_path, None)
         return True
-
     except requests.exceptions.ConnectionError:
         err(f"[다운로드] 연결 실패: {url}")
     except requests.exceptions.Timeout:
         err(f"[다운로드] 타임아웃: {url}")
     except Exception as e:
         err(f"[다운로드] 실패 {url}: {e}")
-
     if os.path.exists(tmp_path):
         try:
             os.remove(tmp_path)
-        except:
+        except Exception:
             pass
     return False
 
 
 # ==================================================
-# 업데이터 메인 로직
+# 매크로 프로세스 관리
 # ==================================================
-def run_updater():
-    log("=" * 50)
-    log("[업데이터] 시작")
+def _set_state(state: str):
+    global macro_state
+    with _state_lock:
+        macro_state = state
+    log(f"[상태] macro_state → {state}")
 
+
+def start_macro() -> bool:
+    global macro_proc
+    with _state_lock:
+        if macro_proc is not None and macro_proc.poll() is None:
+            log("[매크로] 이미 실행 중")
+            return True
+    if not os.path.exists(MACRO_EXE):
+        err(f"[매크로] EXE 없음: {MACRO_EXE}")
+        return False
+    try:
+        proc = subprocess.Popen(
+            [MACRO_EXE],
+            cwd=os.path.dirname(MACRO_EXE),
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == 'win32' else 0
+        )
+        with _state_lock:
+            macro_proc = proc
+        _set_state("running")
+        log(f"[매크로] 시작 완료 PID={proc.pid}")
+        return True
+    except Exception as e:
+        err(f"[매크로] 시작 실패: {e}")
+        _set_state("crashed")
+        return False
+
+
+def stop_macro():
+    global macro_proc
+    with _state_lock:
+        proc = macro_proc
+        macro_proc = None
+    if proc is None:
+        return
+    if proc.poll() is not None:
+        _set_state("stopped")
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        log("[매크로] 정지 완료")
+    except Exception as e:
+        err(f"[매크로] 정지 실패: {e}")
+    _set_state("stopped")
+
+
+# ==================================================
+# 업데이트 로직
+# ==================================================
+def check_and_update() -> bool:
+    """서버 버전 체크 후 필요시 업데이트. True = 업데이트 있었음."""
+    log("[업데이트] 체크 시작")
+    _set_state("updating")
     local = load_local_version()
     local_image_hashes = get_local_image_hashes()
-    log(f"[업데이터] 현재 exe 버전: {local.get('exe_version', '없음')}, "
-        f"로컬 이미지: {len(local_image_hashes)}개")
 
-    # ── 서버에 업데이트 체크 요청 ──────────────────
     try:
-        log(f"[업데이터] 서버 체크: {UPDATE_SERVER}/check")
         resp = requests.post(
             f"{UPDATE_SERVER}/check",
-            json={
-                "exe_version": local.get("exe_version", "0.0.0"),
-                "image_hashes": local_image_hashes,
-            },
+            json={"exe_version": local.get("exe_version", "0.0.0"),
+                  "image_hashes": local_image_hashes},
             timeout=(TIMEOUT_CONNECT, 15),
         )
         resp.raise_for_status()
         result = resp.json()
-        log(f"[업데이터] 서버 응답 OK — "
-            f"최신 exe={result.get('latest_exe_version')}, "
-            f"이미지 업데이트={len(result.get('images_update', []))}개")
     except Exception as e:
-        err(f"[업데이터] 서버 연결 실패: {e}")
-        log("[업데이터] 기존 버전으로 매크로 실행")
-        launch_macro()
-        return
+        err(f"[업데이트] 서버 연결 실패: {e}")
+        _set_state("stopped")
+        return False
 
     any_update = False
 
-    # ── exe 업데이트 ───────────────────────────────
+    # exe 업데이트
     exe_info = result.get("exe_update")
-    local_ver = local.get("exe_version", "없음")
-    server_ver = result.get("latest_exe_version", "알 수 없음")
-
     if exe_info:
         new_ver = exe_info["version"]
-        log(f"[버전] 로컬={local_ver}  서버={server_ver}  → 업데이트 필요")
-
-        # 기존 exe 수정 날짜 기록
-        old_mtime = None
+        local_ver = local.get("exe_version", "없음")
+        log(f"[업데이트] exe {local_ver} → {new_ver}")
         if os.path.exists(MACRO_EXE):
-            old_mtime = os.path.getmtime(MACRO_EXE)
             try:
                 shutil.copy2(MACRO_EXE, MACRO_EXE_BACKUP)
-                log(f"[업데이터] 기존 exe 백업: {MACRO_EXE_BACKUP}")
             except Exception as e:
-                err(f"[업데이터] 백업 실패: {e}")
-
-        # 다운로드
-        ok = download_file(
-            exe_info["download_url"],
-            MACRO_EXE,
-            exe_info.get("sha256")
-        )
+                err(f"[업데이트] 백업 실패: {e}")
+        ok = download_file(exe_info["download_url"], MACRO_EXE, exe_info.get("sha256"))
         if ok:
             local["exe_version"] = new_ver
             any_update = True
-            new_mtime = os.path.getmtime(MACRO_EXE)
-            import datetime
-            old_dt = datetime.datetime.fromtimestamp(old_mtime).strftime('%Y-%m-%d %H:%M:%S') if old_mtime else "없음"
-            new_dt = datetime.datetime.fromtimestamp(new_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            log(f"[버전] exe 업데이트 완료: v{local_ver} → v{new_ver}")
-            log(f"[버전] 파일 날짜: {old_dt} → {new_dt}")
+            log(f"[업데이트] exe 완료: v{new_ver}")
         else:
-            err("[업데이터] exe 업데이트 실패")
+            err("[업데이트] exe 다운로드 실패")
             if os.path.exists(MACRO_EXE_BACKUP):
                 try:
                     shutil.copy2(MACRO_EXE_BACKUP, MACRO_EXE)
-                    log("[업데이터] 백업에서 복구 완료")
+                    log("[업데이트] 백업 복구 완료")
                 except Exception as e:
-                    err(f"[업데이터] 복구 실패: {e}")
+                    err(f"[업데이트] 복구 실패: {e}")
     else:
-        log(f"[버전] 로컬={local_ver}  서버={server_ver}  → 최신 버전 (업데이트 없음)")
+        log(f"[업데이트] exe 최신 ({local.get('exe_version', '?')})")
 
-    # ── 이미지 업데이트 ────────────────────────────
+    # 이미지 업데이트
     images_to_update = result.get("images_update", [])
     if images_to_update:
-        log(f"[업데이터] 이미지 변경 {len(images_to_update)}개 다운로드 시작")
         os.makedirs(IMAGES_DIR, exist_ok=True)
-        success = 0
-        fail = 0
-
         for img in images_to_update:
             dest = os.path.join(IMAGES_DIR, img["filename"])
             ok = download_file(img["download_url"], dest, img.get("sha256"))
             if ok:
                 local_image_hashes[img["filename"]] = img["sha256"]
-                success += 1
-                import datetime
-                mtime = datetime.datetime.fromtimestamp(os.path.getmtime(dest)).strftime('%Y-%m-%d %H:%M:%S')
-                log(f"[업데이터] ✓ 이미지: {img['filename']} (수정날짜: {mtime})")
+                any_update = True
+                log(f"[업데이트] ✓ 이미지: {img['filename']}")
             else:
-                fail += 1
-                err(f"[업데이터] ✗ 이미지: {img['filename']}")
-
-        log(f"[업데이터] 이미지 완료: {success}개 성공, {fail}개 실패")
-        if success > 0:
-            any_update = True
+                err(f"[업데이트] ✗ 이미지: {img['filename']}")
     else:
-        log("[업데이터] 이미지 최신 상태")
+        log("[업데이트] 이미지 최신 상태")
 
-    # ── 로컬 버전 저장 ─────────────────────────────
     local["image_hashes"] = local_image_hashes
     local["last_check"] = time.strftime('%Y-%m-%d %H:%M:%S')
     save_local_version(local)
+    log("[업데이트] 완료!" if any_update else "[업데이트] 최신 버전")
+    _set_state("stopped")
+    return any_update
 
-    if any_update:
-        log("[업데이터] 업데이트 완료!")
+
+# ==================================================
+# 명령 처리
+# ==================================================
+def handle_command(cmd: dict):
+    command = cmd.get("command", "")
+    log(f"[명령] 수신: {command}")
+
+    if command == "start":
+        start_macro()
+
+    elif command == "stop":
+        stop_macro()
+
+    elif command == "restart":
+        stop_macro()
+        time.sleep(2.0)
+        start_macro()
+
+    elif command == "update":
+        stop_macro()
+        time.sleep(1.0)
+        check_and_update()
+        time.sleep(1.0)
+        start_macro()
+
+    elif command == "update_only":
+        stop_macro()
+        time.sleep(1.0)
+        check_and_update()
+
     else:
-        log("[업데이터] 최신 버전 사용 중")
-
-    # ── 매크로 실행 ────────────────────────────────
-    launch_macro()
+        log(f"[명령] 알 수 없는 명령: {command}")
 
 
-def launch_macro():
-    """혼종_통합_자동.exe 실행"""
-    if not os.path.exists(MACRO_EXE):
-        err(f"[업데이터] 매크로 없음: {MACRO_EXE}")
+# ==================================================
+# 스레드: 명령 폴링 (10s)
+# ==================================================
+def _poll_thread():
+    log("[폴링] 시작")
+    while True:
+        try:
+            r = requests.get(
+                f"{CONTROL_SERVER}/updater/command/{pc_id}",
+                headers=_headers(),
+                timeout=(TIMEOUT_CONNECT, 10),
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("command"):
+                    cmd_id = data.get("id")
+                    # ACK 먼저
+                    try:
+                        requests.post(
+                            f"{CONTROL_SERVER}/updater/command/{pc_id}/ack/{cmd_id}",
+                            headers=_headers(),
+                            timeout=(TIMEOUT_CONNECT, 5),
+                        )
+                    except Exception:
+                        pass
+                    threading.Thread(target=handle_command, args=(data,), daemon=True).start()
+        except Exception as e:
+            err(f"[폴링] 에러: {e}")
+        time.sleep(POLL_INTERVAL)
+
+
+# ==================================================
+# 스레드: 상태 보고 (30s)
+# ==================================================
+def _status_thread():
+    log("[상태보고] 시작")
+    while True:
+        try:
+            with _state_lock:
+                state = macro_state
+                pid = macro_proc.pid if macro_proc and macro_proc.poll() is None else None
+            requests.post(
+                f"{CONTROL_SERVER}/updater/status/{pc_id}",
+                json={
+                    "pc_id": pc_id,
+                    "macro_state": state,
+                    "macro_pid": pid,
+                    "updater_version": UPDATER_VERSION,
+                },
+                headers=_headers(),
+                timeout=(TIMEOUT_CONNECT, 5),
+            )
+        except Exception as e:
+            err(f"[상태보고] 에러: {e}")
+        time.sleep(STATUS_INTERVAL)
+
+
+# ==================================================
+# 스레드: 크래시 감지 (5s)
+# ==================================================
+def _crash_check_thread():
+    global macro_proc
+    log("[크래시감지] 시작")
+    while True:
+        try:
+            with _state_lock:
+                proc = macro_proc
+                state = macro_state
+            if proc is not None and state == "running":
+                ret = proc.poll()
+                if ret is not None:
+                    log(f"[크래시감지] 매크로 예기치 않게 종료됨 (returncode={ret})")
+                    with _state_lock:
+                        macro_proc = None
+                    _set_state("crashed")
+        except Exception as e:
+            err(f"[크래시감지] 에러: {e}")
+        time.sleep(CRASH_CHECK_INT)
+
+
+# ==================================================
+# 스레드: 버그 업로드 (60s)
+# ==================================================
+def _bug_upload_thread():
+    log("[버그업로드] 시작")
+    while True:
+        try:
+            _upload_bugs()
+        except Exception as e:
+            err(f"[버그업로드] 에러: {e}")
+        time.sleep(BUG_INTERVAL)
+
+
+def _upload_bugs():
+    if not os.path.isdir(BUGS_DIR):
         return
-    log(f"[업데이터] 매크로 실행: {MACRO_EXE}")
-    try:
-        subprocess.Popen(
-            [MACRO_EXE],
-            cwd=os.path.dirname(MACRO_EXE),
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == 'win32' else 0
-        )
-        log("[업데이터] 매크로 실행 완료 — updater 종료")
-    except Exception as e:
-        err(f"[업데이터] 실행 실패: {e}")
+    files = sorted([f for f in os.listdir(BUGS_DIR) if f.endswith('.png')])[:5]
+    if not files:
+        return
+    log(f"[버그업로드] {len(files)}개 파일 업로드 시작")
+    for fname in files:
+        fpath = os.path.join(BUGS_DIR, fname)
+        try:
+            with open(fpath, 'rb') as fp:
+                r = requests.post(
+                    f"{CONTROL_SERVER}/bugs/{pc_id}",
+                    files={"file": (fname, fp, "image/png")},
+                    headers=_headers(),
+                    timeout=(TIMEOUT_CONNECT, 30),
+                )
+            if r.ok:
+                os.remove(fpath)
+                log(f"[버그업로드] ✓ {fname}")
+            else:
+                err(f"[버그업로드] ✗ {fname}: {r.status_code}")
+        except Exception as e:
+            err(f"[버그업로드] 실패 {fname}: {e}")
 
 
 # ==================================================
 # 진입점
 # ==================================================
+def main():
+    log("=" * 60)
+    log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
+    load_pc_id()
+    log(f"[업데이터] PC: {pc_id}, 대기 중 (대시보드에서 명령 전송)")
+
+    threads = [
+        threading.Thread(target=_poll_thread,        daemon=True, name="poll"),
+        threading.Thread(target=_status_thread,      daemon=True, name="status"),
+        threading.Thread(target=_crash_check_thread, daemon=True, name="crash"),
+        threading.Thread(target=_bug_upload_thread,  daemon=True, name="bugs"),
+    ]
+    for t in threads:
+        t.start()
+    log(f"[업데이터] {len(threads)}개 스레드 시작 완료")
+
+    while True:
+        time.sleep(1)
+
+
 if __name__ == "__main__":
     try:
-        run_updater()
+        main()
+    except KeyboardInterrupt:
+        log("[업데이터] 인터럽트 → 종료")
     except Exception as e:
         err(f"[업데이터] 치명적 오류: {e}")
         import traceback
         err(traceback.format_exc())
-        # 실패해도 매크로는 실행 시도
-        launch_macro()

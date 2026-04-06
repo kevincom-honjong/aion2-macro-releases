@@ -1,9 +1,9 @@
-# server/main.py - AION2 매크로 자동 업데이트 서버
+# server/main.py - 매크로 자동 업데이트 서버
 # Railway에 배포, 클라이언트는 /check로 버전 확인 후 GitHub에서 직접 파일 다운로드
 #
 # 환경변수 필요:
 #   GITHUB_OWNER   - GitHub 사용자명
-#   GITHUB_REPO    - 레포 이름 (예: aion2-macro-releases)
+#   GITHUB_REPO    - 레포 이름
 #   GITHUB_BRANCH  - 브랜치 (기본: main)
 #   GITHUB_TOKEN   - private 레포이면 필요 (public이면 없어도 됨)
 
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 # 앱 설정
 # ==================================================
 app = FastAPI(
-    title="AION2 Macro Updater",
+    title="Macro Updater",
     description="매크로 자동 업데이트 서버",
     version="1.0.0"
 )
@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 # 설정 (환경변수)
 # ==================================================
 GITHUB_OWNER  = os.getenv("GITHUB_OWNER", "kevincom-honjong")
-GITHUB_REPO   = os.getenv("GITHUB_REPO",  "aion2-macro-releases")
+GITHUB_REPO   = os.getenv("GITHUB_REPO",  "macro-releases")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH","main")
 GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
 

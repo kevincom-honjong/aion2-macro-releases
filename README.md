@@ -1,11 +1,11 @@
-# AION2 매크로 자동 업데이트 시스템
+# 매크로 자동 업데이트 시스템
 
 ## 전체 구조
 
 ```
-[민성 PC] 코드 수정 + exe 빌드
+[개발 PC] 코드 수정 + exe 빌드
     ↓ git push
-[GitHub 레포] aion2-macro-releases
+[GitHub 레포] macro-releases
     ↓ GitHub Actions 자동 실행
 [version.json] 버전/해시 자동 갱신
     ↓
@@ -21,11 +21,11 @@
 ### 1. GitHub 레포 만들기
 
 ```
-GitHub에서 새 레포 생성: aion2-macro-releases
+GitHub에서 새 레포 생성: macro-releases
 파일 구조:
 ├── version.json          ← 이 파일 업로드
 ├── exe/
-│   └── 혼종_통합_자동.exe  ← 빌드된 exe 업로드
+│   └── macro.exe         ← 빌드된 exe 업로드
 ├── images2/
 │   ├── loot.png          ← C:\auto\images2 파일들 전부 업로드
 │   ├── none.png
@@ -41,7 +41,7 @@ GitHub에서 새 레포 생성: aion2-macro-releases
 
 `version.json`에서 `YOUR_GITHUB_USERNAME` 을 실제 GitHub 유저명으로 교체:
 ```json
-"download_url": "https://raw.githubusercontent.com/실제유저명/aion2-macro-releases/main/exe/혼종_통합_자동.exe"
+"download_url": "https://raw.githubusercontent.com/실제유저명/macro-releases/main/exe/macro.exe"
 ```
 
 ### 3. Railway 서버 배포
@@ -50,7 +50,7 @@ GitHub에서 새 레포 생성: aion2-macro-releases
 2. 새 프로젝트 → GitHub 연동 → `server/` 디렉토리 배포
 3. 환경변수 설정:
    - `GITHUB_OWNER` = 실제 GitHub 유저명
-   - `GITHUB_REPO`  = `aion2-macro-releases`
+   - `GITHUB_REPO`  = `macro-releases`
    - `GITHUB_BRANCH` = `main`
    - `GITHUB_TOKEN` = (public 레포면 불필요, private이면 필요)
 4. 배포 완료 후 Railway URL 확인 (예: `https://xxxxx.railway.app`)
@@ -78,7 +78,7 @@ build_exe.bat
 
 ```
 1. 코드 수정 후 exe 빌드 (pyinstaller)
-2. git add exe/혼종_통합_자동.exe
+2. git add exe/macro.exe
    git add images2/변경된파일.png   (이미지 변경 있으면)
    git commit -m "v1.0.X 업데이트"
    git push
@@ -93,7 +93,7 @@ build_exe.bat
 `C:\auto\updater.exe` 를 실행하면:
 1. 서버에서 최신 버전 확인
 2. exe/이미지 변경분 자동 다운로드
-3. `혼종_통합_자동.exe` 자동 실행
+3. 매크로 exe 자동 실행
 
 **Windows 작업 스케줄러에 등록 권장:**
 - 트리거: 로그인 시 / 매일 아침 6시
@@ -118,12 +118,11 @@ build_exe.bat
 ```
 C:\auto\
 ├── updater.exe         ← 업데이터 (각 PC 배포)
-├── 혼종_통합_자동.exe   ← 메인 매크로
-├── 혼종_통합_자동.exe.bak  ← 이전 버전 백업 (자동 생성)
+├── macro.exe           ← 메인 매크로
+├── macro.exe.bak       ← 이전 버전 백업 (자동 생성)
 ├── info.txt            ← PC별 설정 (건드리지 않음)
 ├── version.json        ← 현재 버전/해시 (updater가 관리)
 ├── updater.log         ← 업데이터 로그
-├── 혼종_통합.txt        ← 매크로 로그
 └── images2/            ← 이미지 템플릿 (updater가 관리)
     ├── loot.png
     └── ...
