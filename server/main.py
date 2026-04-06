@@ -457,14 +457,15 @@ function relTime(iso) {
 }
 
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
-function buildDailyProgress(dp, activeSlot) {
+function buildDailyProgress(dp, activeSlot, charNames) {
   if (!dp || !dp.length) return '';
   const completed = dp.filter(c=>c.completed).length;
   const total = dp.length;
   const slots = dp.map(c => {
     const done = c.completed;
     const isActive = !done && c.slot === activeSlot;
-    const name = c.name || `${c.slot}`;
+    // char_info OCR 이름 우선, 없으면 daily_progress 이름, 없으면 슬롯 번호
+    const name = (charNames && charNames[c.slot-1]) || c.name || `${c.slot}`;
     const short = name.length > 3 ? name.slice(0,3) : name;
     const time = (c.completed_time||'').slice(11,16);
     const cls = done
@@ -505,7 +506,9 @@ function buildCard(pc) {
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
-  const activeName = activeDp ? (activeDp.name||String(activeSlot)) : '';
+  const activeName = activeDp
+    ? ((pc.chars&&pc.chars[activeSlot-1]) || activeDp.name || String(activeSlot))
+    : '';
   const isOnline = (STATUS_CFG[st]||STATUS_CFG.offline).online;
   const activeTag = (activeName && isOnline)
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
@@ -538,7 +541,7 @@ function buildCard(pc) {
     </div>
     <div class="mt-2 text-xs text-gray-600">최근: ${relTime(pc.last_active)}</div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
-    ${buildDailyProgress(pc.daily_progress, activeSlot)}
+    ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars)}
     ${updaterRow}
   </div>`;
 }
