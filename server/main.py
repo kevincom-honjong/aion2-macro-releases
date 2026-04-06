@@ -53,7 +53,8 @@ VERSION_JSON_URL = f"{RAW_BASE}/version.json"
 # ==================================================
 # version.json 캐시 (30초)
 # ==================================================
-_LOCAL_VERSION_PATH = os.path.join(os.path.dirname(__file__), "version.json")
+# server/ 디렉토리 기준 → 상위(레포 루트)의 version.json
+_LOCAL_VERSION_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "version.json")
 
 
 def load_version_json() -> dict:
