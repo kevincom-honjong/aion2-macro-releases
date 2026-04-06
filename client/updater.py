@@ -15,13 +15,16 @@ import logging
 import time
 import threading
 from pathlib import Path
+from datetime import datetime
 
-import requests  # pip install requests
+import requests   # pip install requests
+import keyboard   # pip install keyboard
+from PIL import ImageGrab  # pip install pillow
 
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.4"
+UPDATER_VERSION  = "2.0.5"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -359,6 +362,30 @@ def check_and_update() -> bool:
 
 
 # ==================================================
+# 스크린샷 (Ctrl+Q)
+# ==================================================
+def take_bug_screenshot():
+    """Ctrl+Q → 전체화면 캡처 후 bugs 폴더에 저장"""
+    try:
+        os.makedirs(BUGS_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bug_{ts}.png"
+        dest = os.path.join(BUGS_DIR, filename)
+        img = ImageGrab.grab()
+        img.save(dest)
+        log(f"[스크린샷] ✓ 저장: {dest}")
+    except Exception as e:
+        err(f"[스크린샷] 실패: {e}")
+
+
+def _hotkey_thread():
+    log("[단축키] Ctrl+Q → 버그 스크린샷 등록")
+    keyboard.add_hotkey("ctrl+q", lambda: threading.Thread(
+        target=take_bug_screenshot, daemon=True).start())
+    keyboard.wait()  # 블로킹 — 핫키 루프 유지
+
+
+# ==================================================
 # 명령 처리
 # ==================================================
 def handle_command(cmd: dict):
@@ -581,6 +608,7 @@ def main():
         threading.Thread(target=_status_thread,      daemon=True, name="status"),
         threading.Thread(target=_crash_check_thread, daemon=True, name="crash"),
         threading.Thread(target=_bug_upload_thread,  daemon=True, name="bugs"),
+        threading.Thread(target=_hotkey_thread,      daemon=True, name="hotkey"),
     ]
     for t in threads:
         t.start()
