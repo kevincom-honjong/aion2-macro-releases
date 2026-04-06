@@ -1381,6 +1381,78 @@ async def query_char_info(pc_id: str, request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 업데이터 버전 체크 (POST /check)
+# ─────────────────────────────────────────────────────────────────────────────
+import urllib.parse as _urlparse
+
+# GitHub raw URL 베이스
+_GH_RAW = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main"
+
+def _load_version_json() -> dict:
+    """version.json 로드 (GitHub Actions가 관리)"""
+    vpath = os.path.join(os.path.dirname(__file__), "version.json")
+    if not os.path.exists(vpath):
+        # Railway 배포 시 /app/version.json
+        vpath = "/app/version.json"
+    try:
+        with open(vpath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+@app.post("/check")
+async def updater_check(request: Request):
+    """updater.exe가 호출 — exe/이미지/updater 업데이트 필요 여부 응답"""
+    body = await request.json()
+    client_exe_ver     = body.get("exe_version", "0.0.0")
+    client_img_hashes  = body.get("image_hashes", {})
+    client_updater_ver = body.get("updater_version", "0.0.0")
+
+    ver = _load_version_json()
+    result: dict = {}
+
+    # exe 업데이트 체크
+    exe_info = ver.get("exe", {})
+    server_exe_ver = exe_info.get("version", "0.0.0")
+    if server_exe_ver != client_exe_ver:
+        result["exe_update"] = {
+            "version":      server_exe_ver,
+            "sha256":       exe_info.get("sha256"),
+            "download_url": exe_info.get("download_url",
+                f"{_GH_RAW}/exe/{_urlparse.quote(exe_info.get('filename', ''))}"),
+        }
+
+    # 이미지 업데이트 체크
+    server_images = ver.get("images", {})
+    images_to_update = []
+    for fname, server_hash in server_images.items():
+        if fname.startswith("."):
+            continue
+        client_hash = client_img_hashes.get(fname)
+        if client_hash != server_hash:
+            images_to_update.append({
+                "filename":     fname,
+                "sha256":       server_hash,
+                "download_url": f"{_GH_RAW}/images2/{_urlparse.quote(fname)}",
+            })
+    if images_to_update:
+        result["images_update"] = images_to_update
+
+    # updater 자가 업데이트 체크
+    updater_info = ver.get("updater", {})
+    server_updater_ver = updater_info.get("version", "0.0.0")
+    if server_updater_ver != client_updater_ver:
+        result["updater_update"] = {
+            "version":      server_updater_ver,
+            "sha256":       updater_info.get("sha256"),
+            "download_url": updater_info.get("download_url",
+                f"{_GH_RAW}/exe/updater.exe"),
+        }
+
+    return JSONResponse(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 직접 실행 시 (개발용)
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

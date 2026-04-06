@@ -1,9 +1,9 @@
 {
   "exe": {
-    "version": "1.1.5",
+    "version": "1.1.18",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "f86c2340e8d076f2c4d18b7eba6bdf0cf02f1dd95897b6171ae3090bc4304700",
-    "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/혼종_통합_자동.exe?v=1.1.5"
+    "sha256": "aec23063303ec39890613c90884673b4f382532ac8efb211644bebc13b2c56ba",
+    "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
     ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -45,8 +45,10 @@
     "finish2.png": "7d06478618b1af700291f79e75267b3df03fb50ca376d93d9cebaa7668b43c94",
     "fly.png": "5eeb03533455316737b6711e27673b04eae9f914f03e9826c9a97dc5b7f8c5d4",
     "fly_cancel.png": "3341198c6765224e0a9d35b1cd7f5668f69cd1066b3ea7924a01e97c01adb4c6",
+    "focused_check.png": "ff84dd6260baceffbba8e0db1687bb41d2a295a5349ef13fed84dd0f11f6b362",
     "fraud.png": "f5810e68ea79162a577396a3801a6487eb4486e7d305feede666ab266d7cdcb5",
     "full_screen.png": "8d1bda2bad8b0d06a3badf49ba35a40277237216571bc6da5c6b10dfffbf2291",
+    "fullscreen_check.png": "5927089457520ab4aeac82e3fa1f8c76fd96792bade75ccd46026715f22b0a48",
     "game_start_btn.png": "c42479b28e13ca7243c504b83984a953f60758eb5ea6d7189d62643900ca13c2",
     "gung_5.png": "99736d6af3d0064ea3430e5e1ef86e1d431d7e02b65d0f024af89350e669fbc0",
     "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
@@ -68,13 +70,16 @@
     "pin.png": "376d573449fe690331fb1fa67bad16d9dc999c39b6177ac0a36382a0eed93909",
     "purple.png": "1d2d08c704ac1da21832980f032d4ffd5c0b246e1c255d4d2ee501be19078ee2",
     "pvp.png": "d7d7dcfbf6c070634246bdebcf6bb8d59af1d82f37bb8749ab06459fddc262a7",
+    "pya_check.png": "ab392152c98f7f6a2fc19465c900fdc2225348fc62a4b253f1a93d9e415e97a5",
     "sale_confirm_popup.png": "fa232f3508569f488991bb1fe3251344e39c2145dda665b54fd427d065b7cf57",
     "sale_register_tab.png": "855e5556b8d08ab0f2f68b466ced5c30a9a3e81e4555fbd6a2466829cb9f37cc",
+    "screen_now.png": "0962e950f561ccb8ec7ab6c59f77a1100876f416680f9d4fcf310b22f40c5591",
     "server_select.png": "d7a7e940ec23bd476e811618eee0bf82b071fba5a71c307a455a9f05b9a9e594",
     "server_storage.png": "522673a6136502b88e3487632a60b7592cac151b9f257c1e52506dbe561208f2",
     "settlement_btn.png": "77867a65d01622f3beec899c2a3de03183e7e88b9659736102e7f7b6407476c2",
     "settlement_complete.png": "5ec8511e29989a5f92993d8f94d3865af233431523de7596773661b5a6090328",
     "settlement_tab.png": "26df87d4f834d599397b7de24e97a8814cad0568b16d48b49591f2b0a6e458cf",
+    "skillbar_check.png": "f16ac499a822fc0ea934776d640d20deb17e6626d60e016ac8171c5020ca8b01",
     "skip.png": "a3439a5e2bc3afb9a9ace019e04b58866635c60065ea8b800e5ad4414fbc6bcf",
     "stream.png": "dc8f81d2c6c43946d54f36592b1b66eba032301613039bfcef583083830a798d",
     "stream1.png": "1f5faae4b952fb1da07e740b22a165364da3f77c2cdd67d7e14fa8b22e3e1c7c",
@@ -108,7 +113,12 @@
     "화면 캡처 2026-01-14 011016.png": "34cdc0cb2078d857e63773e4e23ad9f69ccb920f568513fbf51d5e9b36a9965d",
     "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb"
   },
-  "images_version": "20260404223453",
-  "updated_at": "2026-04-04T22:34:53",
+  "updater": {
+    "version": "2.1.0",
+    "sha256": "7949bd15e113b3af656459b031cc064a2204588039d90d409a31aa44218ac9fc",
+    "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
+  },
+  "images_version": "20260406141928",
+  "updated_at": "2026-04-06T21:33:28",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
