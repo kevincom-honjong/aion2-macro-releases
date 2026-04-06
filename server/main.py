@@ -62,13 +62,15 @@ async def fetch_version_json() -> dict:
     if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
         return _cache["data"]
 
-    headers = {"Cache-Control": "no-cache"}
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
 
     try:
+        # CDN 캐시 우회: 매 요청마다 고유 파라미터 추가
+        bust_url = f"{VERSION_JSON_URL}?_t={int(now)}"
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(VERSION_JSON_URL, headers=headers)
+            resp = await client.get(bust_url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             _cache["data"] = data
