@@ -255,22 +255,23 @@ def self_update(updater_info: dict):
     bat_path = current_exe + "_selfupdate.bat"
     bat = (
         "@echo off\r\n"
-        "timeout /t 2 /nobreak > nul\r\n"
+        "timeout /t 3 /nobreak > nul\r\n"
         f'move /y "{new_exe_tmp}" "{current_exe}"\r\n'
+        f'if errorlevel 1 (\r\n'
+        f'  timeout /t 2 /nobreak > nul\r\n'
+        f'  move /y "{new_exe_tmp}" "{current_exe}"\r\n'
+        f')\r\n'
         f'start "" "{current_exe}"\r\n'
         'del "%~f0"\r\n'
     )
     try:
         with open(bat_path, 'w', encoding='ascii') as f:
             f.write(bat)
-        # DETACHED_PROCESS: 부모 종료 후에도 독립적으로 계속 실행
         subprocess.Popen(
-            bat_path,
-            shell=False,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-            close_fds=True,
+            ['cmd.exe', '/c', bat_path],
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        log(f"[자가업데이트] 교체 스크립트 실행 → 2초 후 재시작됩니다.")
+        log(f"[자가업데이트] 교체 스크립트 실행 → 3초 후 재시작됩니다.")
         time.sleep(1)
         sys.exit(0)
     except Exception as e:
@@ -417,16 +418,33 @@ def _read_screenshot_key() -> str:
     return 'ctrl+q'
 
 
-def take_bug_screenshot():
-    """핫키 → 전체화면 캡처 후 bugs 폴더에 저장"""
+def take_bug_screenshot(immediate_upload=False):
+    """전체화면 캡처 후 bugs 폴더에 저장. immediate_upload=True면 즉시 서버 업로드."""
     try:
         os.makedirs(BUGS_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bug_{ts}.png"
+        filename = f"{pc_id}_{ts}_bug_{ts}.png"
         dest = os.path.join(BUGS_DIR, filename)
         img = ImageGrab.grab()
         img.save(dest)
         log(f"[스크린샷] ✓ 저장: {dest}")
+
+        if immediate_upload:
+            try:
+                with open(dest, 'rb') as fp:
+                    r = requests.post(
+                        f"{CONTROL_SERVER}/bugs/{pc_id}",
+                        files={"file": (filename, fp, "image/png")},
+                        headers=_headers(),
+                        timeout=(TIMEOUT_CONNECT, 30),
+                    )
+                if r.ok:
+                    os.remove(dest)
+                    log(f"[스크린샷] ✓ 즉시 업로드 완료")
+                else:
+                    log(f"[스크린샷] 즉시 업로드 실패: {r.status_code} (다음 주기에 재시도)")
+            except Exception as e:
+                err(f"[스크린샷] 즉시 업로드 실패: {e} (다음 주기에 재시도)")
     except Exception as e:
         err(f"[스크린샷] 실패: {e}")
 
@@ -488,7 +506,7 @@ def handle_command(cmd: dict):
         check_and_update()
 
     elif command == "screenshot":
-        threading.Thread(target=take_bug_screenshot, daemon=True).start()
+        threading.Thread(target=take_bug_screenshot, args=(True,), daemon=True).start()
 
     else:
         log(f"[명령] 알 수 없는 명령: {command}")
