@@ -52,37 +52,38 @@ VERSION_JSON_URL = f"{RAW_BASE}/version.json"
 # ==================================================
 # version.json 캐시 (30초)
 # ==================================================
-_cache: Dict = {"data": None, "ts": 0.0}
-CACHE_TTL = 30
+_LOCAL_VERSION_PATH = os.path.join(os.path.dirname(__file__), "version.json")
+
+
+def load_version_json() -> dict:
+    """로컬 version.json 읽기 — CDN 없음, Railway 배포 시 항상 최신"""
+    with open(_LOCAL_VERSION_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 async def fetch_version_json() -> dict:
-    """GitHub에서 version.json 가져오기 (30초 캐시)"""
-    now = time.time()
-    if _cache["data"] and (now - _cache["ts"]) < CACHE_TTL:
-        return _cache["data"]
-
-    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
-    if GITHUB_TOKEN:
-        headers["Authorization"] = f"token {GITHUB_TOKEN}"
-
+    """version.json 반환 — 로컬 파일 우선, 실패 시 GitHub API fallback"""
     try:
-        # CDN 캐시 우회: 매 요청마다 고유 파라미터 추가
-        bust_url = f"{VERSION_JSON_URL}?_t={int(now)}"
+        data = load_version_json()
+        log.info(f"version.json 로컬 로드: exe={data['exe']['version']}")
+        return data
+    except Exception as local_err:
+        log.warning(f"로컬 version.json 읽기 실패: {local_err} → GitHub API fallback")
+
+    headers = {"Accept": "application/vnd.github.v3.raw", "Cache-Control": "no-cache"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    api_url = (f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+               f"/contents/version.json?ref={GITHUB_BRANCH}&_t={int(time.time())}")
+    try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(bust_url, headers=headers)
+            resp = await client.get(api_url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            _cache["data"] = data
-            _cache["ts"] = now
-            log.info(f"version.json 갱신: exe={data['exe']['version']}, "
-                     f"images={len(data.get('images', {}))}개")
+            log.info(f"version.json GitHub API 로드: exe={data['exe']['version']}")
             return data
     except Exception as e:
         log.error(f"version.json 가져오기 실패: {e}")
-        if _cache["data"]:
-            log.warning("캐시된 버전 사용")
-            return _cache["data"]
         raise HTTPException(status_code=503, detail=f"version.json 가져오기 실패: {e}")
 
 
