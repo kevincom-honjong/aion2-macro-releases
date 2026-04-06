@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.21",
+    "version": "1.1.22",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "1719f9e9dcee9aedcf8c9d633098665b0ef3831adc602607dd1fcaaccb18c776",
+    "sha256": "b30169c9e88dc197bc2753a33b1a82b975681992efd30139cc1ffed8881c7963",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -60,6 +60,7 @@
     "kina.png": "dde6b1a8568cea2dcaf0838188bf12ba2b4560d49952e497881f24eaa00dd2d9",
     "kt.png": "3ad22520084dc80abfe94d30165d9ce502c232d7855f812e50bcb2d718159aac",
     "kumsung.png": "41aaba350c4ee71bbdc5290e7fe7f4e214c1da17e717a4a5514a981ea7d00f45",
+    "locked_slot.png": "7d32b99fb3b8d42e255dd0223a52ad316b45fc8c287f37a1c4ef7e20d65e9b6b",
     "loot.png": "17149e14f39cd35853dbdc01fe23aac5eb17a0a657829dc782e4c715d2152111",
     "mania_new.png": "89d233edcf4ada060121db0b981cade04d3d5d5adc21ecd6b49c098723d64916",
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
@@ -118,7 +119,7 @@
     "sha256": "e1ba187949395853a2a31f932ebe429235ae96c8c5d4237a7530de404f01917e",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260406141928",
-  "updated_at": "2026-04-06T22:56:56",
+  "images_version": "20260406230229",
+  "updated_at": "2026-04-06T23:02:29",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
