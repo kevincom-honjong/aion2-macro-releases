@@ -473,6 +473,17 @@ def main():
         os.makedirs(d, exist_ok=True)
         log(f"[업데이터] 폴더 확인: {d}")
 
+    # ── info.txt 없으면 기본 양식 생성 ──────────────────────────────────────
+    if not os.path.exists(INFO_TXT):
+        try:
+            with open(INFO_TXT, 'w', encoding='utf-8') as f:
+                f.write("pc_id=PC-??\n")
+                f.write("token=\n")
+            log(f"[업데이터] info.txt 기본 양식 생성됨 → {INFO_TXT}")
+            log("[업데이터] ※ info.txt 에서 pc_id 를 수정하고 updater를 재시작하세요")
+        except Exception as e:
+            err(f"[업데이터] info.txt 생성 실패: {e}")
+
     # ── 시작 시 자동 업데이트 (exe + 이미지) ────────────────────────────────
     log("[업데이터] 시작 업데이트 체크 중...")
     try:
