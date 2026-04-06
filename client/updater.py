@@ -17,14 +17,16 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
+import ctypes
+from ctypes import wintypes
+
 import requests   # pip install requests
-import keyboard   # pip install keyboard
 from PIL import ImageGrab  # pip install pillow
 
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.6"
+UPDATER_VERSION  = "2.0.7"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -385,10 +387,28 @@ def take_bug_screenshot():
 
 
 def _hotkey_thread():
-    log("[단축키] Ctrl+Q → 버그 스크린샷 등록")
-    keyboard.add_hotkey("ctrl+q", lambda: threading.Thread(
-        target=take_bug_screenshot, daemon=True).start())
-    keyboard.wait()  # 블로킹 — 핫키 루프 유지
+    """
+    RegisterHotKey 방식 — keyboard 라이브러리와 달리
+    RDP 풀스크린 / DirectX 풀스크린에서도 동작함
+    """
+    user32 = ctypes.windll.user32
+    MOD_CONTROL = 0x0002
+    VK_Q        = 0x51
+    HOTKEY_ID   = 9001   # 충돌 없는 임의 ID
+    WM_HOTKEY   = 0x0312
+
+    if not user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL, VK_Q):
+        err("[단축키] RegisterHotKey 실패 — 이미 다른 프로그램이 Ctrl+Q 점유 중일 수 있음")
+        return
+    log("[단축키] Ctrl+Q → 버그 스크린샷 등록 (RegisterHotKey)")
+
+    msg = wintypes.MSG()
+    try:
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
+                threading.Thread(target=take_bug_screenshot, daemon=True).start()
+    finally:
+        user32.UnregisterHotKey(None, HOTKEY_ID)
 
 
 # ==================================================
