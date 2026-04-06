@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 # ==================================================
 # 설정 (환경변수)
 # ==================================================
-GITHUB_OWNER  = os.getenv("GITHUB_OWNER", "YOUR_GITHUB_USERNAME")
+GITHUB_OWNER  = os.getenv("GITHUB_OWNER", "kevincom-honjong")
 GITHUB_REPO   = os.getenv("GITHUB_REPO",  "aion2-macro-releases")
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH","main")
 GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
