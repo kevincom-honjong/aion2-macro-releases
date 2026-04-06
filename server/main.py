@@ -145,7 +145,7 @@ async def _build_full_state() -> list[dict]:
             ci = await get_char_info(pid)
             if ci and ci.get("chars"):
                 pc["chars"] = [
-                    c.get("name") or c.get("char_name") or f"슬롯{i+1}"
+                    c.get("name") or c.get("char_name") or ""
                     for i, c in enumerate(ci["chars"])
                 ]
 
@@ -534,10 +534,10 @@ function buildCard(pc) {
       </div>
     </div>
     <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-gray-400 mt-2">
-      <div><span class="text-gray-600">진행도</span> <span class="text-gray-200">${fmtKina(pc.kina)}</span></div>
-      <div><span class="text-gray-600">효율</span> <span class="text-gray-200">${fmtRate(pc.kina_rate)}</span></div>
-      <div><span class="text-gray-600">맵</span> <span class="text-gray-200">${pc.map||'–'}</span></div>
-      <div><span class="text-gray-600">업타임</span> <span class="text-gray-200">${pc.uptime_hours?pc.uptime_hours.toFixed(1)+'h':'–'}</span></div>
+      <div><span class="text-gray-600">진행도</span> <span class="text-gray-200">${pc.hunt_progress ? pc.hunt_progress.toFixed(1)+'%' : fmtKina(pc.kina)}</span></div>
+      <div><span class="text-gray-600">효율</span> <span class="text-gray-200">${pc.efficiency ? pc.efficiency+'%/h' : fmtRate(pc.kina_rate)}</span></div>
+      <div><span class="text-gray-600">맵</span> <span class="text-gray-200">${pc.map_name||'–'}</span></div>
+      <div><span class="text-gray-600">업타임</span> <span class="text-gray-200">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
     </div>
     <div class="mt-2 text-xs text-gray-600">최근: ${relTime(pc.last_active)}</div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
@@ -862,6 +862,20 @@ let infoModalPc = null;
 let charInfoCache = {};  // pc_id → {total_kina, chars, collected_at}
 
 function fmtNum(n) { return (n==null||n==='')?'–':Number(n).toLocaleString('en-US'); }
+function fmtPower(n) {
+  if (n==null||n===''||n===0) return '–';
+  const v = Number(n);
+  if (!v) return '–';
+  const k = v / 1000;
+  return (Number.isInteger(k) ? k : k.toFixed(1)) + ' K';
+}
+function fmtSlotUptime(slotUptime, activeSlot, fallback) {
+  if (slotUptime && activeSlot) {
+    const h = slotUptime[String(activeSlot)];
+    if (h != null) return h.toFixed(1) + 'h';
+  }
+  return fallback ? Number(fallback).toFixed(1) + 'h' : '–';
+}
 function fmtAt(iso) {
   if (!iso) return '–';
   return iso.replace('T',' ').slice(0,16);
@@ -888,12 +902,14 @@ function renderInfoContent(info) {
     daily_ticket:     '일일던전 티켓',
   };
   // odd_energy는 "195(+1,985)/840" 형식 문자열 → fmtNum 제외
-  const RAW_FIELDS = new Set(['odd_energy']);
+  const RAW_FIELDS   = new Set(['odd_energy']);
+  // gear_power/power_power → "98 K" 형식 표기
+  const POWER_FIELDS = new Set(['gear_power', 'power_power']);
   const charsHtml = (info.chars||[]).map((c,i) => {
     const rows = Object.entries(LABELS).map(([k,lbl]) => {
       const v = c[k];
       if (v == null || v === '') return '';
-      const display = RAW_FIELDS.has(k) ? v : fmtNum(v);
+      const display = RAW_FIELDS.has(k) ? v : POWER_FIELDS.has(k) ? fmtPower(v) : fmtNum(v);
       return `<div class="flex justify-between text-xs py-0.5 border-b border-gray-800/60">
         <span class="text-gray-500">${lbl}</span>
         <span class="text-gray-200 font-medium">${display}</span>
@@ -976,9 +992,8 @@ function handleCharInfoMsg(msg) {
   };
   // 카드에 캐릭터 이름 즉시 반영
   if (state[msg.pc_id]) {
-    state[msg.pc_id].chars = (msg.chars||[]).map((c,i)=>
-      c.name||c.char_name||`슬롯${i+1}`
-    ).filter(n => n && !n.startsWith('슬롯'));
+    // 인덱스 = slot-1 유지를 위해 filter 없이 빈 문자열로 보존
+    state[msg.pc_id].chars = (msg.chars||[]).map(c => c.name||c.char_name||'');
     renderCards();
   }
   if (infoModalPc === msg.pc_id) renderInfoContent(charInfoCache[msg.pc_id]);
