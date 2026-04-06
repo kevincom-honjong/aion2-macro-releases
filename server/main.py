@@ -281,6 +281,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
   .scrollbar-thin::-webkit-scrollbar-thumb{background:#374151;border-radius:4px}
   .card-sel{outline:2px solid #6366f1!important;outline-offset:1px}
+  .card-dragging{opacity:.4;outline:2px dashed #6366f1!important}
+  .card-dragover{outline:2px solid #818cf8!important;outline-offset:2px}
   .menu-item{display:block;width:100%;text-align:left;padding:5px 14px;font-size:.75rem;font-weight:600;transition:background .1s}
   .menu-item:hover{background:rgba(255,255,255,.08)}
 </style>
@@ -570,10 +572,98 @@ function buildCard(pc) {
   </div>`;
 }
 
+// ─── 드래그 순서 관리 ─────────────────────────────────────────────────────────
+const DRAG_ORDER_KEY_ON  = 'card_order_online';
+const DRAG_ORDER_KEY_OFF = 'card_order_offline';
+let dragSrcId = null;
+let dragSection = null;
+
+function loadOrder(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || []; } catch(e) { return []; }
+}
+function saveOrder(key, ids) {
+  localStorage.setItem(key, JSON.stringify(ids));
+}
+function sortByOrder(pcs, key) {
+  const order = loadOrder(key);
+  const idx = {};
+  order.forEach((id,i) => idx[id] = i);
+  const known = pcs.filter(p => idx[p.pc_id] !== undefined).sort((a,b) => idx[a.pc_id] - idx[b.pc_id]);
+  const fresh = pcs.filter(p => idx[p.pc_id] === undefined).sort((a,b) => (a.pc_id||'').localeCompare(b.pc_id||''));
+  return [...known, ...fresh];
+}
+function saveCurrentOrder(gridId, key) {
+  const ids = [...document.getElementById(gridId).children]
+    .map(el => el.id?.replace('card-',''))
+    .filter(Boolean);
+  saveOrder(key, ids);
+}
+
+function setupDrag(gridId, orderKey) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  let longPressTimer = null;
+  grid.querySelectorAll('[id^="card-"]').forEach(card => {
+    card.setAttribute('draggable','false');
+    // long press 시작
+    card.addEventListener('pointerdown', e => {
+      if (e.target.tagName==='BUTTON'||e.target.tagName==='INPUT') return;
+      const pcId = card.id.replace('card-','');
+      longPressTimer = setTimeout(() => {
+        card.setAttribute('draggable','true');
+        dragSrcId = pcId;
+        dragSection = orderKey;
+        card.classList.add('card-dragging');
+      }, 400);
+    });
+    const cancelLong = () => { clearTimeout(longPressTimer); longPressTimer=null; };
+    card.addEventListener('pointermove', e => {
+      if (longPressTimer && (Math.abs(e.movementX)>3||Math.abs(e.movementY)>3)) cancelLong();
+    });
+    card.addEventListener('pointerup', cancelLong);
+    card.addEventListener('pointercancel', cancelLong);
+    // drag events
+    card.addEventListener('dragstart', e => {
+      if (!dragSrcId) { e.preventDefault(); return; }
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain', dragSrcId);
+    });
+    card.addEventListener('dragend', () => {
+      card.setAttribute('draggable','false');
+      card.classList.remove('card-dragging');
+      grid.querySelectorAll('.card-dragover').forEach(el=>el.classList.remove('card-dragover'));
+      dragSrcId=null; dragSection=null;
+    });
+    card.addEventListener('dragover', e => {
+      if (!dragSrcId||dragSection!==orderKey) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect='move';
+      grid.querySelectorAll('.card-dragover').forEach(el=>el.classList.remove('card-dragover'));
+      card.classList.add('card-dragover');
+    });
+    card.addEventListener('dragleave', () => { card.classList.remove('card-dragover'); });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('card-dragover');
+      const fromId = e.dataTransfer.getData('text/plain');
+      const toId = card.id.replace('card-','');
+      if (fromId===toId) return;
+      const fromEl = document.getElementById('card-'+fromId);
+      if (!fromEl) return;
+      const rect = card.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height/2;
+      if (after) { card.after(fromEl); } else { card.before(fromEl); }
+      saveCurrentOrder(gridId, orderKey);
+    });
+  });
+}
+
 function renderCards() {
   const pcs = Object.values(state).sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
-  const online  = pcs.filter(p=>(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
-  const offline = pcs.filter(p=>!(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
+  const onlineAll  = pcs.filter(p=>(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
+  const offlineAll = pcs.filter(p=>!(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
+  const online  = sortByOrder(onlineAll,  DRAG_ORDER_KEY_ON);
+  const offline = sortByOrder(offlineAll, DRAG_ORDER_KEY_OFF);
   const go  = document.getElementById('grid-online');
   const gof = document.getElementById('grid-offline');
   go.innerHTML  = online.length  ? online.map(buildCard).join('')  : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
@@ -583,6 +673,8 @@ function renderCards() {
   document.getElementById('offline-section').classList.toggle('hidden', offline.length===0);
   refreshSummary(pcs);
   document.getElementById('pc-count').textContent = `PC ${pcs.length}대`;
+  setupDrag('grid-online',  DRAG_ORDER_KEY_ON);
+  setupDrag('grid-offline', DRAG_ORDER_KEY_OFF);
 }
 
 function refreshSummary(pcs) {
