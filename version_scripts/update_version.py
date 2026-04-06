@@ -10,11 +10,13 @@ import hashlib
 import os
 from datetime import datetime, timezone
 
-REPO_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION_FILE = os.path.join(REPO_ROOT, "version.json")
-EXE_DIR      = os.path.join(REPO_ROOT, "exe")
-IMAGES_DIR   = os.path.join(REPO_ROOT, "images2")
-EXE_FILENAME = "혼종_통합_자동.exe"
+REPO_ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VERSION_FILE     = os.path.join(REPO_ROOT, "version.json")
+EXE_DIR          = os.path.join(REPO_ROOT, "exe")
+IMAGES_DIR       = os.path.join(REPO_ROOT, "images2")
+EXE_FILENAME     = "혼종_통합_자동.exe"
+UPDATER_FILENAME = "updater.exe"
+GITHUB_RAW_BASE  = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main"
 
 
 def sha256_file(path: str) -> str:
@@ -38,6 +40,26 @@ def main():
         ver = json.load(f)
 
     changed = False
+
+    # ── updater.exe 처리 ──────────────────────────
+    updater_path = os.path.join(EXE_DIR, UPDATER_FILENAME)
+    if os.path.exists(updater_path):
+        new_hash    = sha256_file(updater_path)
+        old_updater = ver.get("updater", {})
+        if new_hash != old_updater.get("sha256", ""):
+            old_ver = old_updater.get("version", "2.0.0")
+            new_ver = bump_patch(old_ver)
+            ver["updater"] = {
+                "version":      new_ver,
+                "sha256":       new_hash,
+                "download_url": f"{GITHUB_RAW_BASE}/exe/{UPDATER_FILENAME}",
+            }
+            print(f"[updater] 버전 업데이트: {old_ver} → {new_ver}")
+            changed = True
+        else:
+            print(f"[updater] 변경 없음 (v{old_updater.get('version','?')})")
+    else:
+        print(f"[updater] 파일 없음: {updater_path}")
 
     # ── exe 처리 ──────────────────────────────────
     exe_path = os.path.join(EXE_DIR, EXE_FILENAME)

@@ -91,8 +91,9 @@ async def fetch_version_json() -> dict:
 # 요청/응답 모델
 # ==================================================
 class CheckRequest(BaseModel):
-    exe_version: Optional[str] = None         # 클라이언트 현재 exe 버전
-    image_hashes: Optional[Dict[str, str]] = None  # {파일명: sha256}
+    exe_version: Optional[str] = None
+    image_hashes: Optional[Dict[str, str]] = None
+    updater_version: Optional[str] = None
 
 
 class ExeUpdateInfo(BaseModel):
@@ -108,9 +109,16 @@ class ImageUpdateInfo(BaseModel):
     download_url: str
 
 
+class UpdaterUpdateInfo(BaseModel):
+    version: str
+    sha256: str
+    download_url: str
+
+
 class CheckResponse(BaseModel):
-    exe_update: Optional[ExeUpdateInfo] = None    # None이면 최신 버전
-    images_update: List[ImageUpdateInfo] = []     # 빈 리스트면 업데이트 없음
+    exe_update: Optional[ExeUpdateInfo] = None
+    images_update: List[ImageUpdateInfo] = []
+    updater_update: Optional[UpdaterUpdateInfo] = None
     latest_exe_version: str
     latest_images_version: str
     server_ts: str
@@ -150,6 +158,17 @@ async def check_updates(req: CheckRequest):
     ver = await fetch_version_json()
     server_exe = ver["exe"]
     server_images: Dict[str, str] = ver.get("images", {})
+    server_updater = ver.get("updater")
+
+    # updater 자가 업데이트 체크
+    updater_update = None
+    if server_updater and req.updater_version != server_updater.get("version"):
+        log.info(f"updater 업데이트: {req.updater_version} → {server_updater['version']}")
+        updater_update = UpdaterUpdateInfo(
+            version=server_updater["version"],
+            sha256=server_updater["sha256"],
+            download_url=server_updater["download_url"],
+        )
 
     # exe 버전 비교
     exe_update = None
@@ -181,6 +200,7 @@ async def check_updates(req: CheckRequest):
     return CheckResponse(
         exe_update=exe_update,
         images_update=images_update,
+        updater_update=updater_update,
         latest_exe_version=server_exe["version"],
         latest_images_version=ver.get("images_version", ""),
         server_ts=datetime.utcnow().isoformat(),

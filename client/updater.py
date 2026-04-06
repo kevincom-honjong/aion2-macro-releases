@@ -232,6 +232,44 @@ def stop_macro():
 # ==================================================
 # 업데이트 로직
 # ==================================================
+def self_update(updater_info: dict):
+    """새 updater.exe 다운 후 bat 스크립트로 자신을 교체하고 재실행."""
+    new_ver = updater_info["version"]
+    url     = updater_info["download_url"]
+    sha256  = updater_info.get("sha256")
+    log(f"[자가업데이트] updater {UPDATER_VERSION} → {new_ver} 다운로드 중...")
+
+    current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+    new_exe_tmp = current_exe + ".new"
+
+    ok = download_file(url, new_exe_tmp, sha256)
+    if not ok:
+        err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
+        return
+
+    bat_path = current_exe + "_selfupdate.bat"
+    bat = (
+        "@echo off\r\n"
+        "timeout /t 2 /nobreak > nul\r\n"
+        f'move /y "{new_exe_tmp}" "{current_exe}"\r\n'
+        f'start "" "{current_exe}"\r\n'
+        'del "%~f0"\r\n'
+    )
+    try:
+        with open(bat_path, 'w', encoding='ascii') as f:
+            f.write(bat)
+        subprocess.Popen(bat_path, shell=True, close_fds=True)
+        log(f"[자가업데이트] 교체 스크립트 실행 → 2초 후 재시작됩니다.")
+        time.sleep(1)
+        sys.exit(0)
+    except Exception as e:
+        err(f"[자가업데이트] 배치 실행 실패: {e}")
+        try:
+            os.remove(new_exe_tmp)
+        except Exception:
+            pass
+
+
 def check_and_update() -> bool:
     """서버 버전 체크 후 필요시 업데이트. True = 업데이트 있었음."""
     log("[업데이트] 체크 시작")
@@ -242,8 +280,11 @@ def check_and_update() -> bool:
     try:
         resp = requests.post(
             f"{UPDATE_SERVER}/check",
-            json={"exe_version": local.get("exe_version", "0.0.0"),
-                  "image_hashes": local_image_hashes},
+            json={
+                "exe_version":     local.get("exe_version", "0.0.0"),
+                "image_hashes":    local_image_hashes,
+                "updater_version": UPDATER_VERSION,
+            },
             timeout=(TIMEOUT_CONNECT, 15),
         )
         resp.raise_for_status()
@@ -253,14 +294,20 @@ def check_and_update() -> bool:
         _set_state("stopped")
         return False
 
+    # ── updater 자가 업데이트 (최우선) ─────────────────────────────────────
+    updater_info = result.get("updater_update")
+    if updater_info:
+        self_update(updater_info)
+        # 성공 시 sys.exit() / 실패 시 계속 진행
+
     any_update = False
 
-    # exe 업데이트
+    # ── exe 업데이트 ────────────────────────────────────────────────────────
     exe_info = result.get("exe_update")
     if exe_info:
-        new_ver = exe_info["version"]
+        new_ver   = exe_info["version"]
         local_ver = local.get("exe_version", "없음")
-        log(f"[업데이트] exe {local_ver} → {new_ver}")
+        log(f"[업데이트] 매크로 exe: {local_ver} → {new_ver}")
         if os.path.exists(MACRO_EXE):
             try:
                 shutil.copy2(MACRO_EXE, MACRO_EXE_BACKUP)
@@ -270,38 +317,43 @@ def check_and_update() -> bool:
         if ok:
             local["exe_version"] = new_ver
             any_update = True
-            log(f"[업데이트] exe 완료: v{new_ver}")
+            log(f"[업데이트] ✓ 매크로 exe v{new_ver} 완료")
         else:
-            err("[업데이트] exe 다운로드 실패")
+            err(f"[업데이트] ✗ 매크로 exe 다운로드 실패")
             if os.path.exists(MACRO_EXE_BACKUP):
                 try:
                     shutil.copy2(MACRO_EXE_BACKUP, MACRO_EXE)
-                    log("[업데이트] 백업 복구 완료")
+                    log("[업데이트] 백업으로 복구 완료")
                 except Exception as e:
                     err(f"[업데이트] 복구 실패: {e}")
     else:
-        log(f"[업데이트] exe 최신 ({local.get('exe_version', '?')})")
+        log(f"[업데이트] ✓ 매크로 exe 최신 (v{local.get('exe_version', '?')})")
 
-    # 이미지 업데이트
+    # ── 이미지 업데이트 ─────────────────────────────────────────────────────
     images_to_update = result.get("images_update", [])
     if images_to_update:
         os.makedirs(IMAGES_DIR, exist_ok=True)
+        ok_cnt = fail_cnt = 0
         for img in images_to_update:
-            dest = os.path.join(IMAGES_DIR, img["filename"])
+            fname = img["filename"]
+            dest  = os.path.join(IMAGES_DIR, fname)
             ok = download_file(img["download_url"], dest, img.get("sha256"))
             if ok:
-                local_image_hashes[img["filename"]] = img["sha256"]
+                local_image_hashes[fname] = img["sha256"]
                 any_update = True
-                log(f"[업데이트] ✓ 이미지: {img['filename']}")
+                ok_cnt += 1
+                log(f"[업데이트] ✓ 이미지: {fname}")
             else:
-                err(f"[업데이트] ✗ 이미지: {img['filename']}")
+                fail_cnt += 1
+                err(f"[업데이트] ✗ 이미지 실패: {fname}")
+        log(f"[업데이트] 이미지 완료 — 성공 {ok_cnt} / 실패 {fail_cnt}")
     else:
-        log("[업데이트] 이미지 최신 상태")
+        log(f"[업데이트] ✓ 이미지 최신 ({len(local_image_hashes)}개)")
 
     local["image_hashes"] = local_image_hashes
-    local["last_check"] = time.strftime('%Y-%m-%d %H:%M:%S')
+    local["last_check"]   = time.strftime('%Y-%m-%d %H:%M:%S')
     save_local_version(local)
-    log("[업데이트] 완료!" if any_update else "[업데이트] 최신 버전")
+    log("[업데이트] 완료!" if any_update else "[업데이트] 모든 항목 최신")
     _set_state("stopped")
     return any_update
 
