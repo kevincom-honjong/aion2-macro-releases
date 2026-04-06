@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.0.8"
+UPDATER_VERSION  = "2.0.9"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -486,6 +486,9 @@ def handle_command(cmd: dict):
         stop_macro()
         time.sleep(1.0)
         check_and_update()
+
+    elif command == "screenshot":
+        threading.Thread(target=take_bug_screenshot, daemon=True).start()
 
     else:
         log(f"[명령] 알 수 없는 명령: {command}")
