@@ -32,7 +32,7 @@ from database import (
 # ─────────────────────────────────────────────────────────────────────────────
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 API_KEY            = os.getenv("API_KEY", "macro_key_change_me")
-SESSION_TTL        = timedelta(hours=24)
+SESSION_TTL        = timedelta(days=7)
 BUGS_DIR           = os.getenv("BUGS_DIR", "/data/bugs")
 os.makedirs(BUGS_DIR, exist_ok=True)
 
@@ -54,6 +54,8 @@ def valid_session(token: Optional[str]) -> bool:
     if datetime.now(timezone.utc) > sessions[token]:
         sessions.pop(token, None)
         return False
+    # 사용할 때마다 TTL 갱신 (슬라이딩 세션)
+    sessions[token] = datetime.now(timezone.utc) + SESSION_TTL
     return True
 
 
@@ -109,6 +111,20 @@ app = FastAPI(lifespan=lifespan, title="Macro Control Panel")
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: broadcast current state to all WS clients
 # ─────────────────────────────────────────────────────────────────────────────
+OFFLINE_TIMEOUT = timedelta(seconds=30)
+
+def _is_stale(updated_at_str: str | None) -> bool:
+    """updated_at 타임스탬프가 30초 이상 지났으면 True"""
+    if not updated_at_str:
+        return True
+    try:
+        ts = datetime.fromisoformat(updated_at_str)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - ts > OFFLINE_TIMEOUT
+    except Exception:
+        return True
+
 async def _build_full_state() -> list[dict]:
     """pc_status + updater_status + bug_count + char_info 병합 목록 반환"""
     statuses = await get_all_statuses()
@@ -139,6 +155,12 @@ async def _build_full_state() -> list[dict]:
             u = updater_map[pid]
             pc["_updater_state"]   = u.get("macro_state", "unknown")
             pc["_updater_version"] = u.get("updater_version", "")
+            # updater 30초 타임아웃 → offline
+            if _is_stale(u.get("_updated_at")):
+                pc["status"] = "offline"
+        else:
+            # updater 기록 자체가 없으면 offline
+            pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(pid, 0)
         # char_info 이름 카드에 반영
         if pid and not pc.get("chars"):
@@ -230,7 +252,7 @@ async def do_login(request: Request, response: Response):
     token = new_session()
     secure = request.headers.get("x-forwarded-proto", "http") == "https"
     response.set_cookie("session", token, httponly=True, samesite="lax",
-                        secure=secure, max_age=86400)
+                        secure=secure, max_age=604800)
     return {"ok": True}
 
 
@@ -370,8 +392,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <div id="card-menu" class="hidden fixed z-50 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl py-1.5 min-w-[168px]"
      onclick="event.stopPropagation()">
   <div class="px-3 py-1 text-xs text-gray-500 border-b border-gray-700 mb-1" id="menu-pc-label">PC-??</div>
-  <button class="menu-item text-green-400"  onclick="cardCmd('start')">▶ 시작</button>
-  <button class="menu-item text-red-400"    onclick="cardCmd('stop')">■ 정지</button>
+  <button class="menu-item text-green-400"  onclick="cardCmd('start')">▶ 매크로 시작</button>
+  <button class="menu-item text-red-400"    onclick="cardCmd('stop')">■ 매크로 정지</button>
   <button class="menu-item text-yellow-400" onclick="cardCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-purple-400" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
   <button class="menu-item text-blue-400"   onclick="cardCmd('sell')">$ 판매</button>
@@ -384,8 +406,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button class="menu-item text-red-500"    onclick="deletePCFromMenu()">🗑 삭제</button>
   <div class="border-t border-gray-700 my-1"></div>
   <div class="px-3 py-1 text-xs text-gray-500 font-semibold">업데이터 제어</div>
-  <button class="menu-item text-green-300"  onclick="updaterCmd('start')">▶ 매크로 시작</button>
-  <button class="menu-item text-red-300"    onclick="updaterCmd('stop')">■ 매크로 정지</button>
+  <button class="menu-item text-green-300"  onclick="updaterCmd('start')">▶ 시작</button>
+  <button class="menu-item text-red-300"    onclick="updaterCmd('stop')">■ 정지</button>
   <button class="menu-item text-yellow-300" onclick="updaterCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-cyan-300"   onclick="updaterCmd('update')">↑ 업데이트+재시작</button>
   <button class="menu-item text-purple-300" onclick="updaterCmd('update_only')">⬆ 업데이트만</button>
@@ -523,7 +545,7 @@ function buildCard(pc) {
           onclick="event.stopPropagation();toggleSelect('${pc.pc_id}',event)">
         <div class="min-w-0">
           <div class="font-bold text-sm flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
-          <div class="text-xs text-gray-400 truncate">${(pc.chars&&pc.chars.length?pc.chars.join(' · '):pc.character)||'–'}</div>
+          ${pc.chars&&pc.chars.length?`<div class="text-xs text-gray-400 truncate">${pc.chars.join(' · ')}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
