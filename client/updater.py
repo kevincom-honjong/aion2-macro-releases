@@ -466,7 +466,21 @@ def main():
     log("=" * 60)
     log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
     load_pc_id()
-    log(f"[업데이터] PC: {pc_id}, 대기 중 (대시보드에서 명령 전송)")
+    log(f"[업데이터] PC: {pc_id}")
+
+    # ── 필수 디렉토리 보장 ───────────────────────────────────────────────────
+    for d in [IMAGES_DIR, BUGS_DIR]:
+        os.makedirs(d, exist_ok=True)
+        log(f"[업데이터] 폴더 확인: {d}")
+
+    # ── 시작 시 자동 업데이트 (exe + 이미지) ────────────────────────────────
+    log("[업데이터] 시작 업데이트 체크 중...")
+    try:
+        check_and_update()
+    except Exception as e:
+        err(f"[업데이터] 시작 업데이트 실패 (무시하고 계속): {e}")
+
+    log("[업데이터] 대시보드에서 ▶ 시작 명령을 보내면 매크로 실행됩니다.")
 
     threads = [
         threading.Thread(target=_poll_thread,        daemon=True, name="poll"),
