@@ -903,8 +903,8 @@ function renderInfoContent(info) {
   };
   // odd_energy는 "195(+1,985)/840" 형식 문자열 → fmtNum 제외
   const RAW_FIELDS   = new Set(['odd_energy']);
-  // gear_power/power_power → "98 K" 형식 표기
-  const POWER_FIELDS = new Set(['gear_power', 'power_power']);
+  // power_power만 "2.4 K" 형식 표기 (gear_power는 일반 숫자)
+  const POWER_FIELDS = new Set(['power_power']);
   const charsHtml = (info.chars||[]).map((c,i) => {
     const rows = Object.entries(LABELS).map(([k,lbl]) => {
       const v = c[k];
