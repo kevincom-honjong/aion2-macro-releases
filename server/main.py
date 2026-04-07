@@ -557,7 +557,6 @@ function buildCard(pc) {
           onclick="event.stopPropagation();toggleSelect('${pc.pc_id}',event)">
         <div class="min-w-0">
           <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
-          ${pc.chars&&pc.chars.length?`<div class="text-sm text-gray-400 truncate">${pc.chars.join(' · ')}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">

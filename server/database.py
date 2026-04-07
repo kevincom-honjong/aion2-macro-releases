@@ -4,7 +4,8 @@ import os
 import json
 from datetime import datetime, timezone
 
-DB_PATH = os.getenv("DB_PATH", "/tmp/macro_control.db")
+DB_PATH = os.getenv("DB_PATH", "/data/macro_control.db")
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 
 async def init_db() -> None:
