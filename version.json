@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.46",
+    "version": "1.1.47",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "a8a21e3735774086903a38f377dd74c391398fea9b2a81c205a49e8c5b305f84",
+    "sha256": "87159be43ddba6ae2e6d56410ddc35ec2c5949a638ad18eb2a5eda2e787cba5a",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -66,6 +66,7 @@
     "kumsung.png": "41aaba350c4ee71bbdc5290e7fe7f4e214c1da17e717a4a5514a981ea7d00f45",
     "lobby.png": "f6752038a856576c3c05b95c2e8cf7857ac347836681a821af0ccf7bbf27979b",
     "locked_slot.png": "7d32b99fb3b8d42e255dd0223a52ad316b45fc8c287f37a1c4ef7e20d65e9b6b",
+    "login_redirect.png": "d45b1e4f4221ead39af176081ed53afb7a400a9840b43277cb7b2fcc60965c2b",
     "loot.png": "17149e14f39cd35853dbdc01fe23aac5eb17a0a657829dc782e4c715d2152111",
     "mania_new.png": "89d233edcf4ada060121db0b981cade04d3d5d5adc21ecd6b49c098723d64916",
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
@@ -94,6 +95,8 @@
     "stream1.png": "1f5faae4b952fb1da07e740b22a165364da3f77c2cdd67d7e14fa8b22e3e1c7c",
     "stream2.png": "ae15f492c1b007f0b796523dff82a5bcf28a82fa819991b853cfd5d79f109c10",
     "summon.png": "cd02a70530701c217870d5c9b6a2250f5e0accb5b89513cd910a0d891f8f0bea",
+    "timeout_popup.png": "41935505832b7cdec010dac6f3969f5870bc2f0c3da03599e7355536fce2a22d",
+    "title_screen.png": "9c8a4f7d2c81647b688e320be67a57e5c8f20a0c912c48818bc36763c7a56d10",
     "ttttttttttt.png": "a5171505645dd554628d5211ffe496df227ec8b4f21794237a709b4944e633d6",
     "unexpected1.png": "8a02fa10f876333abfc7bd4731430202483bccb1674c05b7a4230254f520f852",
     "unexpected2.png": "c9926dc59fbd4bda1858d099dcd9b51ec4d0692fe93a2fd7057b922c93a9f668",
@@ -127,7 +130,7 @@
     "sha256": "6845ce541bcb0651763dec4c7721d0705c7215a54c0f3ac5119a1556426e920f",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260407080156",
-  "updated_at": "2026-04-07T08:01:56",
+  "images_version": "20260407080718",
+  "updated_at": "2026-04-07T08:07:18",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
