@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.29",
+    "version": "1.1.30",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "e4f4db475d62d29c86d760ee822e51f29dbe9f044a0cc163d79a1cd55ec2d9ab",
+    "sha256": "9fa03e5e9c684db4cf7b81e85b42076b71d50054bbb878152ae107b224d2c168",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -53,6 +53,7 @@
     "full_screen.png": "8d1bda2bad8b0d06a3badf49ba35a40277237216571bc6da5c6b10dfffbf2291",
     "fullscreen_check.png": "5927089457520ab4aeac82e3fa1f8c76fd96792bade75ccd46026715f22b0a48",
     "game_start_btn.png": "c42479b28e13ca7243c504b83984a953f60758eb5ea6d7189d62643900ca13c2",
+    "gear_icon.png": "10ce36dc1d1df85813784667ab8f35c291e7b551ae7a899427cb30c781eafa58",
     "gung_5.png": "99736d6af3d0064ea3430e5e1ef86e1d431d7e02b65d0f024af89350e669fbc0",
     "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
     "gung_7.png": "a9aa69708522dadeeef80f1ba6f077a4a7e0757eef0c6ea92f6b266e6387640e",
@@ -73,6 +74,7 @@
     "none.png": "cf59268cb9d4f3c2186f632b8502b0e5ebdba9d908b14fc756fcbc623fea1cb8",
     "password.png": "32d97c260031eedb2ceb5df408eb46d75e831a013d279573d21f263aff14c6d6",
     "pin.png": "376d573449fe690331fb1fa67bad16d9dc999c39b6177ac0a36382a0eed93909",
+    "power_icon.png": "3d175c5dd3a429235808b942548747adefa2463d978a80fdb5873b0b469825ab",
     "purple.png": "1d2d08c704ac1da21832980f032d4ffd5c0b246e1c255d4d2ee501be19078ee2",
     "pvp.png": "d7d7dcfbf6c070634246bdebcf6bb8d59af1d82f37bb8749ab06459fddc262a7",
     "pya_check.png": "ab392152c98f7f6a2fc19465c900fdc2225348fc62a4b253f1a93d9e415e97a5",
@@ -123,7 +125,7 @@
     "sha256": "be7a3ebd791c12f8009d9bf01a8361b7ca020547fa5b87366da72de020c658a2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260406231240",
-  "updated_at": "2026-04-07T00:53:39",
+  "images_version": "20260407005736",
+  "updated_at": "2026-04-07T00:57:36",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
