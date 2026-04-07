@@ -396,7 +396,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="px-3 py-1 text-xs text-gray-500 border-b border-gray-700 mb-1" id="menu-pc-label">PC-??</div>
   <button class="menu-item text-green-400"  onclick="cardCmd('start')">▶ 매크로 시작</button>
   <button class="menu-item text-red-400"    onclick="cardCmd('stop')">■ 매크로 정지</button>
-  <button class="menu-item text-orange-400" onclick="cardCmd('pause')">⏸ 일시정지</button>
+  <button class="menu-item text-orange-400" onclick="cardCmd('exit')">✕ 매크로 종료</button>
   <button class="menu-item text-yellow-400" onclick="cardCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-purple-400" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
   <button class="menu-item text-blue-400"   onclick="cardCmd('sell')">$ 판매</button>
@@ -411,7 +411,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="px-3 py-1 text-xs text-gray-500 font-semibold">업데이터 제어</div>
   <button class="menu-item text-green-300"  onclick="updaterCmd('start')">▶ 시작</button>
   <button class="menu-item text-red-300"    onclick="updaterCmd('stop')">■ 정지</button>
-  <button class="menu-item text-orange-300" onclick="updaterCmd('pause')">⏸ 일시정지</button>
+  <button class="menu-item text-orange-300" onclick="updaterCmd('exit')">✕ 종료</button>
   <button class="menu-item text-yellow-300" onclick="updaterCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-cyan-300"   onclick="updaterCmd('update')">↑ 업데이트+재시작</button>
   <button class="menu-item text-purple-300" onclick="updaterCmd('update_only')">⬆ 업데이트만</button>

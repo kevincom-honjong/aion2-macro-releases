@@ -511,6 +511,12 @@ def handle_command(cmd: dict):
     elif command == "screenshot":
         threading.Thread(target=take_bug_screenshot, args=(True,), daemon=True).start()
 
+    elif command == "exit":
+        log("[명령] 업데이터 종료")
+        stop_macro()
+        time.sleep(1.0)
+        os._exit(0)
+
     else:
         log(f"[명령] 알 수 없는 명령: {command}")
 
