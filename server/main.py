@@ -191,7 +191,12 @@ async def _build_full_state() -> list[dict]:
 
 async def push_state():
     statuses = await _build_full_state()
-    await manager.broadcast({"type": "state", "pcs": statuses})
+    ver = _load_version_json()
+    latest = {
+        "macro": ver.get("exe", {}).get("version", ""),
+        "updater": ver.get("updater", {}).get("version", ""),
+    }
+    await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest})
 
 
 async def push_log(pc_id: str, message: str, level: str = "info"):
@@ -458,6 +463,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <script>
 // ─── 상태 ────────────────────────────────────────────────────────────────────
 let state = {};
+let latestVersions = {macro:'', updater:''};
 let selectedPcs = new Set();
 let logModalPc = null;
 let menuPcId = null;
@@ -534,9 +540,11 @@ function buildCard(pc) {
     ? `<span class="ml-1.5 px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
   const ucls = {'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600';
-  const macroVer = pc.macro_version ? `<span class="text-gray-700">매크로 v${pc.macro_version}</span>` : '';
+  const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
+  const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
+  const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${pc.macro_version}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1.5 text-xs text-gray-600">${macroVer}${macroVer?'<span class="text-gray-800 mx-1">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="text-gray-700 ml-0.5">v${pc._updater_version}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1.5 text-xs text-gray-600">${macroVer}${macroVer?'<span class="text-gray-800 mx-1">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="${uvcls} ml-0.5">v${pc._updater_version}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
@@ -816,7 +824,7 @@ function connectWS() {
   ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
   ws.onmessage=(e)=>{
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});renderCards();}
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;renderCards();}
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
