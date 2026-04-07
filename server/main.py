@@ -508,7 +508,7 @@ function buildDailyProgress(dp, activeSlot, charNames) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-600" style="font-size:10px">오늘 완료</span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료</span>
       <span class="${completed===total?'text-green-500':'text-gray-500'}" style="font-size:10px">${completed}/${total}</span>
     </div>
     <div class="flex gap-1">${slots}</div>
@@ -560,13 +560,13 @@ function buildCard(pc) {
         </span>
       </div>
     </div>
-    <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-gray-400 mt-2">
-      <div><span class="text-gray-600">진행도</span> <span class="text-gray-200">${pc.hunt_progress!=null ? pc.hunt_progress.toFixed(1)+' %' : '–'}</span></div>
-      <div><span class="text-gray-600">효율</span> <span class="text-gray-200">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+' % / h' : '–'}</span></div>
-      <div><span class="text-gray-600">맵</span> <span class="text-gray-200">${pc.map_name||'–'}</span></div>
-      <div><span class="text-gray-600">업타임</span> <span class="text-gray-200">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
+    <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs mt-2">
+      <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? pc.hunt_progress.toFixed(1)+' %' : '–'}</span></div>
+      <div><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+' % / h' : '–'}</span></div>
+      <div><span class="text-gray-400">맵</span> <span class="text-white font-medium">${pc.map_name||'–'}</span></div>
+      <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
     </div>
-    <div class="mt-2 text-xs text-gray-600">최근: ${relTime(pc.last_active)}</div>
+    <div class="mt-2 text-xs text-gray-400">최근: ${relTime(pc.last_active)}</div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars)}
     ${updaterRow}
