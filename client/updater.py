@@ -32,8 +32,8 @@ UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
 CONTROL_API_KEY  = "aion2_secret_2026"
 
-TIMEOUT_CONNECT  = 5
-TIMEOUT_DOWNLOAD = 60
+TIMEOUT_CONNECT  = 15
+TIMEOUT_DOWNLOAD = 120
 
 MACRO_EXE        = r"C:\auto\혼종_통합_자동.exe"
 MACRO_EXE_BACKUP = r"C:\auto\혼종_통합_자동.exe.bak"
