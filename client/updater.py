@@ -185,6 +185,31 @@ def _set_state(state: str):
     log(f"[상태] macro_state → {state}")
 
 
+def _minimize_consoles():
+    """매크로 콘솔 + updater 콘솔 최소화"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        EnumWindows = user32.EnumWindows
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+        GetWindowTextW = user32.GetWindowTextW
+        ShowWindow = user32.ShowWindow
+
+        def callback(hwnd, lParam):
+            title = ctypes.create_unicode_buffer(256)
+            GetWindowTextW(hwnd, title, 256)
+            t = title.value.lower()
+            # 매크로 exe 콘솔 또는 updater 콘솔
+            if '혼종' in title.value or 'updater' in t or '자동' in title.value:
+                ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            return True
+
+        EnumWindows(WNDENUMPROC(callback), 0)
+        log("[포커스] 콘솔 창 최소화 완료")
+    except Exception as e:
+        log(f"[포커스] 콘솔 최소화 실패: {e}")
+
+
 def _focus_game_window():
     """크롬 게임 창을 최상위로 올리기"""
     try:
@@ -251,8 +276,9 @@ def start_macro() -> bool:
             macro_proc = proc
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
-        # 게임 창 포커스 (매크로 콘솔 뒤로)
+        # 매크로 콘솔 + updater 콘솔 최소화 → 게임 창이 자동으로 앞으로
         time.sleep(2.0)
+        _minimize_consoles()
         _focus_game_window()
         return True
     except Exception as e:
