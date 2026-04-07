@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.45",
+    "version": "1.1.46",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "6feead077bf9dd486ac481c4527b07e60aada8f29375f9fbbe249478726eb3a0",
+    "sha256": "a8a21e3735774086903a38f377dd74c391398fea9b2a81c205a49e8c5b305f84",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -79,6 +79,7 @@
     "purple.png": "1d2d08c704ac1da21832980f032d4ffd5c0b246e1c255d4d2ee501be19078ee2",
     "pvp.png": "d7d7dcfbf6c070634246bdebcf6bb8d59af1d82f37bb8749ab06459fddc262a7",
     "pya_check.png": "ab392152c98f7f6a2fc19465c900fdc2225348fc62a4b253f1a93d9e415e97a5",
+    "resurrect.png": "4675e50053d3113d9021ba509bf58aa646066b89f489c5d284749e8aae3fbe11",
     "sale_confirm_popup.png": "fa232f3508569f488991bb1fe3251344e39c2145dda665b54fd427d065b7cf57",
     "sale_register_tab.png": "855e5556b8d08ab0f2f68b466ced5c30a9a3e81e4555fbd6a2466829cb9f37cc",
     "screen_now.png": "0962e950f561ccb8ec7ab6c59f77a1100876f416680f9d4fcf310b22f40c5591",
@@ -126,7 +127,7 @@
     "sha256": "6845ce541bcb0651763dec4c7721d0705c7215a54c0f3ac5119a1556426e920f",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260407075445",
-  "updated_at": "2026-04-07T07:54:45",
+  "images_version": "20260407080156",
+  "updated_at": "2026-04-07T08:01:56",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
