@@ -485,6 +485,8 @@ function relTime(iso) {
   if (d<3600) return Math.floor(d/60)+'분 전'; return Math.floor(d/3600)+'시간 전';
 }
 
+const CLASS_LABEL = {gungsung:'궁성',spirit:'정령성',kumsung:'검성',chiyousung:'치유성'};
+
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
 function buildDailyProgress(dp, activeSlot, charNames, pc) {
   if (!dp || !dp.length) return '';
@@ -503,10 +505,12 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
         ? 'bg-yellow-900/70 border-yellow-600 text-yellow-300'
         : 'bg-gray-800/60 border-gray-700 text-gray-600';
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
+    const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:34px" title="${name}${done?' ✓ '+time:isActive?' 진행 중':''}">
+      style="min-width:38px" title="${name}${done?' ✓ '+time:isActive?' 진행 중':''}">
       <span class="font-bold text-xs leading-none">${icon}</span>
-      <span style="font-size:9px;line-height:1.2;max-width:34px;overflow:hidden;white-space:nowrap">${short}</span>
+      <span style="font-size:9px;line-height:1.2;max-width:38px;overflow:hidden;white-space:nowrap">${short}</span>
+      ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
@@ -569,8 +573,8 @@ function buildCard(pc) {
       <div><span class="text-gray-400">맵</span> <span class="text-white font-medium">${pc.map_name||'–'}</span></div>
       <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="text-gray-400">서버</span> <span class="text-white font-medium">${pc.server}</span></div>`:''}
+      <div><span class="text-gray-400">최근</span> <span class="text-white font-medium">${relTime(pc.last_active)}</span></div>
     </div>
-    <div class="mt-2 text-sm text-gray-400">최근: ${relTime(pc.last_active)}</div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
