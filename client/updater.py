@@ -195,19 +195,39 @@ def _focus_game_window():
         GetWindowTextW = user32.GetWindowTextW
         SetForegroundWindow = user32.SetForegroundWindow
         ShowWindow = user32.ShowWindow
+        BringWindowToTop = user32.BringWindowToTop
 
+        found = [False]
         def callback(hwnd, lParam):
             title = ctypes.create_unicode_buffer(256)
             GetWindowTextW(hwnd, title, 256)
             t = title.value.lower()
-            if 'purple' in t or 'aion' in t or 'purpleon' in t:
+            # PURPLE On-NCSOFT - Chrome 또는 purpleon 등
+            if ('purple' in t or 'aion' in t or 'ncsoft' in t) and 'chrome' in t:
                 ShowWindow(hwnd, 9)  # SW_RESTORE
+                BringWindowToTop(hwnd)
                 SetForegroundWindow(hwnd)
                 log(f"[포커스] 게임 창 활성화: {title.value}")
-                return False  # 찾았으면 중단
+                found[0] = True
+                return False
             return True
 
         EnumWindows(WNDENUMPROC(callback), 0)
+
+        # 못 찾으면 크롬 아무 창이라도
+        if not found[0]:
+            def callback2(hwnd, lParam):
+                title = ctypes.create_unicode_buffer(256)
+                GetWindowTextW(hwnd, title, 256)
+                t = title.value.lower()
+                if 'chrome' in t and user32.IsWindowVisible(hwnd):
+                    ShowWindow(hwnd, 9)
+                    BringWindowToTop(hwnd)
+                    SetForegroundWindow(hwnd)
+                    log(f"[포커스] 크롬 창 활성화: {title.value}")
+                    return False
+                return True
+            EnumWindows(WNDENUMPROC(callback2), 0)
     except Exception as e:
         log(f"[포커스] 게임 창 활성화 실패 (무시): {e}")
 
