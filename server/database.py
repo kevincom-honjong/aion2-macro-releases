@@ -332,6 +332,28 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list) -> None:
         await db.commit()
 
 
+async def get_all_char_info() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT pc_id, total_kina, chars, collected_at FROM char_info ORDER BY pc_id"
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        try:
+            chars = json.loads(row["chars"])
+        except Exception:
+            chars = []
+        result.append({
+            "pc_id": row["pc_id"],
+            "total_kina": row["total_kina"],
+            "chars": chars,
+            "collected_at": row["collected_at"],
+        })
+    return result
+
+
 async def get_char_info(pc_id: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

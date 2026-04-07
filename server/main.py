@@ -24,7 +24,7 @@ from database import (
     insert_log, get_recent_commands,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
-    upsert_char_info, get_char_info,
+    upsert_char_info, get_char_info, get_all_char_info,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,6 +372,43 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       오프라인 <span id="offline-count" class="text-gray-600 normal-case">(0)</span>
     </h2>
     <div id="grid-offline" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3"></div>
+  </section>
+
+  <!-- 전체 캐릭터 현황 테이블 -->
+  <section class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2 cursor-pointer" onclick="toggleCharTable()">
+        <span id="char-table-arrow">▶</span> 전체 캐릭터 현황
+        <span id="char-table-count" class="text-gray-600 normal-case">(0)</span>
+      </h2>
+      <button onclick="loadCharTable()" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded">↻ 새로고침</button>
+    </div>
+    <div id="char-table-wrap" class="hidden">
+      <div class="flex gap-2 mb-3">
+        <input id="char-filter" type="text" placeholder="PC번호 / 이름 검색..."
+          class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 w-64 focus:outline-none focus:border-indigo-500"
+          oninput="filterCharTable()">
+      </div>
+      <div class="overflow-x-auto max-h-[600px] overflow-y-auto scrollbar-thin">
+        <table class="w-full text-sm text-left">
+          <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
+            <tr>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('pc_id')">PC ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('slot')"># ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('name')">이름 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('power_power')">파워전투력 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('odd_energy')">오드에너지 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('daily_ticket')">일일던전 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('nightmare_ticket')">악몽 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('awakening_ticket')">각성 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">총 키나 ⇅</th>
+            </tr>
+          </thead>
+          <tbody id="char-tbody" class="divide-y divide-gray-800"></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <!-- 최근 명령 내역 -->
@@ -1020,6 +1057,75 @@ function fmtAt(iso) {
   return iso.replace('T',' ').slice(0,16);
 }
 
+// ─── 전체 캐릭터 테이블 ────────────────────────────────────────────────────
+let charTableData = [];
+let charTableSort = {key:'pc_id', asc:true};
+let charTableVisible = false;
+
+function toggleCharTable() {
+  charTableVisible = !charTableVisible;
+  document.getElementById('char-table-wrap').classList.toggle('hidden', !charTableVisible);
+  document.getElementById('char-table-arrow').textContent = charTableVisible ? '▼' : '▶';
+  if (charTableVisible && charTableData.length === 0) loadCharTable();
+}
+
+async function loadCharTable() {
+  try {
+    const r = await fetch('/characters');
+    if (!r.ok) return;
+    const d = await r.json();
+    charTableData = d.characters || [];
+    document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
+    renderCharTable();
+  } catch(e) { console.error('캐릭터 테이블 로드 실패', e); }
+}
+
+function renderCharTable() {
+  const filter = (document.getElementById('char-filter')?.value || '').toLowerCase();
+  let rows = charTableData;
+  if (filter) {
+    rows = rows.filter(r => (r.pc_id||'').toLowerCase().includes(filter) || (r.name||'').toLowerCase().includes(filter));
+  }
+  const {key, asc} = charTableSort;
+  rows.sort((a, b) => {
+    let va = a[key] ?? '', vb = b[key] ?? '';
+    if (typeof va === 'number' && typeof vb === 'number') return asc ? va - vb : vb - va;
+    va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+    return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  const tbody = document.getElementById('char-tbody');
+  tbody.innerHTML = rows.map((r, i) => {
+    const bg = i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50';
+    const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
+    const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
+    const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
+    const odd = r.odd_energy || '–';
+    const daily = r.daily_ticket != null ? r.daily_ticket : '–';
+    const nm = r.nightmare_ticket != null ? r.nightmare_ticket : '–';
+    const aw = r.awakening_ticket != null ? r.awakening_ticket : '–';
+    return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
+      <td class="px-3 py-1.5 font-medium text-gray-200">${r.pc_id||'–'}</td>
+      <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
+      <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
+      <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
+      <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
+      <td class="px-3 py-1.5 text-yellow-400">${odd}</td>
+      <td class="px-3 py-1.5 text-center">${daily}</td>
+      <td class="px-3 py-1.5 text-center">${nm}</td>
+      <td class="px-3 py-1.5 text-center">${aw}</td>
+      <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
+    </tr>`;
+  }).join('');
+}
+
+function sortCharTable(key) {
+  if (charTableSort.key === key) charTableSort.asc = !charTableSort.asc;
+  else { charTableSort.key = key; charTableSort.asc = true; }
+  renderCharTable();
+}
+
+function filterCharTable() { renderCharTable(); }
+
 function renderInfoContent(info) {
   const el = document.getElementById('info-content');
   if (!info || (!info.chars?.length && !info.total_kina)) {
@@ -1136,6 +1242,8 @@ function handleCharInfoMsg(msg) {
     renderCards();
   }
   if (infoModalPc === msg.pc_id) renderInfoContent(charInfoCache[msg.pc_id]);
+  // 캐릭터 테이블도 갱신
+  if (charTableVisible) loadCharTable();
   showToast(`✓ ${msg.pc_id} 정보수집 완료`);
 }
 
@@ -1495,6 +1603,38 @@ async def query_char_info(pc_id: str, request: Request):
     if not info:
         return JSONResponse({"pc_id": pc_id, "total_kina": 0, "chars": [], "collected_at": None})
     return JSONResponse(info)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 전체 캐릭터 테이블 API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/characters")
+async def get_all_characters(request: Request):
+    """전체 PC의 모든 캐릭터 정보를 플랫 테이블로 반환"""
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    all_info = await get_all_char_info()
+    rows = []
+    for info in all_info:
+        pc_id = info["pc_id"]
+        total_kina = info.get("total_kina", 0)
+        collected_at = info.get("collected_at", "")
+        for ch in info.get("chars", []):
+            rows.append({
+                "pc_id": pc_id,
+                "slot": ch.get("slot", 0),
+                "name": ch.get("name", ""),
+                "gear_power": ch.get("gear_power", 0),
+                "power_power": ch.get("power_power", 0),
+                "odd_energy": ch.get("odd_energy", ""),
+                "daily_ticket": ch.get("daily_ticket", 0),
+                "nightmare_ticket": ch.get("nightmare_ticket", 0),
+                "awakening_ticket": ch.get("awakening_ticket", 0),
+                "total_kina": total_kina,
+                "collected_at": collected_at,
+            })
+    return JSONResponse({"characters": rows})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
