@@ -217,20 +217,30 @@ def stop_macro():
         proc = macro_proc
         macro_proc = None
     if proc is None:
+        # proc 참조 없어도 프로세스명으로 강제 kill
+        try:
+            subprocess.run(['taskkill', '/F', '/IM', os.path.basename(MACRO_EXE)],
+                           capture_output=True, timeout=10)
+            log("[매크로] taskkill 강제 종료")
+        except Exception:
+            pass
+        _set_state("stopped")
         return
     if proc.poll() is not None:
         _set_state("stopped")
         return
     try:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        log("[매크로] 정지 완료")
+        proc.kill()
+        proc.wait(timeout=5)
+        log("[매크로] kill 정지 완료")
     except Exception as e:
-        err(f"[매크로] 정지 실패: {e}")
+        err(f"[매크로] kill 실패 → taskkill 시도: {e}")
+        try:
+            subprocess.run(['taskkill', '/F', '/IM', os.path.basename(MACRO_EXE)],
+                           capture_output=True, timeout=10)
+            log("[매크로] taskkill 강제 종료")
+        except Exception:
+            pass
     _set_state("stopped")
 
 
