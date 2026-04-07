@@ -561,8 +561,8 @@ function buildCard(pc) {
       </div>
     </div>
     <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-gray-400 mt-2">
-      <div><span class="text-gray-600">진행도</span> <span class="text-gray-200">${pc.hunt_progress ? pc.hunt_progress.toFixed(1)+'%' : fmtKina(pc.kina)}</span></div>
-      <div><span class="text-gray-600">효율</span> <span class="text-gray-200">${pc.efficiency ? pc.efficiency+'%/h' : fmtRate(pc.kina_rate)}</span></div>
+      <div><span class="text-gray-600">진행도</span> <span class="text-gray-200">${pc.hunt_progress!=null ? pc.hunt_progress.toFixed(1)+' %' : '–'}</span></div>
+      <div><span class="text-gray-600">효율</span> <span class="text-gray-200">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+' % / h' : '–'}</span></div>
       <div><span class="text-gray-600">맵</span> <span class="text-gray-200">${pc.map_name||'–'}</span></div>
       <div><span class="text-gray-600">업타임</span> <span class="text-gray-200">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
     </div>
@@ -984,11 +984,18 @@ function fmtPower(n) {
   return (Number.isInteger(k) ? k : k.toFixed(1)) + ' K';
 }
 function fmtSlotUptime(slotUptime, activeSlot, fallback) {
+  let hours = null;
   if (slotUptime && activeSlot) {
     const h = slotUptime[String(activeSlot)];
-    if (h != null) return h.toFixed(1) + 'h';
+    if (h != null) hours = h;
   }
-  return fallback ? Number(fallback).toFixed(1) + 'h' : '–';
+  if (hours == null && fallback) hours = Number(fallback);
+  if (hours == null) return '–';
+  const totalMin = Math.round(hours * 60);
+  if (totalMin < 60) return totalMin + ' 분';
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? h + '시간 ' + m + '분' : h + '시간';
 }
 function fmtAt(iso) {
   if (!iso) return '–';
