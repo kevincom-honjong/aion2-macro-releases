@@ -544,6 +544,7 @@ function buildCard(pc) {
     onclick="openCardMenu('${pc.pc_id}',event)">
     <div class="flex items-start justify-between mb-2">
       <div class="flex items-center gap-2 min-w-0">
+        <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 select-none" style="font-size:14px;line-height:1" title="드래그로 순서 변경">⠿</span>
         <input type="checkbox" class="rounded accent-indigo-500 shrink-0 cursor-pointer mt-0.5"
           ${selectedPcs.has(pc.pc_id)?'checked':''}
           onclick="event.stopPropagation();toggleSelect('${pc.pc_id}',event)">
@@ -602,31 +603,23 @@ function saveCurrentOrder(gridId, key) {
 function setupDrag(gridId, orderKey) {
   const grid = document.getElementById(gridId);
   if (!grid) return;
-  let longPressTimer = null;
   grid.querySelectorAll('[id^="card-"]').forEach(card => {
+    const handle = card.querySelector('.drag-handle');
+    if (!handle) return;
     card.setAttribute('draggable','false');
-    // long press 시작
-    card.addEventListener('pointerdown', e => {
-      if (e.target.tagName==='BUTTON'||e.target.tagName==='INPUT') return;
-      const pcId = card.id.replace('card-','');
-      longPressTimer = setTimeout(() => {
-        card.setAttribute('draggable','true');
-        dragSrcId = pcId;
-        dragSection = orderKey;
-        card.classList.add('card-dragging');
-      }, 400);
+    // 핸들에서만 드래그 시작
+    handle.addEventListener('mousedown', e => {
+      e.stopPropagation();
+      card.setAttribute('draggable','true');
+      dragSrcId = card.id.replace('card-','');
+      dragSection = orderKey;
     });
-    const cancelLong = () => { clearTimeout(longPressTimer); longPressTimer=null; };
-    card.addEventListener('pointermove', e => {
-      if (longPressTimer && (Math.abs(e.movementX)>3||Math.abs(e.movementY)>3)) cancelLong();
-    });
-    card.addEventListener('pointerup', cancelLong);
-    card.addEventListener('pointercancel', cancelLong);
-    // drag events
+    handle.addEventListener('click', e => e.stopPropagation());
     card.addEventListener('dragstart', e => {
       if (!dragSrcId) { e.preventDefault(); return; }
       e.dataTransfer.effectAllowed='move';
       e.dataTransfer.setData('text/plain', dragSrcId);
+      card.classList.add('card-dragging');
     });
     card.addEventListener('dragend', () => {
       card.setAttribute('draggable','false');
@@ -745,8 +738,13 @@ async function selCmd(command, args={}) {
 // ─── 카드 메뉴 ────────────────────────────────────────────────────────────────
 function openCardMenu(pc_id, e) {
   e.stopPropagation();
-  menuPcId=pc_id;
   const menu=document.getElementById('card-menu');
+  // 같은 카드 다시 클릭 → 메뉴 닫기
+  if(menuPcId===pc_id && !menu.classList.contains('hidden')) {
+    closeCardMenu();
+    return;
+  }
+  menuPcId=pc_id;
   document.getElementById('menu-pc-label').textContent=pc_id;
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
