@@ -308,28 +308,28 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
 </header>
 
-<!-- 전체 명령 바 -->
+<!-- 명령 바 -->
 <div class="bg-gray-900/90 border-b border-gray-800 px-4 py-2 flex flex-wrap gap-2 items-center sticky top-[52px] z-20 backdrop-blur">
-  <span class="text-xs text-gray-600 shrink-0 mr-1">전체:</span>
-  <button onclick="bulkCmd('start')"   class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-green-900/60 hover:bg-green-700 text-green-300">▶ 시작</button>
-  <button onclick="bulkCmd('stop')"    class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-red-900/60 hover:bg-red-700 text-red-300">■ 정지</button>
-  <button onclick="bulkCmd('restart')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300">↺ 재시작</button>
-  <button onclick="bulkCmd('sell')"    class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-blue-900/60 hover:bg-blue-700 text-blue-300">$ 판매</button>
-  <button onclick="bulkCmd('go_home')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-gray-700/60 hover:bg-gray-600 text-gray-300">⌂ 귀환</button>
+  <!-- 그룹 1: 선택 -->
+  <span id="sel-label" class="text-xs text-indigo-400 font-semibold shrink-0">0개 선택</span>
+  <button onclick="selectAllPcs()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 transition-colors">전체선택</button>
+  <button onclick="clearSelection()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-gray-700/60 hover:bg-gray-600 text-gray-300 transition-colors">전체해제</button>
+
   <div class="h-4 w-px bg-gray-700 mx-1 shrink-0"></div>
-  <span class="text-xs text-gray-600 shrink-0 mr-1">업데이터:</span>
-  <button onclick="bulkUpdaterCmd('start')"   class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-green-900/40 hover:bg-green-700 text-green-400">▶ 시작</button>
-  <button onclick="bulkUpdaterCmd('stop')"    class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-red-900/40 hover:bg-red-700 text-red-400">■ 정지</button>
-  <button onclick="bulkUpdaterCmd('update')"  class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors bg-cyan-900/40 hover:bg-cyan-700 text-cyan-400">↑ 업데이트</button>
-  <!-- 선택 명령 바 (선택된 PC 있을 때만 표시) -->
-  <div id="sel-bar" class="hidden ml-auto flex items-center gap-2 pl-3 border-l border-gray-700">
-    <span id="sel-label" class="text-xs text-indigo-400 shrink-0 font-semibold">0개 선택</span>
-    <button onclick="selCmd('start')"   class="px-2 py-1 rounded-lg text-xs font-semibold bg-green-800/80 hover:bg-green-700 text-green-200 transition-colors">▶</button>
-    <button onclick="selCmd('stop')"    class="px-2 py-1 rounded-lg text-xs font-semibold bg-red-800/80 hover:bg-red-700 text-red-200 transition-colors">■</button>
-    <button onclick="selCmd('restart')" class="px-2 py-1 rounded-lg text-xs font-semibold bg-yellow-800/80 hover:bg-yellow-700 text-yellow-200 transition-colors">↺</button>
-    <button onclick="selCmd('sell')"    class="px-2 py-1 rounded-lg text-xs font-semibold bg-blue-800/80 hover:bg-blue-700 text-blue-200 transition-colors">$</button>
-    <button onclick="clearSelection()" class="px-2 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">✕ 해제</button>
-  </div>
+
+  <!-- 그룹 2: 매크로 제어 -->
+  <span class="text-xs text-gray-600 shrink-0">매크로:</span>
+  <button onclick="selCmd('start')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-900/60 hover:bg-green-700 text-green-300 transition-colors">▶ 시작</button>
+  <button onclick="selCmd('exit')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-red-900/60 hover:bg-red-700 text-red-300 transition-colors">✕ 종료</button>
+  <button onclick="selUpdaterCmd('update')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-900/60 hover:bg-cyan-700 text-cyan-300 transition-colors">↑ 업데이트+재시작</button>
+
+  <div class="h-4 w-px bg-gray-700 mx-1 shrink-0"></div>
+
+  <!-- 그룹 3: 기능 -->
+  <span class="text-xs text-gray-600 shrink-0">기능:</span>
+  <button onclick="selCmd('daily_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-900/60 hover:bg-purple-700 text-purple-300 transition-colors">일일던전</button>
+  <button onclick="selCmd('nightmare')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-pink-900/60 hover:bg-pink-700 text-pink-300 transition-colors">악몽</button>
+  <button onclick="selCmd('awakening')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-900/60 hover:bg-orange-700 text-orange-300 transition-colors">각성</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
@@ -762,9 +762,22 @@ function clearSelection() {
 
 function updateSelBar() {
   const n=selectedPcs.size;
-  const bar=document.getElementById('sel-bar');
-  bar.classList.toggle('hidden',n===0);
-  if(n>0) document.getElementById('sel-label').textContent=`${n}개 선택`;
+  document.getElementById('sel-label').textContent=n>0?`${n}개 선택`:'선택 없음';
+}
+
+function selectAllPcs() {
+  Object.keys(state).forEach(id=>selectedPcs.add(id));
+  document.querySelectorAll('#grid-online input[type=checkbox],#grid-offline input[type=checkbox]').forEach(cb=>cb.checked=true);
+  document.querySelectorAll('[id^="card-"]').forEach(el=>el.classList.add('card-sel'));
+  updateSelBar();
+}
+
+async function selUpdaterCmd(command, args={}) {
+  if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
+  for(const id of selectedPcs) {
+    await fetch(`/updater/command/${id}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command,...args})});
+  }
+  showToast(`${selectedPcs.size}대 업데이터 ${command}`);
 }
 
 // ─── 명령 전송 ────────────────────────────────────────────────────────────────
@@ -784,7 +797,7 @@ async function bulkCmd(command, args={}) {
 }
 
 async function selCmd(command, args={}) {
-  if(!selectedPcs.size) return;
+  if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
   showToast(`✓ ${command} → 선택 ${selectedPcs.size}대`);
   loadCmdHistory();
