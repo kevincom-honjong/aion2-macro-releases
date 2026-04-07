@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.7.0"
+UPDATER_VERSION  = "2.8.0"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -250,8 +250,7 @@ def stop_macro():
 # 업데이트 로직
 # ==================================================
 def self_update(updater_info: dict):
-    """새 updater를 다른 파일명으로 다운 → 실행 → 자신 종료.
-    새 버전이 시작 시 이전 버전 파일 자동 삭제."""
+    """자가업데이트: 다운로드 → 자신을 rename → 새 파일을 updater.exe로 → 실행"""
     new_ver = updater_info["version"]
     url     = updater_info["download_url"]
     sha256  = updater_info.get("sha256")
@@ -259,27 +258,48 @@ def self_update(updater_info: dict):
 
     current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
     exe_dir = os.path.dirname(current_exe)
-    new_exe = os.path.join(exe_dir, f"updater_v{new_ver}.exe")
+    new_tmp = os.path.join(exe_dir, "updater_new.exe")
+    old_bak = os.path.join(exe_dir, "updater_old.exe")
+    target  = os.path.join(exe_dir, "updater.exe")
 
-    ok = download_file(url, new_exe, sha256)
+    ok = download_file(url, new_tmp, sha256)
     if not ok:
         err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
         return
 
     try:
-        # 새 버전 실행
-        log(f"[자가업데이트] 새 버전 실행: {new_exe}")
+        # 이전 백업 삭제
+        if os.path.exists(old_bak):
+            try: os.remove(old_bak)
+            except: pass
+
+        # 현재 실행 중인 exe → old로 rename (Windows에서 실행 중 rename 가능)
+        if os.path.exists(current_exe) and os.path.abspath(current_exe) == os.path.abspath(target):
+            os.rename(current_exe, old_bak)
+            log("[자가업데이트] 현재 exe → updater_old.exe")
+
+        # 새 파일 → updater.exe
+        os.rename(new_tmp, target)
+        log("[자가업데이트] updater_new.exe → updater.exe")
+
+        # 새 updater.exe 실행
         subprocess.Popen(
-            [new_exe],
+            [target],
             cwd=exe_dir,
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
-        log(f"[자가업데이트] 새 버전 시작 완료 → 자신 종료")
+        log(f"[자가업데이트] 새 버전 실행 완료 → 자신 종료")
         time.sleep(1)
         os._exit(0)
     except Exception as e:
-        err(f"[자가업데이트] 새 버전 실행 실패: {e}")
-        try: os.remove(new_exe)
+        err(f"[자가업데이트] 실패: {e}")
+        # 복구 시도
+        try:
+            if not os.path.exists(target) and os.path.exists(old_bak):
+                os.rename(old_bak, target)
+                log("[자가업데이트] 복구 완료")
+        except: pass
+        try: os.remove(new_tmp)
         except: pass
 
 
@@ -654,18 +674,21 @@ def _upload_bugs():
 # 진입점
 # ==================================================
 def _cleanup_old_updaters():
-    """이전 버전 updater_v*.exe 파일 삭제 (자기 자신 제외)"""
+    """이전 버전 파일 삭제 (updater_old.exe, updater_v*.exe, updater_new.exe)"""
     current = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
     exe_dir = os.path.dirname(current)
     current_name = os.path.basename(current).lower()
     for fname in os.listdir(exe_dir):
-        if fname.lower().startswith("updater") and fname.lower().endswith(".exe") and fname.lower() != current_name:
+        fl = fname.lower()
+        if fl == current_name:
+            continue
+        if fl in ("updater_old.exe", "updater_new.exe") or (fl.startswith("updater_v") and fl.endswith(".exe")):
             fpath = os.path.join(exe_dir, fname)
             try:
                 os.remove(fpath)
-                log(f"[정리] 이전 버전 삭제: {fname}")
+                log(f"[정리] 이전 파일 삭제: {fname}")
             except Exception:
-                pass  # 실행 중이면 삭제 안 됨 — 다음에 시도
+                pass
 
 
 def main():
@@ -686,9 +709,8 @@ def main():
             with open(INFO_TXT, 'w', encoding='utf-8') as f:
                 f.write("pc_id=PC-??\n")
                 f.write("token=\n")
-                f.write("char1=\n")
-                f.write("char2=\n")
-                f.write("char3=\n")
+                f.write("server=\n")
+                f.write("total_slots=5\n")
                 f.write("screenshot_key=ctrl+q\n")
             log(f"[업데이터] info.txt 기본 양식 생성됨 → {INFO_TXT}")
             log("[업데이터] ※ info.txt 에서 pc_id / char1~3 을 수정하고 updater를 재시작하세요")
