@@ -347,6 +347,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('awakening')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-900/60 hover:bg-orange-700 text-orange-300 transition-colors">각성</button>
   <button onclick="selCmd('abyss')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-900/60 hover:bg-blue-700 text-blue-300 transition-colors">어비스</button>
   <button onclick="selCmd('mission')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-900/60 hover:bg-teal-700 text-teal-300 transition-colors">사명</button>
+  <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
