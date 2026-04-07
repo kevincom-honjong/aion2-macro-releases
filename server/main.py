@@ -355,7 +355,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <span class="w-2 h-2 rounded-full bg-green-500 pulse inline-block"></span>
       온라인 <span id="online-count" class="text-gray-600 normal-case">(0)</span>
     </h2>
-    <div id="grid-online" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+    <div id="grid-online" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
       <div class="text-gray-600 text-sm col-span-full text-center py-10">대기 중... (매크로 연결 없음)</div>
     </div>
   </section>
@@ -366,7 +366,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <span class="w-2 h-2 rounded-full bg-gray-600 inline-block"></span>
       오프라인 <span id="offline-count" class="text-gray-600 normal-case">(0)</span>
     </h2>
-    <div id="grid-offline" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3"></div>
+    <div id="grid-offline" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3"></div>
   </section>
 
   <!-- 최근 명령 내역 -->
@@ -547,7 +547,7 @@ function buildCard(pc) {
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
   return `<div id="card-${pc.pc_id}"
-    class="relative bg-gray-900 rounded-xl p-4 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer"
+    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer"
     onclick="openCardMenu('${pc.pc_id}',event)">
     <div class="flex items-start justify-between mb-2">
       <div class="flex items-center gap-2 min-w-0">
