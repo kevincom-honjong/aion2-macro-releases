@@ -534,8 +534,9 @@ function buildCard(pc) {
     ? `<span class="ml-1.5 px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
   const ucls = {'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600';
+  const macroVer = pc.macro_version ? `<span class="text-gray-700">매크로 v${pc.macro_version}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1.5 text-xs text-gray-600"><span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="text-gray-700 ml-0.5">v${pc._updater_version}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1.5 text-xs text-gray-600">${macroVer}${macroVer?'<span class="text-gray-800 mx-1">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="text-gray-700 ml-0.5">v${pc._updater_version}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
