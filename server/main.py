@@ -95,6 +95,21 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# 매크로 WebSocket 연결 관리
+macro_ws_connections: dict[str, WebSocket] = {}   # pc_id → WebSocket
+
+
+async def send_command_to_macro(pc_id: str, command: str, args: dict, cmd_id: int) -> bool:
+    """매크로에 WS로 명령 즉시 전송. 실패 시 False (HTTP fallback 필요)."""
+    ws = macro_ws_connections.get(pc_id)
+    if ws:
+        try:
+            await ws.send_text(json.dumps({"type": "command", "id": cmd_id, "command": command, "args": args}))
+            return True
+        except Exception:
+            macro_ws_connections.pop(pc_id, None)
+    return False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
@@ -336,7 +351,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <main class="p-4 sm:p-6 space-y-6">
 
-  <!-- 요약 바 -->
+  <!-- 전광판 -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-green-400" id="cnt-online">0</div>
@@ -347,12 +362,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="text-sm text-gray-400 mt-1">오프라인</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-yellow-400" id="cnt-hunting">0</div>
-      <div class="text-sm text-gray-400 mt-1">사냥 중</div>
-    </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
       <div class="text-sm text-gray-400 mt-1">완료</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+      <div class="text-2xl font-bold text-yellow-300" id="cnt-total-kina">–</div>
+      <div class="text-sm text-gray-400 mt-1">총 키나</div>
     </div>
   </div>
 
@@ -725,21 +740,35 @@ function renderCards() {
   setupDrag('grid-offline', DRAG_ORDER_KEY_OFF);
 }
 
+function fmtKinaKor(n) {
+  if (!n || n === 0) return '0';
+  const eok = Math.floor(n / 100000000);
+  const man = Math.floor((n % 100000000) / 10000);
+  if (eok > 0 && man > 0) return `${eok}억 ${man.toLocaleString()}만`;
+  if (eok > 0) return `${eok}억`;
+  if (man > 0) return `${man.toLocaleString()}만`;
+  return n.toLocaleString();
+}
+
 function refreshSummary(pcs) {
-  const c={online:0,offline:0,hunting:0,completed:0};
+  const c={online:0,offline:0,completed:0,totalKina:0};
+  const seenPc = new Set();
   pcs.forEach(p=>{
     const s=p.status||'offline';
     const isOnline = (STATUS_CFG[s]||STATUS_CFG.offline).online;
     if(isOnline) c.online++; else c.offline++;
-    if(s==='hunting'||s==='moving') c.hunting++;
-    // 오늘 완료 체크: daily_progress 전부 completed
     const dp = p.daily_progress||[];
     if(dp.length>0 && dp.every(d=>d.completed)) c.completed++;
+    // 총 키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
+    if(p._total_kina && !seenPc.has(p.pc_id)) {
+      seenPc.add(p.pc_id);
+      c.totalKina += p._total_kina;
+    }
   });
   document.getElementById('cnt-online').textContent=c.online;
   document.getElementById('cnt-offline').textContent=c.offline;
-  document.getElementById('cnt-hunting').textContent=c.hunting;
   document.getElementById('cnt-completed').textContent=c.completed;
+  document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
@@ -1339,10 +1368,12 @@ async def send_command(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="command 필드 필요")
     args = body.get("args", {})
     cmd_id = await insert_command(pc_id, command, args)
+    # 매크로 WS 연결되어 있으면 즉시 전달
+    ws_sent = await send_command_to_macro(pc_id, command, args, cmd_id)
     # 브로드캐스트 (명령 내역 갱신용)
     cmds = await get_recent_commands(20)
     await manager.broadcast({"type": "cmd_history", "commands": cmds})
-    return JSONResponse({"ok": True, "id": cmd_id})
+    return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent})
 
 
 @app.delete("/status/{pc_id}")
@@ -1352,6 +1383,57 @@ async def remove_pc(pc_id: str, request: Request):
     await delete_pc_all_data(pc_id)
     await push_state()
     return JSONResponse({"ok": True})
+
+
+@app.websocket("/ws/macro/{pc_id}")
+async def macro_websocket(websocket: WebSocket, pc_id: str):
+    """매크로 클라이언트 WebSocket — 상태 수신 + 명령 송신"""
+    # API 키 인증 (쿼리 파라미터)
+    api_key = websocket.query_params.get("key", "")
+    if api_key != API_KEY:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    macro_ws_connections[pc_id] = websocket
+    try:
+        # 대기 중인 명령 즉시 전달
+        pending = await get_pending_command(pc_id)
+        if pending:
+            await websocket.send_text(json.dumps({
+                "type": "command", "id": pending["id"],
+                "command": pending["command"], "args": pending.get("args", {})
+            }))
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            msg_type = msg.get("type", "")
+            if msg_type == "status":
+                payload = msg.get("payload", {})
+                payload["pc_id"] = pc_id
+                await upsert_status(pc_id, payload)
+                errors = payload.get("errors") or []
+                for e in errors[:3]:
+                    await insert_log(pc_id, "warn", str(e))
+                await push_state()
+            elif msg_type == "log":
+                logs = msg.get("logs", [])
+                for entry in logs:
+                    await insert_log(pc_id, entry.get("level", "info"), entry.get("message", ""))
+            elif msg_type == "ack":
+                cmd_id = msg.get("command_id")
+                if cmd_id:
+                    await ack_command(cmd_id)
+            elif msg_type == "pong":
+                pass
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        macro_ws_connections.pop(pc_id, None)
 
 
 @app.websocket("/ws")
