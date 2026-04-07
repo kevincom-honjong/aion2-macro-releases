@@ -111,7 +111,7 @@ app = FastAPI(lifespan=lifespan, title="Macro Control Panel")
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: broadcast current state to all WS clients
 # ─────────────────────────────────────────────────────────────────────────────
-OFFLINE_TIMEOUT = timedelta(seconds=30)
+OFFLINE_TIMEOUT = timedelta(seconds=90)
 
 def _is_stale(updated_at_str: str | None) -> bool:
     """updated_at 타임스탬프가 30초 이상 지났으면 True"""
