@@ -348,6 +348,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('abyss')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-900/60 hover:bg-blue-700 text-blue-300 transition-colors">어비스</button>
   <button onclick="selCmd('mission')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-900/60 hover:bg-teal-700 text-teal-300 transition-colors">사명</button>
   <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
+  <button onclick="selCmd('subquest')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-lime-900/60 hover:bg-lime-700 text-lime-300 transition-colors">서브퀘</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
@@ -532,6 +533,8 @@ const STATUS_CFG = {
   captcha:      {label:'캡차',      bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
   dead:         {label:'사망',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
   idle:         {label:'대기',      bg:'bg-gray-700/20',   border:'border-gray-600',   badge:'bg-gray-500',   text:'text-gray-400',   online:true},
+  subquest:     {label:'서브퀘',   bg:'bg-lime-500/20',   border:'border-lime-700',   badge:'bg-lime-500',   text:'text-lime-400',   online:true},
+  collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
   offline:      {label:'오프라인',  bg:'bg-gray-900/40',   border:'border-gray-800',   badge:'bg-gray-700',   text:'text-gray-600',   online:false},
 };
