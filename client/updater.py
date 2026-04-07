@@ -185,6 +185,33 @@ def _set_state(state: str):
     log(f"[상태] macro_state → {state}")
 
 
+def _focus_game_window():
+    """크롬 게임 창을 최상위로 올리기"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        EnumWindows = user32.EnumWindows
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+        GetWindowTextW = user32.GetWindowTextW
+        SetForegroundWindow = user32.SetForegroundWindow
+        ShowWindow = user32.ShowWindow
+
+        def callback(hwnd, lParam):
+            title = ctypes.create_unicode_buffer(256)
+            GetWindowTextW(hwnd, title, 256)
+            t = title.value.lower()
+            if 'purple' in t or 'aion' in t or 'purpleon' in t:
+                ShowWindow(hwnd, 9)  # SW_RESTORE
+                SetForegroundWindow(hwnd)
+                log(f"[포커스] 게임 창 활성화: {title.value}")
+                return False  # 찾았으면 중단
+            return True
+
+        EnumWindows(WNDENUMPROC(callback), 0)
+    except Exception as e:
+        log(f"[포커스] 게임 창 활성화 실패 (무시): {e}")
+
+
 def start_macro() -> bool:
     global macro_proc
     with _state_lock:
@@ -204,6 +231,9 @@ def start_macro() -> bool:
             macro_proc = proc
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
+        # 게임 창 포커스 (매크로 콘솔 뒤로)
+        time.sleep(2.0)
+        _focus_game_window()
         return True
     except Exception as e:
         err(f"[매크로] 시작 실패: {e}")
