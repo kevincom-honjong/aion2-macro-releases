@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.4.0"
+UPDATER_VERSION  = "2.5.0"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -264,36 +264,34 @@ def self_update(updater_info: dict):
         err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
         return
 
+    my_pid = os.getpid()
     bat_path = os.path.join(os.path.dirname(current_exe), "_selfupdate.bat")
+    # taskkill PID → _MEI 정리 → 5회 move 재시도 → start
     bat = (
-        "@echo off\r\n"
-        "chcp 65001 > nul\r\n"
-        "timeout /t 3 /nobreak > nul\r\n"
+        f'@echo off\r\n'
+        f'taskkill /F /PID {my_pid} >nul 2>&1\r\n'
+        f'timeout /t 3 /nobreak > nul\r\n'
         f'for /d %%i in ("%TEMP%\\_MEI*") do rmdir /s /q "%%i" 2>nul\r\n'
-        f'move /y "{new_exe_tmp}" "{current_exe}"\r\n'
+        f':retry\r\n'
+        f'move /y "{new_exe_tmp}" "{current_exe}" >nul 2>&1\r\n'
         f'if errorlevel 1 (\r\n'
-        f'  timeout /t 3 /nobreak > nul\r\n'
-        f'  move /y "{new_exe_tmp}" "{current_exe}"\r\n'
+        f'  timeout /t 2 /nobreak > nul\r\n'
+        f'  goto retry\r\n'
         f')\r\n'
         f'start "" "{current_exe}"\r\n'
-        'del "%~f0"\r\n'
+        f'del "%~f0"\r\n'
     )
     try:
-        with open(bat_path, 'w', encoding='utf-8') as f:
+        with open(bat_path, 'w') as f:
             f.write(bat)
-        subprocess.Popen(
-            ['cmd.exe', '/c', bat_path],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
-        log(f"[자가업데이트] 교체 스크립트 실행 → 3초 후 재시작됩니다.")
+        subprocess.Popen(bat_path, shell=True)
+        log(f"[자가업데이트] PID {my_pid} kill + 교체 스크립트 실행")
         time.sleep(1)
         sys.exit(0)
     except Exception as e:
-        err(f"[자가업데이트] 배치 실행 실패: {e}")
-        try:
-            os.remove(new_exe_tmp)
-        except Exception:
-            pass
+        err(f"[자가업데이트] bat 실행 실패: {e}")
+        try: os.remove(new_exe_tmp)
+        except: pass
 
 
 def check_and_update() -> bool:
