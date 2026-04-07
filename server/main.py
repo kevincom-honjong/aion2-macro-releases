@@ -547,7 +547,7 @@ function buildCard(pc) {
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
   return `<div id="card-${pc.pc_id}"
-    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer"
+    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer" style="max-width:280px"
     onclick="openCardMenu('${pc.pc_id}',event)">
     <div class="flex items-start justify-between mb-2">
       <div class="flex items-center gap-2 min-w-0">
