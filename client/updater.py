@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.3.0"
+UPDATER_VERSION  = "2.4.0"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -216,29 +216,31 @@ def stop_macro():
     with _state_lock:
         proc = macro_proc
         macro_proc = None
-    if proc is None:
-        # proc 참조 없어도 프로세스명으로 강제 kill
+    if proc is not None and proc.poll() is None:
+        pid = proc.pid
+        log(f"[매크로] PID {pid} 종료 시도")
         try:
-            subprocess.run(['taskkill', '/F', '/IM', os.path.basename(MACRO_EXE)],
+            subprocess.run(['taskkill', '/F', '/PID', str(pid)],
                            capture_output=True, timeout=10)
-            log("[매크로] taskkill 강제 종료")
-        except Exception:
-            pass
-        _set_state("stopped")
-        return
-    if proc.poll() is not None:
-        _set_state("stopped")
-        return
+            proc.wait(timeout=5)
+            log(f"[매크로] PID {pid} 종료 완료")
+        except Exception as e:
+            err(f"[매크로] PID {pid} 종료 실패: {e}")
+    # 혹시 남아있는 프로세스도 PID로 찾아서 kill
     try:
-        proc.kill()
-        proc.wait(timeout=5)
-        log("[매크로] kill 정지 완료")
-    except Exception as e:
-        err(f"[매크로] kill 실패 → taskkill 시도: {e}")
+        import psutil
+        for p in psutil.process_iter(['pid', 'exe']):
+            try:
+                if p.info['exe'] and os.path.basename(p.info['exe']) == os.path.basename(MACRO_EXE):
+                    log(f"[매크로] 잔여 프로세스 PID {p.pid} 강제 종료")
+                    p.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except ImportError:
+        # psutil 없으면 taskkill /F /IM 시도 (한글 인코딩 문제 가능)
         try:
             subprocess.run(['taskkill', '/F', '/IM', os.path.basename(MACRO_EXE)],
                            capture_output=True, timeout=10)
-            log("[매크로] taskkill 강제 종료")
         except Exception:
             pass
     _set_state("stopped")
@@ -262,27 +264,26 @@ def self_update(updater_info: dict):
         err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
         return
 
-    bat_path = current_exe + "_selfupdate.bat"
-    # PyInstaller --onefile 임시폴더 정리 후 재시작
+    bat_path = os.path.join(os.path.dirname(current_exe), "_selfupdate.bat")
     bat = (
         "@echo off\r\n"
+        "chcp 65001 > nul\r\n"
         "timeout /t 3 /nobreak > nul\r\n"
-        # 이전 프로세스의 _MEI 임시폴더 정리
         f'for /d %%i in ("%TEMP%\\_MEI*") do rmdir /s /q "%%i" 2>nul\r\n'
         f'move /y "{new_exe_tmp}" "{current_exe}"\r\n'
         f'if errorlevel 1 (\r\n'
-        f'  timeout /t 2 /nobreak > nul\r\n'
+        f'  timeout /t 3 /nobreak > nul\r\n'
         f'  move /y "{new_exe_tmp}" "{current_exe}"\r\n'
         f')\r\n'
         f'start "" "{current_exe}"\r\n'
         'del "%~f0"\r\n'
     )
     try:
-        with open(bat_path, 'w', encoding='ascii') as f:
+        with open(bat_path, 'w', encoding='utf-8') as f:
             f.write(bat)
         subprocess.Popen(
             ['cmd.exe', '/c', bat_path],
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
         log(f"[자가업데이트] 교체 스크립트 실행 → 3초 후 재시작됩니다.")
         time.sleep(1)
