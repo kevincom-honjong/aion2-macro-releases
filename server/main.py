@@ -332,20 +332,20 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <!-- 요약 바 -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-green-400" id="cnt-hunting">0</div>
-      <div class="text-xs text-gray-500 mt-1">사냥 중</div>
-    </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-blue-400" id="cnt-selling">0</div>
-      <div class="text-xs text-gray-500 mt-1">판매 중</div>
-    </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-red-400" id="cnt-error">0</div>
-      <div class="text-xs text-gray-500 mt-1">에러</div>
+      <div class="text-2xl font-bold text-green-400" id="cnt-online">0</div>
+      <div class="text-sm text-gray-400 mt-1">온라인</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-gray-400" id="cnt-offline">0</div>
-      <div class="text-xs text-gray-500 mt-1">오프라인</div>
+      <div class="text-sm text-gray-400 mt-1">오프라인</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+      <div class="text-2xl font-bold text-yellow-400" id="cnt-hunting">0</div>
+      <div class="text-sm text-gray-400 mt-1">사냥 중</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+      <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
+      <div class="text-sm text-gray-400 mt-1">완료</div>
     </div>
   </div>
 
@@ -675,18 +675,20 @@ function renderCards() {
 }
 
 function refreshSummary(pcs) {
-  const c={hunting:0,selling:0,error:0,offline:0};
+  const c={online:0,offline:0,hunting:0,completed:0};
   pcs.forEach(p=>{
     const s=p.status||'offline';
+    const isOnline = (STATUS_CFG[s]||STATUS_CFG.offline).online;
+    if(isOnline) c.online++; else c.offline++;
     if(s==='hunting'||s==='moving') c.hunting++;
-    else if(s==='selling') c.selling++;
-    else if(s==='error'||s==='dead'||s==='captcha'||s==='reconnecting') c.error++;
-    else if(!(STATUS_CFG[s]||STATUS_CFG.offline).online) c.offline++;
+    // 오늘 완료 체크: daily_progress 전부 completed
+    const dp = p.daily_progress||[];
+    if(dp.length>0 && dp.every(d=>d.completed)) c.completed++;
   });
-  document.getElementById('cnt-hunting').textContent=c.hunting;
-  document.getElementById('cnt-selling').textContent=c.selling;
-  document.getElementById('cnt-error').textContent=c.error;
+  document.getElementById('cnt-online').textContent=c.online;
   document.getElementById('cnt-offline').textContent=c.offline;
+  document.getElementById('cnt-hunting').textContent=c.hunting;
+  document.getElementById('cnt-completed').textContent=c.completed;
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
