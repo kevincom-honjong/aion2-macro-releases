@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.5.0"
+UPDATER_VERSION  = "2.6.0"
 
 UPDATE_SERVER    = "https://aion2-macro-releases-production.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -250,47 +250,36 @@ def stop_macro():
 # 업데이트 로직
 # ==================================================
 def self_update(updater_info: dict):
-    """새 updater.exe 다운 후 bat 스크립트로 자신을 교체하고 재실행."""
+    """새 updater를 다른 파일명으로 다운 → 실행 → 자신 종료.
+    새 버전이 시작 시 이전 버전 파일 자동 삭제."""
     new_ver = updater_info["version"]
     url     = updater_info["download_url"]
     sha256  = updater_info.get("sha256")
     log(f"[자가업데이트] updater {UPDATER_VERSION} → {new_ver} 다운로드 중...")
 
     current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
-    new_exe_tmp = current_exe + ".new"
+    exe_dir = os.path.dirname(current_exe)
+    new_exe = os.path.join(exe_dir, f"updater_v{new_ver}.exe")
 
-    ok = download_file(url, new_exe_tmp, sha256)
+    ok = download_file(url, new_exe, sha256)
     if not ok:
         err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
         return
 
-    my_pid = os.getpid()
-    bat_path = os.path.join(os.path.dirname(current_exe), "_selfupdate.bat")
-    # taskkill PID → _MEI 정리 → 5회 move 재시도 → start
-    bat = (
-        f'@echo off\r\n'
-        f'taskkill /F /PID {my_pid} >nul 2>&1\r\n'
-        f'timeout /t 3 /nobreak > nul\r\n'
-        f'for /d %%i in ("%TEMP%\\_MEI*") do rmdir /s /q "%%i" 2>nul\r\n'
-        f':retry\r\n'
-        f'move /y "{new_exe_tmp}" "{current_exe}" >nul 2>&1\r\n'
-        f'if errorlevel 1 (\r\n'
-        f'  timeout /t 2 /nobreak > nul\r\n'
-        f'  goto retry\r\n'
-        f')\r\n'
-        f'start "" "{current_exe}"\r\n'
-        f'del "%~f0"\r\n'
-    )
     try:
-        with open(bat_path, 'w') as f:
-            f.write(bat)
-        subprocess.Popen(bat_path, shell=True)
-        log(f"[자가업데이트] PID {my_pid} kill + 교체 스크립트 실행")
+        # 새 버전 실행
+        log(f"[자가업데이트] 새 버전 실행: {new_exe}")
+        subprocess.Popen(
+            [new_exe],
+            cwd=exe_dir,
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        log(f"[자가업데이트] 새 버전 시작 완료 → 자신 종료")
         time.sleep(1)
-        sys.exit(0)
+        os._exit(0)
     except Exception as e:
-        err(f"[자가업데이트] bat 실행 실패: {e}")
-        try: os.remove(new_exe_tmp)
+        err(f"[자가업데이트] 새 버전 실행 실패: {e}")
+        try: os.remove(new_exe)
         except: pass
 
 
@@ -664,9 +653,25 @@ def _upload_bugs():
 # ==================================================
 # 진입점
 # ==================================================
+def _cleanup_old_updaters():
+    """이전 버전 updater_v*.exe 파일 삭제 (자기 자신 제외)"""
+    current = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
+    exe_dir = os.path.dirname(current)
+    current_name = os.path.basename(current).lower()
+    for fname in os.listdir(exe_dir):
+        if fname.lower().startswith("updater") and fname.lower().endswith(".exe") and fname.lower() != current_name:
+            fpath = os.path.join(exe_dir, fname)
+            try:
+                os.remove(fpath)
+                log(f"[정리] 이전 버전 삭제: {fname}")
+            except Exception:
+                pass  # 실행 중이면 삭제 안 됨 — 다음에 시도
+
+
 def main():
     log("=" * 60)
     log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
+    _cleanup_old_updaters()
     load_pc_id()
     log(f"[업데이터] PC: {pc_id}")
 
