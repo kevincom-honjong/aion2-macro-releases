@@ -165,11 +165,14 @@ async def _build_full_state() -> list[dict]:
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
             ci = await get_char_info(pid)
-            if ci and ci.get("chars"):
-                pc["chars"] = [
-                    c.get("name") or c.get("char_name") or ""
-                    for c in ci["chars"]
-                ]
+            if ci:
+                if ci.get("chars"):
+                    pc["chars"] = [
+                        c.get("name") or c.get("char_name") or ""
+                        for c in ci["chars"]
+                    ]
+                if ci.get("total_kina"):
+                    pc["_total_kina"] = ci["total_kina"]
 
     for pid, u in updater_map.items():
         if pid not in seen:
@@ -483,7 +486,7 @@ function relTime(iso) {
 }
 
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
-function buildDailyProgress(dp, activeSlot, charNames) {
+function buildDailyProgress(dp, activeSlot, charNames, pc) {
   if (!dp || !dp.length) return '';
   const completed = dp.filter(c=>c.completed).length;
   const total = dp.length;
@@ -508,8 +511,8 @@ function buildDailyProgress(dp, activeSlot, charNames) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료</span>
-      <span class="${completed===total?'text-green-500':'text-gray-500'}" style="font-size:10px">${completed}/${total}</span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span></span>
+      ${pc._total_kina?`<span class="text-yellow-400 font-medium" style="font-size:10px">총 키나: ₭${Number(pc._total_kina).toLocaleString('en-US')}</span>`:''}
     </div>
     <div class="flex gap-1">${slots}</div>
   </div>`;
@@ -549,26 +552,26 @@ function buildCard(pc) {
           ${selectedPcs.has(pc.pc_id)?'checked':''}
           onclick="event.stopPropagation();toggleSelect('${pc.pc_id}',event)">
         <div class="min-w-0">
-          <div class="font-bold text-sm flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
-          ${pc.chars&&pc.chars.length?`<div class="text-xs text-gray-400 truncate">${pc.chars.join(' · ')}</div>`:''}
+          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
+          ${pc.chars&&pc.chars.length?`<div class="text-sm text-gray-400 truncate">${pc.chars.join(' · ')}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
-        <span class="inline-flex items-center gap-1.5 text-sm font-bold ${cfg.text}">
-          <span class="w-2.5 h-2.5 rounded-full ${cfg.badge}${pulse}"></span>
+        <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text}">
+          <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse}"></span>
           ${cfg.label}
         </span>
       </div>
     </div>
-    <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs mt-2">
+    <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? pc.hunt_progress.toFixed(1)+' %' : '–'}</span></div>
       <div><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+' % / h' : '–'}</span></div>
       <div><span class="text-gray-400">맵</span> <span class="text-white font-medium">${pc.map_name||'–'}</span></div>
       <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
     </div>
-    <div class="mt-2 text-xs text-gray-400">최근: ${relTime(pc.last_active)}</div>
+    <div class="mt-2 text-sm text-gray-400">최근: ${relTime(pc.last_active)}</div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
-    ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars)}
+    ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
   </div>`;
 }
