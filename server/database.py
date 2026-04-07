@@ -309,7 +309,7 @@ async def ack_updater_command(cmd_id: int) -> bool:
 
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 
-async def get_logs(pc_id: str, limit: int = 200) -> list[dict]:
+async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
