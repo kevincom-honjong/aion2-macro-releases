@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.79",
+    "version": "1.1.80",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "970e09b76f09f72476d39dcf670761ff5df85aaa2249dc78d1f3e15ed623c190",
+    "sha256": "914102f321308c275dd6d1c8f30702011bb5ab5f9047b9376c5e39302ea8ae03",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -40,6 +40,9 @@
     "cube5.png": "ba5104e4008e7618f7781b7259929093795761e1faa3deaa25cfe724db147e09",
     "daily_title.png": "5facfbccc25ed66ccec0969bd065d5b6758b122e84d563b9d891f48897ba4bbd",
     "death.png": "f2f95710616cb6481258a3c671d2e2685f42135db26c662651b44790a80b143a",
+    "dungeon_enter.png": "be1ff58511180b9951e2d2d35801f8bcf084881b74fb3ad516b62e22f80c08ef",
+    "dungeon_exit.png": "737fdb6b736046a80b3a70a2b3875f2d0955ac2e5039312ae8896f0b4fd3422e",
+    "dungeon_retry.png": "17e91aa9cf3aec24b1501c4862f843665da614a34846daf5286cfdd262a59f68",
     "easy_store_btn.png": "b623171ee401b8b2b95bb2ca705a027e452e91b6deda0288d1673f592d918181",
     "error.png": "8a727f1dad5345ac2af634d89610eefc570de9f56ecda07b63e65925b8b942dd",
     "expedition_title.png": "2917451d68c3929a716a2582379626caf38e01734d125c88a5f0ea322a172134",
@@ -74,6 +77,7 @@
     "new.png": "78a8f30bddf7ddd24ddb56adfb567983b89bff9e4b6e6b50a5cd130d5c8621a4",
     "nightmare_title.png": "80232ae913c6e50ebe49af23adacb8820e2f013d9b4d989e6a74d1de28a7ee10",
     "none.png": "cf59268cb9d4f3c2186f632b8502b0e5ebdba9d908b14fc756fcbc623fea1cb8",
+    "odium_btn.png": "be1a2c02d8a88cebb6def11099bdeeca18830e4359fc63f7df39cec603152d19",
     "password.png": "32d97c260031eedb2ceb5df408eb46d75e831a013d279573d21f263aff14c6d6",
     "pin.png": "376d573449fe690331fb1fa67bad16d9dc999c39b6177ac0a36382a0eed93909",
     "power_icon.png": "3d175c5dd3a429235808b942548747adefa2463d978a80fdb5873b0b469825ab",
@@ -130,7 +134,7 @@
     "sha256": "9120965e65924cf83afcce214a6ae10f879f81dd4caf81833f4ca40aad4506b9",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260407080718",
-  "updated_at": "2026-04-08T11:15:46",
+  "images_version": "20260408114605",
+  "updated_at": "2026-04-08T11:46:05",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
