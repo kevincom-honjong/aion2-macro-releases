@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.0"
+UPDATER_VERSION  = "3.0.1"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -276,15 +276,27 @@ def start_macro() -> bool:
             macro_proc = proc
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
-        # 게임 화면 클릭으로 활성화
+        # 콘솔 최소화 → 게임 화면 클릭
         time.sleep(2.0)
         try:
             import ctypes
-            ctypes.windll.user32.SetCursorPos(640, 360)
-            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # left down
+            user32 = ctypes.windll.user32
+            # 현재 포그라운드 윈도우(매크로 콘솔) 최소화
+            hwnd = user32.GetForegroundWindow()
+            if hwnd:
+                user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            time.sleep(0.5)
+            # updater 콘솔도 최소화
+            hwnd2 = user32.GetForegroundWindow()
+            if hwnd2:
+                user32.ShowWindow(hwnd2, 6)
+            time.sleep(0.5)
+            # 이제 게임 화면이 보임 → 클릭
+            user32.SetCursorPos(640, 360)
+            user32.mouse_event(0x0002, 0, 0, 0, 0)
             time.sleep(0.05)
-            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # left up
-            log("[매크로] 게임 화면 클릭 (640,360) 활성화")
+            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            log("[매크로] 콘솔 최소화 → 게임 클릭 (640,360)")
         except Exception:
             pass
         return True
