@@ -26,7 +26,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "2.9.0"
+UPDATER_VERSION  = "3.0.0"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -276,10 +276,17 @@ def start_macro() -> bool:
             macro_proc = proc
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
-        # 매크로 콘솔 + updater 콘솔 최소화 → 게임 창이 자동으로 앞으로
+        # 게임 화면 클릭으로 활성화
         time.sleep(2.0)
-        _minimize_consoles()
-        _focus_game_window()
+        try:
+            import ctypes
+            ctypes.windll.user32.SetCursorPos(640, 360)
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # left down
+            time.sleep(0.05)
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # left up
+            log("[매크로] 게임 화면 클릭 (640,360) 활성화")
+        except Exception:
+            pass
         return True
     except Exception as e:
         err(f"[매크로] 시작 실패: {e}")
