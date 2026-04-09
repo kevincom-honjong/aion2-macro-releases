@@ -349,6 +349,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('mission')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-900/60 hover:bg-teal-700 text-teal-300 transition-colors">사명</button>
   <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
   <button onclick="selCmd('subquest')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-lime-900/60 hover:bg-lime-700 text-lime-300 transition-colors">서브퀘</button>
+  <button onclick="selCmd('sealed_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-900/60 hover:bg-rose-700 text-rose-300 transition-colors">봉인던전</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
