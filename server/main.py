@@ -350,6 +350,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
   <button onclick="selCmd('subquest')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-lime-900/60 hover:bg-lime-700 text-lime-300 transition-colors">서브퀘</button>
   <button onclick="selCmd('sealed_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-900/60 hover:bg-rose-700 text-rose-300 transition-colors">봉인던전</button>
+  <button onclick="selCmd('collect_info')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-900/60 hover:bg-sky-700 text-sky-300 transition-colors">정보수집</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
@@ -422,6 +423,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('daily_ticket')">일일던전 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('nightmare_ticket')">악몽 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('awakening_ticket')">각성 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('sanctuary')">성역 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('mail_count')">우편 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('extract_level')">정기추출 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">총 키나 ⇅</th>
             </tr>
           </thead>
@@ -1153,6 +1157,9 @@ function renderCharTable() {
     const daily = r.daily_ticket != null ? r.daily_ticket : '–';
     const nm = r.nightmare_ticket != null ? r.nightmare_ticket : '–';
     const aw = r.awakening_ticket != null ? r.awakening_ticket : '–';
+    const sanc = r.sanctuary || '–';
+    const mail = r.mail_count != null ? r.mail_count : '–';
+    const ext = r.extract_level || '–';
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 font-medium text-gray-200">${r.pc_id||'–'}</td>
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
@@ -1163,6 +1170,9 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-center">${daily}</td>
       <td class="px-3 py-1.5 text-center">${nm}</td>
       <td class="px-3 py-1.5 text-center">${aw}</td>
+      <td class="px-3 py-1.5">${sanc}</td>
+      <td class="px-3 py-1.5 text-center">${mail}</td>
+      <td class="px-3 py-1.5">${ext}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
     </tr>`;
   }).join('');
@@ -1195,10 +1205,11 @@ function renderInfoContent(info) {
     nightmare_ticket: '악몽 도전횟수',
     awakening_ticket: '각성전 도전횟수',
     daily_ticket:     '일일던전 티켓',
+    sanctuary:        '성역',
+    mail_count:       '우편',
+    extract_level:    '정기추출',
   };
-  // odd_energy는 "195(+1,985)/840" 형식 문자열 → fmtNum 제외
-  const RAW_FIELDS   = new Set(['odd_energy']);
-  // power_power만 "2.4 K" 형식 표기 (gear_power는 일반 숫자)
+  const RAW_FIELDS   = new Set(['odd_energy', 'sanctuary', 'extract_level']);
   const POWER_FIELDS = new Set(['power_power']);
   const charsHtml = (info.chars||[]).map((c,i) => {
     const rows = Object.entries(LABELS).map(([k,lbl]) => {
@@ -1734,6 +1745,9 @@ async def get_all_characters(request: Request):
                 "daily_ticket": ch.get("daily_ticket", 0),
                 "nightmare_ticket": ch.get("nightmare_ticket", 0),
                 "awakening_ticket": ch.get("awakening_ticket", 0),
+                "sanctuary": ch.get("sanctuary", ""),
+                "mail_count": ch.get("mail_count", 0),
+                "extract_level": ch.get("extract_level", ""),
                 "total_kina": total_kina,
                 "collected_at": collected_at,
             })
