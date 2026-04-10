@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.113",
+    "version": "1.1.114",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "fe87221723b9e559b1ac8028bc15801067062bcee6e4a01b70a0094c7c31da62",
+    "sha256": "69288c9930cb6b8584407f33b289315526800479aa927b15f498bb1b5b8acec4",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -39,6 +39,7 @@
     "cube4.png": "da432aaa9df1e6009bc590c0bc98f17eec2953c0eef44bfb5b9fa9b52e686a1e",
     "cube5.png": "ba5104e4008e7618f7781b7259929093795761e1faa3deaa25cfe724db147e09",
     "daily_title.png": "5facfbccc25ed66ccec0969bd065d5b6758b122e84d563b9d891f48897ba4bbd",
+    "dead_map_title.png": "e0b8d82a0caf1762448e06331b325d1132d4e977eeca77dc4c73428ae2eb8537",
     "death.png": "f2f95710616cb6481258a3c671d2e2685f42135db26c662651b44790a80b143a",
     "dungeon_enter.png": "be1ff58511180b9951e2d2d35801f8bcf084881b74fb3ad516b62e22f80c08ef",
     "dungeon_exit.png": "737fdb6b736046a80b3a70a2b3875f2d0955ac2e5039312ae8896f0b4fd3422e",
@@ -50,6 +51,7 @@
     "files.zip": "c1dc2db899567caa2cb87b132b938d080f9fe3b70ef67390f2d3840681eb8585",
     "finish.png": "73d1eaf552a6a9d3256942a1623fafe0b3237905e8941a0b0ee0e03e23b031c3",
     "finish2.png": "7d06478618b1af700291f79e75267b3df03fb50ca376d93d9cebaa7668b43c94",
+    "fire_map_title.png": "a2edaad879bfecdb6728e695eb92769ba78fd42a7e1b6e4e104d9f9fa2f63ee1",
     "fly.png": "5eeb03533455316737b6711e27673b04eae9f914f03e9826c9a97dc5b7f8c5d4",
     "fly_cancel.png": "3341198c6765224e0a9d35b1cd7f5668f69cd1066b3ea7924a01e97c01adb4c6",
     "focused_check.png": "ff84dd6260baceffbba8e0db1687bb41d2a295a5349ef13fed84dd0f11f6b362",
@@ -76,6 +78,7 @@
     "mania_new.png": "89d233edcf4ada060121db0b981cade04d3d5d5adc21ecd6b49c098723d64916",
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
     "mode.png": "fb69263c7f2548f66e10ce06383555be1a10fc4268b8a0aae6e98eee774193c8",
+    "muui_map_title.png": "6079b7d05e5f55e9e01c8e95b860980aab3b8370a489d55721081547a0cc3916",
     "new.png": "78a8f30bddf7ddd24ddb56adfb567983b89bff9e4b6e6b50a5cd130d5c8621a4",
     "nightmare_title.png": "80232ae913c6e50ebe49af23adacb8820e2f013d9b4d989e6a74d1de28a7ee10",
     "none.png": "cf59268cb9d4f3c2186f632b8502b0e5ebdba9d908b14fc756fcbc623fea1cb8",
@@ -138,7 +141,7 @@
     "sha256": "4d150adb34318a0fde4f656b1b241f1011809ab9c6926c16adfcffc0201c5d26",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260410065603",
-  "updated_at": "2026-04-10T06:56:03",
+  "images_version": "20260410084609",
+  "updated_at": "2026-04-10T08:46:09",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
