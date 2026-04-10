@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.112",
+    "version": "1.1.113",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "656a3a89cd7c4c2fda8b4f815757cdfd42f3a3d77ea8eb94a3ef083f32c2ad36",
+    "sha256": "fe87221723b9e559b1ac8028bc15801067062bcee6e4a01b70a0094c7c31da62",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -101,7 +101,7 @@
     "stream1.png": "1f5faae4b952fb1da07e740b22a165364da3f77c2cdd67d7e14fa8b22e3e1c7c",
     "stream2.png": "ae15f492c1b007f0b796523dff82a5bcf28a82fa819991b853cfd5d79f109c10",
     "summon.png": "cd02a70530701c217870d5c9b6a2250f5e0accb5b89513cd910a0d891f8f0bea",
-    "temple_btn_on.png": "b4190bc470c08bd00d33455659b4be5fff41b27536f5181f7d4b518ed39f014a",
+    "temple_btn_on.png": "9542226557cb35fa9c634157d548d6befb343522d9669fc73b5dc081b0dfca27",
     "temple_map_title.png": "3bdce0460235164bf69aa3c8e2ca4ef3b3036d55f02f2eae65d067264480fe57",
     "timeout_popup.png": "77215987b292b9fc8fe268c6c2b76f4ba6ff37976c8e383d9da96d9e79571189",
     "title_screen.png": "9c8a4f7d2c81647b688e320be67a57e5c8f20a0c912c48818bc36763c7a56d10",
@@ -138,7 +138,7 @@
     "sha256": "4d150adb34318a0fde4f656b1b241f1011809ab9c6926c16adfcffc0201c5d26",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260410064814",
-  "updated_at": "2026-04-10T06:48:14",
+  "images_version": "20260410065603",
+  "updated_at": "2026-04-10T06:56:03",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
