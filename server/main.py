@@ -1188,7 +1188,7 @@ function renderCharTable() {
     const nmFull = r.nightmare_ticket >= 14;
     const awFull = r.awakening_ticket >= 3;
     const sancNum = sanc !== '–' ? parseInt(sanc) : 0;
-    const sancFull = sancNum >= 2;
+    const sancFull = r.gear_power >= 2700 && sancNum >= 2;
     const extFull = ext.includes('입문') && ext.includes('50');
     const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
 
