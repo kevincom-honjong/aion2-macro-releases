@@ -73,6 +73,16 @@ async def init_db() -> None:
                 collected_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS nightmare_progress (
+                pc_id      TEXT NOT NULL,
+                slot       INTEGER NOT NULL,
+                tab        TEXT DEFAULT '몽충I',
+                bosses     TEXT DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (pc_id, slot)
+            )
+        """)
         await db.commit()
 
 
@@ -373,3 +383,61 @@ async def get_char_info(pc_id: str) -> dict | None:
         "chars": chars,
         "collected_at": row["collected_at"],
     }
+
+
+# ── 악몽 진행 상태 ──────────────────────────────────────────────────────────
+
+async def upsert_nightmare_progress(pc_id: str, slot: int, tab: str, bosses: dict) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO nightmare_progress(pc_id, slot, tab, bosses, updated_at) VALUES(?,?,?,?,?)",
+            (pc_id, slot, tab, json.dumps(bosses, ensure_ascii=False), _now()),
+        )
+        await db.commit()
+
+
+async def get_nightmare_progress(pc_id: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress WHERE pc_id=? ORDER BY slot",
+            (pc_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        try:
+            bosses = json.loads(row["bosses"])
+        except Exception:
+            bosses = {}
+        result.append({
+            "pc_id": row["pc_id"],
+            "slot": row["slot"],
+            "tab": row["tab"],
+            "bosses": bosses,
+            "updated_at": row["updated_at"],
+        })
+    return result
+
+
+async def get_all_nightmare_progress() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress ORDER BY pc_id, slot"
+        ) as cur:
+            rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        try:
+            bosses = json.loads(row["bosses"])
+        except Exception:
+            bosses = {}
+        result.append({
+            "pc_id": row["pc_id"],
+            "slot": row["slot"],
+            "tab": row["tab"],
+            "bosses": bosses,
+            "updated_at": row["updated_at"],
+        })
+    return result

@@ -1,0 +1,15 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/login"
+healthcheckTimeout = 10
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# 환경변수 설정 (Railway 대시보드에서 설정 권장)
+# DASHBOARD_PASSWORD = "your_password_here"
+# API_KEY            = "your_macro_api_key_here"
+# DB_PATH            = "/data/aion2_control.db"   ← Railway Volume 연결 시
+# BUGS_DIR           = "/data/bugs"               ← Railway Volume 연결 시 (버그 스크린샷)

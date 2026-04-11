@@ -25,6 +25,7 @@ from database import (
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     upsert_char_info, get_char_info, get_all_char_info,
+    upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -34,7 +35,9 @@ DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 API_KEY            = os.getenv("API_KEY", "macro_key_change_me")
 SESSION_TTL        = timedelta(days=7)
 BUGS_DIR           = os.getenv("BUGS_DIR", "/data/bugs")
+SCREENSHOTS_DIR    = os.getenv("SCREENSHOTS_DIR", "/data/screenshots")
 os.makedirs(BUGS_DIR, exist_ok=True)
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session store
@@ -426,6 +429,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('sanctuary')">성역 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('mail_count')">우편 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('extract_level')">정기추출 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('chowol_ticket')">초월 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('wonjeong_ticket')">원정 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center">아르카나</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center">장비</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gakin_kina')">각인키나 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">총 키나 ⇅</th>
             </tr>
           </thead>
@@ -1155,11 +1163,18 @@ function renderCharTable() {
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
     const daily = r.daily_ticket != null ? r.daily_ticket : '–';
-    const nm = r.nightmare_ticket != null ? r.nightmare_ticket : '–';
+    const nmTicket = r.nightmare_ticket != null ? r.nightmare_ticket : '–';
+    const nmProg = r.nightmare_progress || '';
+    const nm = nmProg ? `${nmTicket} <span class="text-pink-400 text-[10px]">${nmProg}</span>` : nmTicket;
     const aw = r.awakening_ticket != null ? r.awakening_ticket : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
     const ext = r.extract_level || '–';
+    const chowol = r.chowol_ticket != null ? r.chowol_ticket : '–';
+    const wonjeong = r.wonjeong_ticket != null ? r.wonjeong_ticket : '–';
+    const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
+    const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
+    const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 font-medium text-gray-200">${r.pc_id||'–'}</td>
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
@@ -1173,6 +1188,11 @@ function renderCharTable() {
       <td class="px-3 py-1.5">${sanc}</td>
       <td class="px-3 py-1.5 text-center">${mail}</td>
       <td class="px-3 py-1.5">${ext}</td>
+      <td class="px-3 py-1.5 text-center">${chowol}</td>
+      <td class="px-3 py-1.5 text-center">${wonjeong}</td>
+      <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
+      <td class="px-3 py-1.5 text-center">${equipLink}</td>
+      <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
     </tr>`;
   }).join('');
@@ -1185,6 +1205,19 @@ function sortCharTable(key) {
 }
 
 function filterCharTable() { renderCharTable(); }
+
+function showScreenshot(category, pcId, slot) {
+  const url = `/screenshot/${category}/${pcId}/${slot}?t=${Date.now()}`;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:pointer';
+  overlay.onclick = () => overlay.remove();
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'max-width:90vw;max-height:90vh;border:2px solid #555;border-radius:8px';
+  img.onerror = () => { overlay.remove(); alert('이미지 없음'); };
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
+}
 
 function renderInfoContent(info) {
   const el = document.getElementById('info-content');
@@ -1208,6 +1241,9 @@ function renderInfoContent(info) {
     sanctuary:        '성역',
     mail_count:       '우편',
     extract_level:    '정기추출',
+    chowol_ticket:    '초월 티켓',
+    wonjeong_ticket:  '원정 티켓',
+    gakin_kina:       '각인키나',
   };
   const RAW_FIELDS   = new Set(['odd_energy', 'sanctuary', 'extract_level']);
   const POWER_FIELDS = new Set(['power_power']);
@@ -1720,6 +1756,74 @@ async def query_char_info(pc_id: str, request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 악몽 진행 상태
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/nightmare/progress/{pc_id}")
+async def save_nightmare_progress(pc_id: str, request: Request):
+    """매크로가 악몽 진행 상태 전송"""
+    if not check_api_key(request):
+        raise HTTPException(status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    slot = data.get("slot", 1)
+    tab = data.get("tab", "몽충I")
+    bosses = data.get("bosses", {})
+    await upsert_nightmare_progress(pc_id, slot, tab, bosses)
+    await manager.broadcast({"type": "nightmare_progress", "pc_id": pc_id,
+                              "slot": slot, "tab": tab, "bosses": bosses})
+    return JSONResponse({"ok": True})
+
+
+@app.get("/nightmare/progress/{pc_id}")
+async def query_nightmare_progress(pc_id: str, request: Request):
+    """대시보드가 악몽 진행 상태 조회"""
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    progress = await get_nightmare_progress(pc_id)
+    return JSONResponse({"pc_id": pc_id, "slots": progress})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 스크린샷 업로드/조회 (아르카나, 장비 등)
+# ─────────────────────────────────────────────────────────────────────────────
+import base64 as _b64
+
+@app.post("/screenshot/{category}/{pc_id}/{slot}")
+async def upload_screenshot(category: str, pc_id: str, slot: int, request: Request):
+    """매크로가 스크린샷 업로드 (arcana, equip 등)"""
+    if not check_api_key(request):
+        raise HTTPException(status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400)
+    img_b64 = data.get("image", "")
+    if not img_b64:
+        raise HTTPException(status_code=400, detail="No image")
+    img_bytes = _b64.b64decode(img_b64)
+    cat_dir = os.path.join(SCREENSHOTS_DIR, category)
+    os.makedirs(cat_dir, exist_ok=True)
+    fpath = os.path.join(cat_dir, f"{pc_id}_s{slot}.png")
+    with open(fpath, "wb") as f:
+        f.write(img_bytes)
+    return JSONResponse({"ok": True, "path": f"/screenshot/{category}/{pc_id}/{slot}"})
+
+
+@app.get("/screenshot/{category}/{pc_id}/{slot}")
+async def get_screenshot(category: str, pc_id: str, slot: int, request: Request):
+    """대시보드가 스크린샷 조회"""
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    fpath = os.path.join(SCREENSHOTS_DIR, category, f"{pc_id}_s{slot}.png")
+    if not os.path.exists(fpath):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(fpath, media_type="image/png")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 전체 캐릭터 테이블 API
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1729,15 +1833,25 @@ async def get_all_characters(request: Request):
     if not check_session(request):
         raise HTTPException(status_code=401)
     all_info = await get_all_char_info()
+    # 악몽 진행 상태도 같이 조회
+    all_nm = await get_all_nightmare_progress()
+    nm_map = {}  # (pc_id, slot) → nightmare summary
+    for nm in all_nm:
+        bosses = nm.get("bosses", {})
+        cleared = sum(1 for b in bosses.values() if b.get("cleared"))
+        total = len(bosses) if bosses else 7
+        best_stage = max((b.get("stage", 0) for b in bosses.values()), default=0) if bosses else 0
+        nm_map[(nm["pc_id"], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
     rows = []
     for info in all_info:
         pc_id = info["pc_id"]
         total_kina = info.get("total_kina", 0)
         collected_at = info.get("collected_at", "")
         for ch in info.get("chars", []):
+            slot = ch.get("slot", 0)
             rows.append({
                 "pc_id": pc_id,
-                "slot": ch.get("slot", 0),
+                "slot": slot,
                 "name": ch.get("name", ""),
                 "gear_power": ch.get("gear_power", 0),
                 "power_power": ch.get("power_power", 0),
@@ -1748,8 +1862,14 @@ async def get_all_characters(request: Request):
                 "sanctuary": ch.get("sanctuary", ""),
                 "mail_count": ch.get("mail_count", 0),
                 "extract_level": ch.get("extract_level", ""),
+                "chowol_ticket": ch.get("chowol_ticket", 0),
+                "wonjeong_ticket": ch.get("wonjeong_ticket", 0),
+                "arcana_image": ch.get("arcana_image", False),
+                "equip_image": ch.get("equip_image", False),
+                "gakin_kina": ch.get("gakin_kina", 0),
                 "total_kina": total_kina,
                 "collected_at": collected_at,
+                "nightmare_progress": nm_map.get((pc_id, slot), ""),
             })
     return JSONResponse({"characters": rows})
 
@@ -1762,17 +1882,41 @@ import urllib.parse as _urlparse
 # GitHub raw URL 베이스
 _GH_RAW = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main"
 
+_version_cache = {"data": {}, "ts": 0}
+
 def _load_version_json() -> dict:
-    """version.json 로드 (GitHub Actions가 관리)"""
-    vpath = os.path.join(os.path.dirname(__file__), "version.json")
-    if not os.path.exists(vpath):
-        # Railway 배포 시 /app/version.json
-        vpath = "/app/version.json"
+    """version.json 로드 — GitHub raw에서 가져옴 (5분 캐시)"""
+    import time as _time
+    now = _time.time()
+    if _version_cache["data"] and now - _version_cache["ts"] < 300:
+        return _version_cache["data"]
+    # 1차: 로컬 파일
+    for vpath in [
+        os.path.join(os.path.dirname(__file__), "version.json"),
+        "/app/version.json",
+    ]:
+        try:
+            with open(vpath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data.get("exe", {}).get("version"):
+                    _version_cache["data"] = data
+                    _version_cache["ts"] = now
+                    return data
+        except Exception:
+            pass
+    # 2차: GitHub raw
     try:
-        with open(vpath, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        import requests as _req
+        r = _req.get("https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/server/version.json",
+                     timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            _version_cache["data"] = data
+            _version_cache["ts"] = now
+            return data
     except Exception:
-        return {}
+        pass
+    return _version_cache.get("data", {})
 
 @app.post("/check")
 async def updater_check(request: Request):
