@@ -406,6 +406,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <span id="char-table-count" class="text-gray-600 normal-case">(0)</span>
       </h2>
       <button onclick="loadCharTable()" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded">↻ 새로고침</button>
+      <button onclick="printCharTable()" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded ml-2">🖨 인쇄</button>
     </div>
     <div id="char-table-wrap" class="hidden">
       <div class="flex gap-2 mb-3">
@@ -1157,39 +1158,57 @@ function renderCharTable() {
   });
   const tbody = document.getElementById('char-tbody');
   tbody.innerHTML = rows.map((r, i) => {
-    const bg = i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50';
     const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
     const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
-    const daily = r.daily_ticket != null ? r.daily_ticket : '–';
-    const nmTicket = r.nightmare_ticket != null ? r.nightmare_ticket : '–';
+    const chowol = r.chowol_ticket || '–';
+    const wonjeong = r.wonjeong_ticket || '–';
+    const daily = r.daily_ticket != null ? `${r.daily_ticket}/14` : '–';
+    const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
     const nmProg = r.nightmare_progress || '';
     const nm = nmProg ? `${nmTicket} <span class="text-pink-400 text-[10px]">${nmProg}</span>` : nmTicket;
-    const aw = r.awakening_ticket != null ? r.awakening_ticket : '–';
+    const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/3` : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
     const ext = r.extract_level || '–';
-    const chowol = r.chowol_ticket || '–';
-    const wonjeong = r.wonjeong_ticket || '–';
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
     const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
+
+    // 빨간색 조건 체크
+    const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
+    const oddFirst = odd !== '–' ? parseInt(odd) : 0;
+    const oddFull = oddFirst >= 840;
+    const chowolNum = chowol !== '–' ? parseInt(chowol) : 0;
+    const chowolFull = chowolNum >= 7;
+    const wonjeongNum = wonjeong !== '–' ? parseInt(wonjeong) : 0;
+    const wonjeongFull = wonjeongNum >= 14;
+    const dailyFull = r.daily_ticket >= 14;
+    const nmFull = r.nightmare_ticket >= 14;
+    const awFull = r.awakening_ticket >= 3;
+    const sancNum = sanc !== '–' ? parseInt(sanc) : 0;
+    const sancFull = sancNum >= 2;
+    const extFull = ext.includes('입문') && ext.includes('50');
+    const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
+
+    const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
+
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 font-medium text-gray-200">${r.pc_id||'–'}</td>
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
       <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
       <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
-      <td class="px-3 py-1.5 text-yellow-400">${odd}</td>
-      <td class="px-3 py-1.5">${chowol}</td>
-      <td class="px-3 py-1.5">${wonjeong}</td>
-      <td class="px-3 py-1.5 text-center">${daily}</td>
-      <td class="px-3 py-1.5 text-center">${nm}</td>
-      <td class="px-3 py-1.5 text-center">${aw}</td>
-      <td class="px-3 py-1.5">${sanc}</td>
+      <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
+      <td class="px-3 py-1.5">${chowolFull?rc(chowol):chowol}</td>
+      <td class="px-3 py-1.5">${wonjeongFull?rc(wonjeong):wonjeong}</td>
+      <td class="px-3 py-1.5 text-center">${dailyFull?rc(daily):daily}</td>
+      <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):nm}</td>
+      <td class="px-3 py-1.5 text-center">${awFull?rc(aw):aw}</td>
+      <td class="px-3 py-1.5">${sancFull?rc(sanc):sanc}</td>
       <td class="px-3 py-1.5 text-center">${mail}</td>
-      <td class="px-3 py-1.5">${ext}</td>
+      <td class="px-3 py-1.5">${extFull?rc(ext):ext}</td>
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
       <td class="px-3 py-1.5 text-center">${equipLink}</td>
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
@@ -1205,6 +1224,33 @@ function sortCharTable(key) {
 }
 
 function filterCharTable() { renderCharTable(); }
+
+function printCharTable() {
+  const table = document.getElementById('char-table-wrap');
+  if (!table) return;
+  const win = window.open('', '_blank');
+  win.document.write(`<html><head><title>캐릭터 현황</title>
+<style>
+  body { font-family: sans-serif; font-size: 11px; margin: 10px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; white-space: nowrap; }
+  th { background: #333; color: #fff; font-size: 10px; }
+  tr.red-row { background: #ffe0e0 !important; }
+  .text-red-400 { color: #e53e3e; font-weight: bold; }
+  @media print { body { margin: 0; } }
+</style></head><body>`);
+  const clone = table.querySelector('table').cloneNode(true);
+  // 빨간 행 표시
+  clone.querySelectorAll('tr').forEach(tr => {
+    if (tr.innerHTML.includes('text-red-400')) tr.classList.add('red-row');
+  });
+  // 인쇄에서 링크 제거
+  clone.querySelectorAll('a').forEach(a => { a.replaceWith(a.textContent); });
+  win.document.write(clone.outerHTML);
+  win.document.write('</body></html>');
+  win.document.close();
+  win.print();
+}
 
 function showScreenshot(category, pcId, slot) {
   const url = `/screenshot/${category}/${pcId}/${slot}?t=${Date.now()}`;
