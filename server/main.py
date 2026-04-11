@@ -423,14 +423,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('power_power')">파워전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('odd_energy')">오드에너지 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('chowol_ticket')">초월 티켓 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('wonjeong_ticket')">원정 티켓 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('daily_ticket')">일일던전 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('nightmare_ticket')">악몽 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('awakening_ticket')">각성 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('sanctuary')">성역 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('mail_count')">우편 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('extract_level')">정기추출 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('chowol_ticket')">초월 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('wonjeong_ticket')">원정 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">아르카나</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">장비</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gakin_kina')">각인키나 ⇅</th>
@@ -1170,8 +1170,8 @@ function renderCharTable() {
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
     const ext = r.extract_level || '–';
-    const chowol = r.chowol_ticket != null ? r.chowol_ticket : '–';
-    const wonjeong = r.wonjeong_ticket != null ? r.wonjeong_ticket : '–';
+    const chowol = r.chowol_ticket || '–';
+    const wonjeong = r.wonjeong_ticket || '–';
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
     const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
@@ -1182,14 +1182,14 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
       <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
       <td class="px-3 py-1.5 text-yellow-400">${odd}</td>
+      <td class="px-3 py-1.5">${chowol}</td>
+      <td class="px-3 py-1.5">${wonjeong}</td>
       <td class="px-3 py-1.5 text-center">${daily}</td>
       <td class="px-3 py-1.5 text-center">${nm}</td>
       <td class="px-3 py-1.5 text-center">${aw}</td>
       <td class="px-3 py-1.5">${sanc}</td>
       <td class="px-3 py-1.5 text-center">${mail}</td>
       <td class="px-3 py-1.5">${ext}</td>
-      <td class="px-3 py-1.5 text-center">${chowol}</td>
-      <td class="px-3 py-1.5 text-center">${wonjeong}</td>
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
       <td class="px-3 py-1.5 text-center">${equipLink}</td>
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
