@@ -1,12 +1,11 @@
 {
   "exe": {
-    "version": "1.1.137",
+    "version": "1.1.138",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "4a6959c9f486ed2d257094e2712d27f643dc255e70f87ed336497e8b3a20fcd5",
+    "sha256": "2c88da942f3e7af824eb941b1f9a1a91efb46b8d8f0f11b1fc0ed34e87439867",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
-    ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "1.png": "ac56e4718b147ed7cb4d919357775ca632e3f1a46a82515aed7be7452f56ae69",
     "100퍼.png": "615a68a5df705e51eab1d2e54fbf3cde8a5ecc67bf5c5dc583ceccae9d048102",
     "11.png": "d2157f76d33456169351d2c56ae9f0c8cda5ff8feb969d02249cfc20083bfdb4",
@@ -52,7 +51,6 @@
     "error_confirm.png": "f53a74ff1b206f95bfc26e1c02953c835a205e62bee96c039801a339e96fa297",
     "expedition_title.png": "2917451d68c3929a716a2582379626caf38e01734d125c88a5f0ea322a172134",
     "extract_title.png": "284e127208f8cc75cc976bf6eb421c32beb0da321093265601a63a67a56c9be4",
-    "files.zip": "c1dc2db899567caa2cb87b132b938d080f9fe3b70ef67390f2d3840681eb8585",
     "finish.png": "73d1eaf552a6a9d3256942a1623fafe0b3237905e8941a0b0ee0e03e23b031c3",
     "finish2.png": "7d06478618b1af700291f79e75267b3df03fb50ca376d93d9cebaa7668b43c94",
     "fire_map_title.png": "19ddb4ebbd696a765dfb23851c3cfde9033f37ba20bdaa664d0cc01c5a1ba49d",
@@ -124,6 +122,10 @@
     "settlement_tab.png": "26df87d4f834d599397b7de24e97a8814cad0568b16d48b49591f2b0a6e458cf",
     "skillbar_check.png": "f16ac499a822fc0ea934776d640d20deb17e6626d60e016ac8171c5020ca8b01",
     "skip.png": "a3439a5e2bc3afb9a9ace019e04b58866635c60065ea8b800e5ad4414fbc6bcf",
+    "spirit_5.png": "60207e7d189e3d595be4998e1e0690878cd19559e2e9744c52ffa08bee75e73f",
+    "spirit_6.png": "5b2dd34f1e490fe60483f62129d27b70bee595bcdb879ec1db92f76dc1ef69e3",
+    "spirit_7.png": "26401bb30c6eebb5de52fd4bdc00434c7ac9dd3b503e9cf099ca12ac1650fba0",
+    "spirit_8.png": "84a7f155ab5956bb399317525367954641bd32a7362b45f16e0b360e33d4761d",
     "star.png": "425a7110a24f03c60fe2051498d72cf2a5b0a9d9a7d5f7f91c00311c449d0543",
     "stream.png": "dc8f81d2c6c43946d54f36592b1b66eba032301613039bfcef583083830a798d",
     "stream1.png": "1f5faae4b952fb1da07e740b22a165364da3f77c2cdd67d7e14fa8b22e3e1c7c",
@@ -147,14 +149,10 @@
     "설정1.png": "ef7e4719e12c241ddda2a824a85e773463aadac25b392b6124d4a845147c894d",
     "설정2.png": "d997d3eb2fd0ce792d0d71495ce4a2b2c3812fbb2c47914f4a2d723ba7269288",
     "설정3.png": "f0fd4ed47d9ab6ad98293943ceabcb2d83cd2b42fedd67252232beea33dbbf43",
-    "스트리밍.PNG": "4a7731f49f84f254be44190b08e7d54c08503b61286069f4ad269cad92e3f3db",
     "스트림2.png": "b51e2d4adc5ae762e9611156caf20b24034f28b18adacf1f3b3054b424eb2ef4",
     "에러.png": "bbf4ae4d3227ca0d592e85d32942c3df478cbccc98b988eab8043936e4868ee2",
     "오류.png": "14b356d6cbcbcd178c297aef3a3240410a0f02dd50ed092fbeedf699f94a1eb7",
     "오류2.png": "2324e421533aad8506cc6baa434acc207997647a5dc4665991f057bed7f2c5d3",
-    "원격창.PNG": "53143316cdf92329d1d59d2b26ae892c166ab505672556a4b46d38ad312bb115",
-    "원격창2.PNG": "88ad6b486ef883ed818bb9e44cf27b8ed6a63d8c4841fe4ce55029eeca46001a",
-    "원격창3.PNG": "9b2299291ad2bf3e69a3acd642a31b66be613918227be10f84cef799148b1b2d",
     "인터넷.png": "8fe917520ab231ce7ae6902db03bd57a701b8995b1b0d5606cd89e55c14d4e3c",
     "일정시간.png": "fdf4b220d6d0954f9f693fbbe65ddd01c2502a64b44a116d4d8b2bdf2d572e52",
     "정령성.png": "87bd4afe9e4dedf7724c2c506cb34f7a6a33f459f5a5072f41ffcb99641fb86d",
@@ -168,7 +166,7 @@
     "sha256": "4d150adb34318a0fde4f656b1b241f1011809ab9c6926c16adfcffc0201c5d26",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260412150754",
-  "updated_at": "2026-04-12T15:36:39",
+  "images_version": "20260413015327",
+  "updated_at": "2026-04-13T01:53:27",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
