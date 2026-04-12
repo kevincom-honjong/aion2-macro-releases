@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.129",
+    "version": "1.1.130",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "18f7064241fe6eb1aee966f8b3fee05aebd1f9e82925312a1e0910067037c4c1",
+    "sha256": "67ef38e5bcbcd534f95f4253e0197dde71820f022d2dc1ed2fac1cc0587c8a51",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -69,9 +69,9 @@
     "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
     "gung_7.png": "a9aa69708522dadeeef80f1ba6f077a4a7e0757eef0c6ea92f6b266e6387640e",
     "gungsung.png": "1efc7e6fe4b1042d768c05b223dbba75664f3b1ed204f8d5ac19dedeb27f05f6",
-    "hobup_1.png": "860348c148f1fa1936f56685526a77f58abb59d397428476b61abb36e89be729",
-    "hobup_5.png": "b41ed4c256ca617f432fb33b6c3ff54f4ea46c36e7634be9f598cd2b46cf312f",
-    "hobup_6.png": "20cde5f9d7863b9f7037c9939fb088b60991ec1fd611649696398342dec078f2",
+    "hobup_1.png": "559d55f76df42190161bbf93c64519316929fca662f3d105017d0231cd8bee55",
+    "hobup_5.png": "67d7150a5c2de89500489b357fe01c61e14cf9d3b48dc58d28b4d3f9dbb99f80",
+    "hobup_6.png": "43fc1383d45177a3b7a9bf7defb83d662787beb6ab653ef86adb4b6e3d822cb8",
     "hobup_buff_7.png": "9e1dbc242ea19e44c19b8cc844a435cf0063228c092befb88f65622016415f77",
     "hobup_buff_8.png": "6845c23954c2e83d9ad1b28a3fc9b3e2fb9ebc48b3462edcd6e4814dbaf8a82d",
     "hobupsung.png": "15e8364692ded38fb7d7ba77f55ce1a2625459f8d583ebb7356a4676f6729cbd",
@@ -164,7 +164,7 @@
     "sha256": "4d150adb34318a0fde4f656b1b241f1011809ab9c6926c16adfcffc0201c5d26",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260412081537",
-  "updated_at": "2026-04-12T08:15:37",
+  "images_version": "20260412082437",
+  "updated_at": "2026-04-12T08:24:37",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
