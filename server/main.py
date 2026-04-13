@@ -1164,7 +1164,7 @@ function renderCharTable() {
     const odd = r.odd_energy || '–';
     const chowol = r.chowol_ticket || '–';
     const wonjeong = r.wonjeong_ticket || '–';
-    const daily = r.daily_ticket != null ? `${r.daily_ticket}/14` : '–';
+    const daily = r.daily_ticket || '–';
     const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
     const nmProg = r.nightmare_progress || '';
     const nm = nmProg ? `${nmTicket} <span class="text-pink-400 text-[10px]">${nmProg}</span>` : nmTicket;
@@ -1184,7 +1184,8 @@ function renderCharTable() {
     const chowolFull = chowolNum >= 7;
     const wonjeongNum = wonjeong !== '–' ? parseInt(wonjeong) : 0;
     const wonjeongFull = wonjeongNum >= 14;
-    const dailyFull = r.daily_ticket >= 14;
+    const dailyNum = daily !== '–' ? parseInt(daily) : 0;
+    const dailyFull = dailyNum >= 14;
     const nmFull = r.nightmare_ticket >= 14;
     const awFull = r.awakening_ticket >= 3;
     const sancNum = sanc !== '–' ? parseInt(sanc) : 0;
@@ -1902,7 +1903,7 @@ async def get_all_characters(request: Request):
                 "gear_power": ch.get("gear_power", 0),
                 "power_power": ch.get("power_power", 0),
                 "odd_energy": ch.get("odd_energy", ""),
-                "daily_ticket": ch.get("daily_ticket", 0),
+                "daily_ticket": ch.get("daily_ticket", ""),
                 "nightmare_ticket": ch.get("nightmare_ticket", 0),
                 "awakening_ticket": ch.get("awakening_ticket", 0),
                 "sanctuary": ch.get("sanctuary", ""),
