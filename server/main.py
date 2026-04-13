@@ -1188,8 +1188,10 @@ function renderCharTable() {
     const dailyFull = dailyNum >= 14;
     const nmFull = r.nightmare_ticket >= 14;
     const awFull = r.awakening_ticket >= 3;
-    const sancNum = sanc !== '–' ? parseInt(sanc) : 0;
-    const sancFull = r.gear_power >= 2700 && sancNum >= 2;
+    const sancParts = sanc !== '–' ? sanc.match(/(\d+).*\/(\d+)/) : null;
+    const sancFirst = sancParts ? parseInt(sancParts[1]) : 0;
+    const sancMax = sancParts ? parseInt(sancParts[2]) : 0;
+    const sancFull = r.gear_power >= 2700 && sancMax > 0 && sancFirst >= sancMax;
     const extFull = ext.includes('입문') && ext.includes('50');
     const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
