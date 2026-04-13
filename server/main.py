@@ -1161,9 +1161,7 @@ function renderCharTable() {
     const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
     const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
-    const oddRaw = r.odd_energy || '–';
-    // "300(+1,195)/840" → "300/840"
-    const odd = oddRaw !== '–' ? oddRaw.replace(/\(.*?\)/g, '') : '–';
+    const odd = r.odd_energy || '–';
     const chowol = r.chowol_ticket || '–';
     const wonjeong = r.wonjeong_ticket || '–';
     const daily = r.daily_ticket || '–';
