@@ -406,6 +406,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <span id="char-table-count" class="text-gray-600 normal-case">(0)</span>
       </h2>
       <button onclick="loadCharTable()" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded">↻ 새로고침</button>
+      <button onclick="toggleAllPcGroups(true)" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded ml-2">▼ 전체 열기</button>
+      <button onclick="toggleAllPcGroups(false)" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded ml-1">▲ 전체 닫기</button>
       <button onclick="printCharTable()" class="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 bg-gray-800 rounded ml-2">🖨 인쇄</button>
     </div>
     <div id="char-table-wrap" class="hidden">
@@ -418,7 +420,6 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <table class="w-full text-sm text-left">
           <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
             <tr>
-              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('pc_id')">PC ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('slot')"># ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('name')">이름 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
@@ -1157,7 +1158,8 @@ function renderCharTable() {
     return asc ? va.localeCompare(vb) : vb.localeCompare(va);
   });
   const tbody = document.getElementById('char-tbody');
-  tbody.innerHTML = rows.map((r, i) => {
+
+  function renderRow(r, i) {
     const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
     const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
@@ -1175,8 +1177,6 @@ function renderCharTable() {
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
     const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
-
-    // 빨간색 조건 체크
     const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
     const oddFirst = odd !== '–' ? parseInt(odd) : 0;
     const oddFull = oddFirst >= 840;
@@ -1192,11 +1192,8 @@ function renderCharTable() {
     const sancFull = r.gear_power >= 2700 && sancNum >= 2;
     const extFull = ext.includes('입문') && ext.includes('50');
     const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
-
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
-
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
-      <td class="px-3 py-1.5 font-medium text-gray-200">${r.pc_id||'–'}</td>
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
       <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
@@ -1215,7 +1212,38 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
     </tr>`;
-  }).join('');
+  }
+
+  // PC별 그룹핑
+  const groups = {};
+  rows.forEach(r => {
+    const pc = r.pc_id || '?';
+    if (!groups[pc]) groups[pc] = [];
+    groups[pc].push(r);
+  });
+
+  let html = '';
+  let idx = 0;
+  Object.keys(groups).sort().forEach(pc => {
+    const pcRows = groups[pc];
+    const redCount = pcRows.filter(r => {
+      const odd = r.odd_energy||''; const sanc = r.sanctuary||''; const ext = r.extract_level||'';
+      return parseInt(odd)>=840 || parseInt(r.chowol_ticket)>=7 || parseInt(r.wonjeong_ticket)>=14 ||
+             parseInt(r.daily_ticket)>=14 || r.nightmare_ticket>=14 || r.awakening_ticket>=3 ||
+             (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
+    }).length;
+    const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
+    html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
+      <td colspan="17" class="px-3 py-2 font-bold text-gray-100">
+        <span id="pc-arrow-${pc}" class="mr-1">▶</span>${pc} <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
+      </td>
+    </tr>`;
+    pcRows.forEach(r => {
+      html += renderRow(r, idx).replace('<tr ', `<tr data-pc="${pc}" style="display:none" `);
+      idx++;
+    });
+  });
+  tbody.innerHTML = html;
 }
 
 function sortCharTable(key) {
@@ -1225,6 +1253,24 @@ function sortCharTable(key) {
 }
 
 function filterCharTable() { renderCharTable(); }
+
+function togglePcGroup(pc) {
+  const rows = document.querySelectorAll(`tr[data-pc="${pc}"]`);
+  const arrow = document.getElementById(`pc-arrow-${pc}`);
+  const visible = rows[0]?.style.display !== 'none';
+  rows.forEach(r => r.style.display = visible ? 'none' : '');
+  if (arrow) arrow.textContent = visible ? '▶' : '▼';
+}
+
+function toggleAllPcGroups(open) {
+  const arrows = document.querySelectorAll('[id^="pc-arrow-"]');
+  arrows.forEach(a => {
+    const pc = a.id.replace('pc-arrow-', '');
+    const rows = document.querySelectorAll(`tr[data-pc="${pc}"]`);
+    rows.forEach(r => r.style.display = open ? '' : 'none');
+    a.textContent = open ? '▼' : '▶';
+  });
+}
 
 function printCharTable() {
   const table = document.getElementById('char-table-wrap');
