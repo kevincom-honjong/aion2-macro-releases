@@ -353,6 +353,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
   <button onclick="selCmd('subquest')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-lime-900/60 hover:bg-lime-700 text-lime-300 transition-colors">서브퀘</button>
   <button onclick="selCmd('sealed_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-900/60 hover:bg-rose-700 text-rose-300 transition-colors">봉인던전</button>
+  <button onclick="selCmd('wardrobe')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-violet-900/60 hover:bg-violet-700 text-violet-300 transition-colors">옷장</button>
   <button onclick="selCmd('collect_info')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-900/60 hover:bg-sky-700 text-sky-300 transition-colors">정보수집</button>
 </div>
 
