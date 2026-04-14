@@ -375,7 +375,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-yellow-300" id="cnt-total-kina">–</div>
-      <div class="text-sm text-gray-400 mt-1">총 키나</div>
+      <div class="text-sm text-gray-400 mt-1">창고키나</div>
     </div>
   </div>
 
@@ -437,7 +437,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">아르카나</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">장비</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gakin_kina')">각인키나 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">총 키나 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('trade_kina')">거래키나 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">창고키나 ⇅</th>
             </tr>
           </thead>
           <tbody id="char-tbody" class="divide-y divide-gray-800"></tbody>
@@ -597,7 +598,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
       <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span></span>
-      ${pc._total_kina?`<span class="text-yellow-400 font-medium" style="font-size:10px">총 키나: ₭${Number(pc._total_kina).toLocaleString('en-US')}</span>`:''}
+      ${pc._total_kina?`<span class="text-yellow-400 font-medium" style="font-size:10px">창고키나: ₭${Number(pc._total_kina).toLocaleString('en-US')}</span>`:''}
     </div>
     <div class="flex gap-1">${slots}</div>
   </div>`;
@@ -780,7 +781,7 @@ function refreshSummary(pcs) {
     if(isOnline) c.online++; else c.offline++;
     const dp = p.daily_progress||[];
     if(dp.length>0 && dp.every(d=>d.completed)) c.completed++;
-    // 총 키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
+    // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
       seenPc.add(p.pc_id);
       c.totalKina += p._total_kina;
@@ -1178,6 +1179,7 @@ function renderCharTable() {
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
     const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
+    const trade = r.trade_kina ? Number(r.trade_kina).toLocaleString() : '–';
     const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
     const oddFirst = odd !== '–' ? parseInt(odd) : 0;
     const oddFull = oddFirst >= 840;
@@ -1213,6 +1215,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
       <td class="px-3 py-1.5 text-center">${equipLink}</td>
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
+      <td class="px-3 py-1.5 text-right text-orange-400">${trade}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
     </tr>`;
   }
@@ -1237,7 +1240,7 @@ function renderCharTable() {
     }).length;
     const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="17" class="px-3 py-2 font-bold text-gray-100">
+      <td colspan="18" class="px-3 py-2 font-bold text-gray-100">
         <span id="pc-arrow-${pc}" class="mr-1">▶</span>${pc} <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
       </td>
     </tr>`;
@@ -1324,7 +1327,7 @@ function renderInfoContent(info) {
   }
   const kinaHtml = info.total_kina
     ? `<div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
-        <div class="text-xs text-gray-500 mb-1">총 키나</div>
+        <div class="text-xs text-gray-500 mb-1">창고키나</div>
         <div class="text-xl font-bold text-yellow-300">₭${Number(info.total_kina).toLocaleString('en-US')}</div>
        </div>` : '';
   const LABELS = {
@@ -1340,6 +1343,7 @@ function renderInfoContent(info) {
     chowol_ticket:    '초월 티켓',
     wonjeong_ticket:  '원정 티켓',
     gakin_kina:       '각인키나',
+    trade_kina:       '거래키나',
   };
   const RAW_FIELDS   = new Set(['odd_energy', 'sanctuary', 'extract_level']);
   const POWER_FIELDS = new Set(['power_power']);
@@ -1963,6 +1967,7 @@ async def get_all_characters(request: Request):
                 "arcana_image": ch.get("arcana_image", False),
                 "equip_image": ch.get("equip_image", False),
                 "gakin_kina": ch.get("gakin_kina", 0),
+                "trade_kina": ch.get("trade_kina", 0),
                 "total_kina": total_kina,
                 "collected_at": collected_at,
                 "nightmare_progress": nm_map.get((pc_id, slot), ""),
