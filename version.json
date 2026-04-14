@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.147",
+    "version": "1.1.148",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "f37cc4a42221de8782a802a7b05f18befc09001c796ccad31d971cff423086df",
+    "sha256": "2eec14c33c69b1ef4a115d19ce180f4e4b47c474378104f361e800242a724b52",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -141,6 +141,10 @@
     "ttttttttttt.png": "a5171505645dd554628d5211ffe496df227ec8b4f21794237a709b4944e633d6",
     "unexpected1.png": "8a02fa10f876333abfc7bd4731430202483bccb1674c05b7a4230254f520f852",
     "unexpected2.png": "c9926dc59fbd4bda1858d099dcd9b51ec4d0692fe93a2fd7057b922c93a9f668",
+    "wardrobe_auto_btn.png": "4ae1c46ad63bfbf75ed13ef960090653c222c568ba01a01dd5bcd7ebcfd8c6e3",
+    "wardrobe_craft_btn.png": "7737268188dfa2ec5aeab3f0cbdc3217bb36647c6c92a84a9bc68787ba7e0f75",
+    "wardrobe_done.png": "acbb28f92b5c99c93445ad465936bef5de382029655d315a31b672304de9ecc3",
+    "wardrobe_title.png": "493f612d349ff72a14326861c9f1f68cb5922380cc7b144a5d843a9010947e97",
     "wonjeong_title.png": "a0d046cc9cbc7fea757fa61849ebf6362fbdd1cc92c147395689c3b6bae23922",
     "world_market_menu.png": "1d5010387bcbc2ab06910fffd2c52933459ffd7a99b4ccd1ec41d08b479e288c",
     "검성.png": "b2719de87ad7c3b7af35df7323ca4d5ae949d4db9c1d2dae716f5d354b90a5b1",
@@ -172,7 +176,7 @@
     "sha256": "6fff9852eee95bfdb410199cc26de069a52201d78b69a931daddf72dc3645211",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260412165404",
-  "updated_at": "2026-04-13T22:27:19",
+  "images_version": "20260414152157",
+  "updated_at": "2026-04-14T15:21:57",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
