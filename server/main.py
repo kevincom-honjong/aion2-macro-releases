@@ -417,7 +417,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
           class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 w-64 focus:outline-none focus:border-indigo-500"
           oninput="filterCharTable()">
       </div>
-      <div class="overflow-x-auto max-h-[600px] overflow-y-auto scrollbar-thin">
+      <div class="overflow-x-auto">
         <table class="w-full text-sm text-left">
           <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
             <tr>
@@ -1239,9 +1239,11 @@ function renderCharTable() {
              (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
     }).length;
     const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
+    const pcServer = (state[pc] || {}).server || '';
+    const serverTag = pcServer ? ` <span class="text-cyan-400 text-xs font-normal ml-1">[${pcServer}]</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
       <td colspan="18" class="px-3 py-2 font-bold text-gray-100">
-        <span id="pc-arrow-${pc}" class="mr-1">▶</span>${pc} <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
+        <span id="pc-arrow-${pc}" class="mr-1">▶</span>${pc} <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${serverTag}${redBadge}
       </td>
     </tr>`;
     pcRows.forEach(r => {
