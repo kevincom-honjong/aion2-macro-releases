@@ -839,8 +839,7 @@ async function selUpdaterCmd(command, args={}) {
 }
 
 // ─── 슬롯 필터 토글 / 전체선택·해제 ─────────────────────────────────────────
-async function selectAllSlots(pc_id, enabled) {
-  const slots = charTableData.filter(r => r.pc_id === pc_id).map(r => r.slot);
+async function selectAllSlots(pc_id, slots, enabled) {
   if (!slots.length) return;
   const filters = {};
   slots.forEach(s => { filters[String(s)] = enabled; });
@@ -848,7 +847,13 @@ async function selectAllSlots(pc_id, enabled) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({filters})
   });
-  if (!res.ok) showToast('✗ 필터 저장 실패');
+  if (res.ok) {
+    if (!state[pc_id]) state[pc_id] = {};
+    state[pc_id].slot_filters = filters;
+    renderCharTable();
+  } else {
+    showToast('✗ 필터 저장 실패');
+  }
 }
 
 async function toggleSlotFilter(pc_id, slot, enabled) {
@@ -1289,8 +1294,8 @@ function renderCharTable() {
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
           ${serverTag}${kinaTag}${redBadge}
           <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
-            <button onclick="selectAllSlots('${pc}', true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
-            <button onclick="selectAllSlots('${pc}', false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
             <span class="text-gray-600">|</span>
             <button onclick="sendCmd('${pc}','start')" class="px-1.5 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300 whitespace-nowrap">▶ 시작</button>
             <button onclick="sendCmd('${pc}','exit')" class="px-1.5 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300 whitespace-nowrap">✕ 종료</button>
