@@ -26,6 +26,7 @@ from database import (
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     upsert_char_info, get_char_info, get_all_char_info,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
+    upsert_slot_filters, get_slot_filters, get_all_slot_filters,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,9 +145,10 @@ def _is_stale(updated_at_str: str | None) -> bool:
         return True
 
 async def _build_full_state() -> list[dict]:
-    """pc_status + updater_status + bug_count + char_info 병합 목록 반환"""
+    """pc_status + updater_status + bug_count + char_info + slot_filters 병합 목록 반환"""
     statuses = await get_all_statuses()
     updater_statuses = await get_all_updater_statuses()
+    all_filters = await get_all_slot_filters()
 
     updater_map: dict[str, dict] = {}
     for u in updater_statuses:
@@ -180,6 +182,7 @@ async def _build_full_state() -> list[dict]:
             # updater 기록 자체가 없으면 offline
             pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(pid, 0)
+        pc["slot_filters"] = all_filters.get(pid, {})
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
             ci = await get_char_info(pid)
@@ -421,8 +424,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <table class="w-full text-sm text-left">
           <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
             <tr>
+              <th class="px-3 py-2 text-center w-8">✓</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('slot')"># ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('name')">이름 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('char_class')">직업 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('power_power')">파워전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('odd_energy')">오드에너지 ⇅</th>
@@ -833,6 +838,17 @@ async function selUpdaterCmd(command, args={}) {
   showToast(`${selectedPcs.size}대 업데이터 ${command}`);
 }
 
+// ─── 슬롯 필터 토글 ──────────────────────────────────────────────────────────
+async function toggleSlotFilter(pc_id, slot, enabled) {
+  const current = (state[pc_id] || {}).slot_filters || {};
+  const merged = {...current, [String(slot)]: enabled};
+  const res = await fetch(`/slot_filter/${pc_id}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filters: merged})
+  });
+  if (!res.ok) showToast('✗ 필터 저장 실패');
+}
+
 // ─── 명령 전송 ────────────────────────────────────────────────────────────────
 async function sendCmd(pc_id, command, args={}) {
   const res=await fetch(`/command/${pc_id}`,{
@@ -1162,8 +1178,13 @@ function renderCharTable() {
   const tbody = document.getElementById('char-tbody');
 
   function renderRow(r, i) {
+    const pcFilters = (state[r.pc_id] || {}).slot_filters || {};
+    const slotEnabled = pcFilters[String(r.slot)] !== false;
     const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
     const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
+    const classColors = {'궁성':'text-green-400','검성':'text-orange-400','치유성':'text-pink-400','호법성':'text-purple-400','정령성':'text-blue-400','살성':'text-red-400','마도성':'text-cyan-400'};
+    const cls = r.char_class || '–';
+    const clsColor = classColors[cls] || 'text-gray-400';
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
     const chowol = r.chowol_ticket || '–';
@@ -1199,8 +1220,13 @@ function renderCharTable() {
     const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
+      <td class="px-3 py-1.5 text-center">
+        <input type="checkbox" ${slotEnabled ? 'checked' : ''}
+          onchange="toggleSlotFilter('${r.pc_id}',${r.slot},this.checked)"
+          onclick="event.stopPropagation()" class="cursor-pointer accent-green-500"></td>
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
       <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
+      <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${cls}</td>
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
       <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
@@ -1242,9 +1268,42 @@ function renderCharTable() {
     const pcServer = (state[pc] || {}).server || '';
     const serverTag = pcServer ? ` <span class="text-cyan-400 text-xs font-normal ml-1">[${pcServer}]</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="18" class="px-3 py-2 font-bold text-gray-100">
-        <span id="pc-arrow-${pc}" class="mr-1">▶</span>${pc} <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${serverTag}${redBadge}
+      <td colspan="20" class="px-3 py-2 font-bold text-gray-100">
+        <div class="flex items-center gap-2">
+          <span id="pc-arrow-${pc}">▶</span>
+          <span>${pc}</span>
+          <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
+          ${serverTag}${redBadge}
+          <div class="flex items-center gap-1 ml-auto" onclick="event.stopPropagation()">
+            <button onclick="sendCmd('${pc}','start')" class="px-2 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300">▶ 시작</button>
+            <button onclick="sendCmd('${pc}','stop')" class="px-2 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300">⏹ 정지</button>
+            <button onclick="sendCmd('${pc}','collect_info')" class="px-2 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300">📊 정보수집</button>
+            <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-2 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300">🏰 던전</button>
+          </div>
+        </div>
       </td>
+    </tr>`;
+    html += `<tr data-pc="${pc}" class="bg-gray-800/60 text-xs text-gray-500 uppercase" style="display:none">
+      <th class="px-3 py-1 text-center w-8">✓</th>
+      <th class="px-3 py-1">#</th>
+      <th class="px-3 py-1">이름</th>
+      <th class="px-3 py-1">직업</th>
+      <th class="px-3 py-1 text-right">장비전투력</th>
+      <th class="px-3 py-1 text-right">파워전투력</th>
+      <th class="px-3 py-1">오드에너지</th>
+      <th class="px-3 py-1">초월 티켓</th>
+      <th class="px-3 py-1">원정 티켓</th>
+      <th class="px-3 py-1 text-center">일일던전</th>
+      <th class="px-3 py-1 text-center">악몽</th>
+      <th class="px-3 py-1 text-center">각성</th>
+      <th class="px-3 py-1">성역</th>
+      <th class="px-3 py-1 text-center">우편</th>
+      <th class="px-3 py-1">정기추출</th>
+      <th class="px-3 py-1 text-center">아르카나</th>
+      <th class="px-3 py-1 text-center">장비</th>
+      <th class="px-3 py-1 text-right">각인키나</th>
+      <th class="px-3 py-1 text-right">거래키나</th>
+      <th class="px-3 py-1 text-right">창고키나</th>
     </tr>`;
     pcRows.forEach(r => {
       html += renderRow(r, idx).replace('<tr ', `<tr data-pc="${pc}" style="display:none" `);
@@ -1846,6 +1905,23 @@ async def receive_char_info(pc_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/slot_filter/{pc_id}")
+async def set_slot_filter(pc_id: str, request: Request):
+    """대시보드 → 슬롯 활성화/비활성화 저장 + 매크로에 명령 전달"""
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    body = await request.json()
+    filters = body.get("filters", {})
+    # int 키로 정규화
+    filters = {int(k): bool(v) for k, v in filters.items()}
+    await upsert_slot_filters(pc_id, filters)
+    # 매크로에 set_slot_filter 명령 전달
+    cmd_id = await insert_command(pc_id, "set_slot_filter", {"filters": filters})
+    await send_command_to_macro(pc_id, cmd_id, "set_slot_filter", {"filters": filters})
+    await push_state()
+    return {"ok": True}
+
+
 @app.get("/char_info/{pc_id}")
 async def query_char_info(pc_id: str, request: Request):
     """대시보드가 캐릭터 세부정보 조회"""
@@ -1955,6 +2031,7 @@ async def get_all_characters(request: Request):
                 "pc_id": pc_id,
                 "slot": slot,
                 "name": ch.get("name", ""),
+                "char_class": ch.get("char_class", ""),
                 "gear_power": ch.get("gear_power", 0),
                 "power_power": ch.get("power_power", 0),
                 "odd_energy": ch.get("odd_energy", ""),
