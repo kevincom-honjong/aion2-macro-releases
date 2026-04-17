@@ -83,6 +83,12 @@ async def init_db() -> None:
                 PRIMARY KEY (pc_id, slot)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS slot_filters (
+                pc_id   TEXT PRIMARY KEY,
+                filters TEXT DEFAULT '{}'
+            )
+        """)
         await db.commit()
 
 
@@ -440,4 +446,45 @@ async def get_all_nightmare_progress() -> list[dict]:
             "bosses": bosses,
             "updated_at": row["updated_at"],
         })
+    return result
+
+
+# ── 슬롯 필터 (캐릭별 활성화/비활성화) ────────────────────────────────────────
+
+async def upsert_slot_filters(pc_id: str, filters: dict) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO slot_filters(pc_id, filters) VALUES(?,?)",
+            (pc_id, json.dumps(filters)),
+        )
+        await db.commit()
+
+
+async def get_slot_filters(pc_id: str) -> dict:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT filters FROM slot_filters WHERE pc_id=?", (pc_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row["filters"])
+    except Exception:
+        return {}
+
+
+async def get_all_slot_filters() -> dict:
+    """pc_id -> filters dict 전체 반환"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT pc_id, filters FROM slot_filters") as cur:
+            rows = await cur.fetchall()
+    result = {}
+    for row in rows:
+        try:
+            result[row["pc_id"]] = json.loads(row["filters"])
+        except Exception:
+            result[row["pc_id"]] = {}
     return result
