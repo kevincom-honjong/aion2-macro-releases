@@ -1274,11 +1274,19 @@ function renderCharTable() {
           <span>${pc}</span>
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
           ${serverTag}${redBadge}
-          <div class="flex items-center gap-1 ml-auto" onclick="event.stopPropagation()">
-            <button onclick="sendCmd('${pc}','start')" class="px-2 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300">▶ 시작</button>
-            <button onclick="sendCmd('${pc}','stop')" class="px-2 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300">⏹ 정지</button>
-            <button onclick="sendCmd('${pc}','collect_info')" class="px-2 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300">📊 정보수집</button>
-            <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-2 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300">🏰 던전</button>
+          <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
+            <button onclick="sendCmd('${pc}','start')" class="px-1.5 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300 whitespace-nowrap">▶ 시작</button>
+            <button onclick="sendCmd('${pc}','exit')" class="px-1.5 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300 whitespace-nowrap">✕ 종료</button>
+            <button onclick="sendUpdaterCmd('${pc}','update')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">↺ 재시작</button>
+            <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300 whitespace-nowrap">일일던전</button>
+            <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
+            <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
+            <button onclick="sendCmd('${pc}','mission')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap">사명</button>
+            <button onclick="sendCmd('${pc}','shugo')" class="px-1.5 py-0.5 text-xs rounded bg-amber-900/60 hover:bg-amber-700 text-amber-300 whitespace-nowrap">슈고</button>
+            <button onclick="sendCmd('${pc}','subquest')" class="px-1.5 py-0.5 text-xs rounded bg-lime-900/60 hover:bg-lime-700 text-lime-300 whitespace-nowrap">서브퀘</button>
+            <button onclick="sendCmd('${pc}','sealed_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-rose-900/60 hover:bg-rose-700 text-rose-300 whitespace-nowrap">봉인던전</button>
+            <button onclick="sendCmd('${pc}','wardrobe')" class="px-1.5 py-0.5 text-xs rounded bg-violet-900/60 hover:bg-violet-700 text-violet-300 whitespace-nowrap">옷장</button>
+            <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
           </div>
         </div>
       </td>
