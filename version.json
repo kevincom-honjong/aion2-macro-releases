@@ -90,6 +90,7 @@
     "locked_slot.png": "7d32b99fb3b8d42e255dd0223a52ad316b45fc8c287f37a1c4ef7e20d65e9b6b",
     "login_redirect.png": "d45b1e4f4221ead39af176081ed53afb7a400a9840b43277cb7b2fcc60965c2b",
     "loot.png": "17149e14f39cd35853dbdc01fe23aac5eb17a0a657829dc782e4c715d2152111",
+    "madosung.png": "6bd8b43830b15ddf64e68a7fc70a220923dcf07434face23356d8a93750bd5bf",
     "mania_new.png": "89d233edcf4ada060121db0b981cade04d3d5d5adc21ecd6b49c098723d64916",
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
     "mode.png": "fb69263c7f2548f66e10ce06383555be1a10fc4268b8a0aae6e98eee774193c8",
@@ -111,6 +112,7 @@
     "resurrect.png": "db5176282e11dc05cda4c9d0c871f42a23ddd6e340b61d26fb82fcdf3f3f75d9",
     "sale_confirm_popup.png": "fa232f3508569f488991bb1fe3251344e39c2145dda665b54fd427d065b7cf57",
     "sale_register_tab.png": "855e5556b8d08ab0f2f68b466ced5c30a9a3e81e4555fbd6a2466829cb9f37cc",
+    "salsung.png": "dc82316086f80a1a061713696e67d33851ce485a94ae9a3af166bfdf7ed77437",
     "sanctuary_title.png": "80433da1f9eb326d4bbe0cc9f12b7b7258b9a06dac7d98b2b84b619438c76da2",
     "screen_now.png": "0962e950f561ccb8ec7ab6c59f77a1100876f416680f9d4fcf310b22f40c5591",
     "sealed_clear.png": "646ab170d6c51db8481164857e6bc7deed56e919505c2ae6d485599dbd043d77",
@@ -176,7 +178,7 @@
     "sha256": "6fff9852eee95bfdb410199cc26de069a52201d78b69a931daddf72dc3645211",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260414152157",
-  "updated_at": "2026-04-17T14:47:18",
+  "images_version": "20260417145105",
+  "updated_at": "2026-04-17T14:51:05",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
