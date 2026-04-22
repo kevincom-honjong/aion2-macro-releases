@@ -369,8 +369,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="text-sm text-gray-400 mt-1">온라인</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-gray-400" id="cnt-offline">0</div>
-      <div class="text-sm text-gray-400 mt-1">오프라인</div>
+      <div class="text-2xl font-bold text-yellow-400" id="cnt-odd-energy">–</div>
+      <div class="text-sm text-gray-400 mt-1">오드에너지</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
@@ -777,6 +777,16 @@ function fmtKinaKor(n) {
   return n.toLocaleString();
 }
 
+function parseOddEnergy(str) {
+  // "300(+1,195)/840" → 300 + 1195 = 1495
+  if (!str) return 0;
+  const m = str.match(/^([\d,]+)(?:\(\+([\d,]+)\))?/);
+  if (!m) return 0;
+  const a = parseInt(m[1].replace(/,/g,''), 10) || 0;
+  const b = m[2] ? parseInt(m[2].replace(/,/g,''), 10) : 0;
+  return a + b;
+}
+
 function refreshSummary(pcs) {
   const c={online:0,offline:0,completed:0,totalKina:0};
   const seenPc = new Set();
@@ -792,8 +802,11 @@ function refreshSummary(pcs) {
       c.totalKina += p._total_kina;
     }
   });
+  // 오드에너지 합산 (charTableData 기준)
+  let totalOdd = 0;
+  charTableData.forEach(r => { totalOdd += parseOddEnergy(r.odd_energy); });
   document.getElementById('cnt-online').textContent=c.online;
-  document.getElementById('cnt-offline').textContent=c.offline;
+  document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
   document.getElementById('cnt-completed').textContent=c.completed;
   document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
 }
@@ -1176,6 +1189,7 @@ async function loadCharTable() {
     charTableData = d.characters || [];
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
+    refreshSummary(Object.values(state));
   } catch(e) { console.error('캐릭터 테이블 로드 실패', e); }
 }
 
