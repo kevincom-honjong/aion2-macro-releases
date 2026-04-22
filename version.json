@@ -29,6 +29,7 @@
     "chiyou_5.png": "4ff371741be35ecdbc99d1a3b4d6c0896b3c2456d122fe4ba70ff61b457c60e4",
     "chiyou_6.png": "7530ff92e067411ddad4d0a747f0ff813063f183d84d264dad3f96354d647317",
     "chiyou_7.png": "769fb95541cb64f66bfe744d609c6c4c96a2f8b859cb4abaf0ec9c72ec6f512e",
+    "chiyou_buff.png": "c5fd41a5e5481cbd6f3fe5fb00e6ae4e6c0743632a30c0b1c5619e1d5783f326",
     "chiyousung.png": "6ca94823c0be9e85ffbc84c70ee514946cec21f3761f46bf145d617d8a52d765",
     "chowol_title.png": "636f21ac0bf3e18090f434bec15dbb1f4b614bd2ab2be6e9bba8af54b26133e9",
     "close.png": "c3c88740bc1560b6f14c7d7bbe1c248c43ec6176da396b1ec03a3064255df549",
@@ -83,6 +84,7 @@
     "internet_error.png": "e59db6169a5942ba493c9919c1b6b922f5af0c96035e21b86584328740ca9652",
     "jump_skill.png": "b73e275c607b7aadb35b15008e5e5cdcf6acd0e506e5284e2e3af6caa8ebcd24",
     "junglyungsung.png": "a0886d6fceebfe6b9ecc815bbb3a422f8ba5f06cec8e1fe48bde1376c709cfb0",
+    "jungryungsung_1.png": "e5406afe72c80cbc9f58a5cb91c374833a78ce89b7064ec88b98d5d6c71308d9",
     "kina.png": "dde6b1a8568cea2dcaf0838188bf12ba2b4560d49952e497881f24eaa00dd2d9",
     "kt.png": "3ad22520084dc80abfe94d30165d9ce502c232d7855f812e50bcb2d718159aac",
     "kumsung.png": "41aaba350c4ee71bbdc5290e7fe7f4e214c1da17e717a4a5514a981ea7d00f45",
@@ -183,7 +185,7 @@
     "sha256": "6fff9852eee95bfdb410199cc26de069a52201d78b69a931daddf72dc3645211",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260419000747",
-  "updated_at": "2026-04-19T00:07:47",
+  "images_version": "20260422124602",
+  "updated_at": "2026-04-22T12:46:02",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
