@@ -1,0 +1,5 @@
+# 바이너리 파일 — CRLF 변환 금지 (SHA256 일관성 보장)
+*.exe  binary
+*.png  binary
+*.jpg  binary
+*.zip  binary
