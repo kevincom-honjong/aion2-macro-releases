@@ -637,14 +637,12 @@ function buildCard(pc) {
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
   return `<div id="card-${pc.pc_id}"
-    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer" style="max-width:280px"
-    onclick="openCardMenu('${pc.pc_id}',event)">
+    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none" style="max-width:280px"
+    onclick="toggleSelect('${pc.pc_id}',event)"
+    oncontextmenu="openCardMenu('${pc.pc_id}',event);return false">
     <div class="flex items-start justify-between mb-2">
       <div class="flex items-center gap-2 min-w-0">
         <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 select-none" style="font-size:14px;line-height:1" title="드래그로 순서 변경">⠿</span>
-        <input type="checkbox" class="rounded accent-indigo-500 shrink-0 cursor-pointer mt-0.5"
-          ${selectedPcs.has(pc.pc_id)?'checked':''}
-          onclick="event.stopPropagation();toggleSelect('${pc.pc_id}',event)">
         <div class="min-w-0">
           <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
         </div>
@@ -813,21 +811,16 @@ function refreshSummary(pcs) {
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
 function toggleSelect(pc_id, e) {
-  if (e&&(e.target.tagName==='BUTTON')) return;
-  selectedPcs.has(pc_id)?selectedPcs.delete(pc_id):selectedPcs.add(pc_id);
-  const card=document.getElementById(`card-${pc_id}`);
-  if(card){
-    card.classList.toggle('card-sel',selectedPcs.has(pc_id));
-    const cb=card.querySelector('input[type=checkbox]');
-    if(cb) cb.checked=selectedPcs.has(pc_id);
-  }
+  if (e && (e.target.tagName === 'BUTTON' || e.target.closest('.drag-handle'))) return;
+  selectedPcs.has(pc_id) ? selectedPcs.delete(pc_id) : selectedPcs.add(pc_id);
+  const card = document.getElementById(`card-${pc_id}`);
+  if (card) card.classList.toggle('card-sel', selectedPcs.has(pc_id));
   updateSelBar();
 }
 
 function clearSelection() {
   selectedPcs.clear();
   document.querySelectorAll('.card-sel').forEach(el=>el.classList.remove('card-sel'));
-  document.querySelectorAll('#grid-online input[type=checkbox],#grid-offline input[type=checkbox]').forEach(cb=>cb.checked=false);
   updateSelBar();
 }
 
@@ -838,7 +831,6 @@ function updateSelBar() {
 
 function selectAllPcs() {
   Object.keys(state).forEach(id=>selectedPcs.add(id));
-  document.querySelectorAll('#grid-online input[type=checkbox],#grid-offline input[type=checkbox]').forEach(cb=>cb.checked=true);
   document.querySelectorAll('[id^="card-"]').forEach(el=>el.classList.add('card-sel'));
   updateSelBar();
 }
@@ -1354,7 +1346,17 @@ function renderCharTable() {
       idx++;
     });
   });
+  // 현재 열린 그룹 상태 저장 → innerHTML 후 복구
+  const openGroups = new Set();
+  document.querySelectorAll('[id^="pc-arrow-"]').forEach(a => {
+    if (a.textContent === '▼') openGroups.add(a.id.replace('pc-arrow-', ''));
+  });
   tbody.innerHTML = html;
+  openGroups.forEach(pc => {
+    document.querySelectorAll(`tr[data-pc="${pc}"]`).forEach(r => r.style.display = '');
+    const arrow = document.getElementById(`pc-arrow-${pc}`);
+    if (arrow) arrow.textContent = '▼';
+  });
 }
 
 function sortCharTable(key) {
