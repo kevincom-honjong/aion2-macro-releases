@@ -9,6 +9,11 @@ import os
 import sys
 import json
 import hashlib
+
+# PyInstaller exe에서 certifi TLS 인증서 경로 문제 해결
+import certifi
+os.environ['SSL_CERT_FILE'] = certifi.where()
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 import shutil
 import subprocess
 import logging
@@ -26,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.1"
+UPDATER_VERSION  = "3.0.2"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -639,29 +644,46 @@ def handle_command(cmd: dict):
 # ==================================================
 def _poll_thread():
     log("[폴링] 시작")
+    _consecutive_errors = 0
+    _session = requests.Session()
+    _session.headers.update(_headers())
     while True:
         try:
-            r = requests.get(
+            r = _session.get(
                 f"{CONTROL_SERVER}/updater/command/{pc_id}",
-                headers=_headers(),
                 timeout=(TIMEOUT_CONNECT, 10),
             )
             if r.status_code == 200:
+                _consecutive_errors = 0
                 data = r.json()
                 if data.get("command"):
                     cmd_id = data.get("id")
-                    # ACK 먼저
                     try:
-                        requests.post(
+                        _session.post(
                             f"{CONTROL_SERVER}/updater/command/{pc_id}/ack/{cmd_id}",
-                            headers=_headers(),
                             timeout=(TIMEOUT_CONNECT, 5),
                         )
                     except Exception:
                         pass
                     threading.Thread(target=handle_command, args=(data,), daemon=True).start()
+            else:
+                _consecutive_errors += 1
         except Exception as e:
-            err(f"[폴링] 에러: {e}")
+            _consecutive_errors += 1
+            if _consecutive_errors <= 3 or _consecutive_errors % 10 == 0:
+                err(f"[폴링] 에러 ({_consecutive_errors}회): {e}")
+            # 연속 에러 5회 → 세션 재생성
+            if _consecutive_errors >= 5:
+                log(f"[폴링] 연속 에러 {_consecutive_errors}회 → 세션 재생성")
+                try:
+                    _session.close()
+                except Exception:
+                    pass
+                _session = requests.Session()
+                _session.headers.update(_headers())
+                _consecutive_errors = 0
+                time.sleep(5)
+                continue
         time.sleep(POLL_INTERVAL)
 
 
@@ -670,12 +692,14 @@ def _poll_thread():
 # ==================================================
 def _status_thread():
     log("[상태보고] 시작")
+    _sess = requests.Session()
+    _sess.headers.update(_headers())
+    _errs = 0
     while True:
         try:
             with _state_lock:
                 state = macro_state
                 pid = macro_proc.pid if macro_proc and macro_proc.poll() is None else None
-            # info.txt에서 token 읽기 (설정 완료 여부 확인)
             _token = ""
             try:
                 if os.path.exists(INFO_TXT):
@@ -686,7 +710,7 @@ def _status_thread():
             except Exception:
                 pass
             _setup_ok = (pc_id not in ("PC-??", "PC-?", "") and _token != "")
-            requests.post(
+            r = _sess.post(
                 f"{CONTROL_SERVER}/updater/status/{pc_id}",
                 json={
                     "pc_id": pc_id,
@@ -695,11 +719,23 @@ def _status_thread():
                     "updater_version": UPDATER_VERSION,
                     "setup_complete": _setup_ok,
                 },
-                headers=_headers(),
                 timeout=(TIMEOUT_CONNECT, 5),
             )
+            if r.status_code == 200:
+                _errs = 0
+            else:
+                _errs += 1
         except Exception as e:
-            err(f"[상태보고] 에러: {e}")
+            _errs += 1
+            if _errs <= 3 or _errs % 10 == 0:
+                err(f"[상태보고] 에러 ({_errs}회): {e}")
+            if _errs >= 5:
+                log("[상태보고] 세션 재생성")
+                try: _sess.close()
+                except: pass
+                _sess = requests.Session()
+                _sess.headers.update(_headers())
+                _errs = 0
         time.sleep(STATUS_INTERVAL)
 
 
