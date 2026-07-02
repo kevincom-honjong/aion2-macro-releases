@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.185",
+    "version": "1.1.186",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "af81b8c18dc59d22fa335b8f30ebab0e148ec4db0d6afb228247d23500b9f8c7",
+    "sha256": "6f60af980cbf3f52f997b1d5070e1ec2b243bc62d6b9818bda3cdef66f2c9e24",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
