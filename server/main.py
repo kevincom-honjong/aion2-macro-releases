@@ -625,7 +625,7 @@ function buildCard(pc) {
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${pc.macro_version}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1.5 text-xs text-gray-600">${macroVer}${macroVer?'<span class="text-gray-800 mx-1">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="${uvcls} ml-0.5">v${pc._updater_version}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="${uvcls}">v${pc._updater_version}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
@@ -1555,7 +1555,7 @@ function handleCharInfoMsg(msg) {
 (async()=>{
   const res=await fetch('/status');
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
-  renderCards(); loadCmdHistory(); connectWS();
+  renderCards(); loadCmdHistory(); loadCharTable(); connectWS();
   setInterval(renderCards,60000);
 })();
 </script>
