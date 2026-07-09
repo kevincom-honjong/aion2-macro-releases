@@ -2107,6 +2107,10 @@ import urllib.parse as _urlparse
 
 # GitHub raw URL 베이스
 _GH_RAW = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main"
+# jsDelivr CDN 베이스 (raw rate limit(429) 우회용 — 작은 파일=이미지 배포에 사용)
+# raw는 IP당 요청수 제한이 빡세서 13PC×이미지150개 동시 다운로드 시 429남.
+# jsDelivr는 GitHub 미러 CDN이라 rate limit 사실상 없음. (exe는 용량때문에 jsDelivr 불가 → Releases)
+_GH_CDN = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-releases@main"
 
 _version_cache = {"data": {}, "ts": 0}
 
@@ -2162,8 +2166,9 @@ async def updater_check(request: Request):
         result["exe_update"] = {
             "version":      server_exe_ver,
             "sha256":       exe_info.get("sha256"),
-            "download_url": exe_info.get("download_url",
-                f"{_GH_RAW}/exe/{_urlparse.quote(exe_info.get('filename', ''))}"),
+            # exe(71MB)는 GitHub Releases(CDN)에서 배포 — raw 429 우회. jsDelivr는 용량초과라 불가.
+            # 규칙: 릴리스 태그 v<버전>, 에셋 이름 macro-<버전>.exe (릴리스 미리 만들어둬야 함)
+            "download_url": f"https://github.com/kevincom-honjong/aion2-macro-releases/releases/download/v{server_exe_ver}/macro-{server_exe_ver}.exe",
         }
 
     # 이미지 업데이트 체크
@@ -2177,7 +2182,7 @@ async def updater_check(request: Request):
             images_to_update.append({
                 "filename":     fname,
                 "sha256":       server_hash,
-                "download_url": f"{_GH_RAW}/images2/{_urlparse.quote(fname)}",
+                "download_url": f"{_GH_CDN}/images2/{_urlparse.quote(fname)}",
             })
     if images_to_update:
         result["images_update"] = images_to_update
