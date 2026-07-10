@@ -431,19 +431,21 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('power_power')">파워전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('odd_energy')">오드에너지 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('chowol_ticket')">초월 티켓 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('wonjeong_ticket')">원정 티켓 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('daily_ticket')">일일던전 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('nightmare_ticket')">악몽 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('awakening_ticket')">각성 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('sanctuary')">성역 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('mail_count')">우편 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('potion_count')">물약 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('return_scroll_count')">귀환 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('extract_level')">정기추출 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">아르카나</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">장비</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gakin_kina')">각인키나 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('trade_kina')">거래키나 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">창고키나 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('abyss_time')">어비스 ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('abyss_point')">어비스P ⇅</th>
             </tr>
           </thead>
           <tbody id="char-tbody" class="divide-y divide-gray-800"></tbody>
@@ -1211,8 +1213,6 @@ function renderCharTable() {
     const clsColor = classColors[cls] || 'text-gray-400';
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
-    const chowol = r.chowol_ticket || '–';
-    const wonjeong = r.wonjeong_ticket || '–';
     const daily = r.daily_ticket || '–';
     const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
     const nmProg = r.nightmare_progress || '';
@@ -1220,6 +1220,10 @@ function renderCharTable() {
     const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/3` : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
+    const potion = r.potion_count != null ? r.potion_count : '–';
+    const scroll = r.return_scroll_count != null ? r.return_scroll_count : '–';
+    const potionLow = typeof r.potion_count === 'number' && r.potion_count <= 50;
+    const scrollLow = typeof r.return_scroll_count === 'number' && r.return_scroll_count <= 50;
     const ext = r.extract_level || '–';
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
     const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
@@ -1228,10 +1232,6 @@ function renderCharTable() {
     const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
     const oddFirst = odd !== '–' ? parseInt(odd) : 0;
     const oddFull = oddFirst >= 840;
-    const chowolNum = chowol !== '–' ? parseInt(chowol) : 0;
-    const chowolFull = chowolNum >= 7;
-    const wonjeongNum = wonjeong !== '–' ? parseInt(wonjeong) : 0;
-    const wonjeongFull = wonjeongNum >= 14;
     const dailyNum = daily !== '–' ? parseInt(daily) : 0;
     const dailyFull = dailyNum >= 14;
     const nmFull = r.nightmare_ticket >= 14;
@@ -1241,7 +1241,7 @@ function renderCharTable() {
     const sancMax = sancParts ? parseInt(sancParts[2]) : 0;
     const sancFull = r.gear_power >= 2700 && sancMax > 0 && sancFirst >= sancMax;
     const extFull = ext.includes('입문') && ext.includes('50');
-    const hasRed = oddFull || chowolFull || wonjeongFull || dailyFull || nmFull || awFull || sancFull || extFull;
+    const hasRed = oddFull || dailyFull || nmFull || awFull || sancFull || extFull;
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 text-center">
@@ -1254,19 +1254,21 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
       <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
-      <td class="px-3 py-1.5">${chowolFull?rc(chowol):chowol}</td>
-      <td class="px-3 py-1.5">${wonjeongFull?rc(wonjeong):wonjeong}</td>
       <td class="px-3 py-1.5 text-center">${dailyFull?rc(daily):daily}</td>
       <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):nm}</td>
       <td class="px-3 py-1.5 text-center">${awFull?rc(aw):aw}</td>
       <td class="px-3 py-1.5">${sancFull?rc(sanc):sanc}</td>
       <td class="px-3 py-1.5 text-center">${mail}</td>
+      <td class="px-3 py-1.5 text-center">${potionLow?rc(potion):potion}</td>
+      <td class="px-3 py-1.5 text-center">${scrollLow?rc(scroll):scroll}</td>
       <td class="px-3 py-1.5">${extFull?rc(ext):ext}</td>
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
       <td class="px-3 py-1.5 text-center">${equipLink}</td>
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-orange-400">${trade}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
+      <td class="px-3 py-1.5 text-center text-fuchsia-300">${r.abyss_time || '–'}</td>
+      <td class="px-3 py-1.5 text-right text-fuchsia-200">${r.abyss_point ? Number(r.abyss_point).toLocaleString() : '–'}</td>
     </tr>`;
   }
 
@@ -1284,7 +1286,7 @@ function renderCharTable() {
     const pcRows = groups[pc];
     const redCount = pcRows.filter(r => {
       const odd = r.odd_energy||''; const sanc = r.sanctuary||''; const ext = r.extract_level||'';
-      return parseInt(odd)>=840 || parseInt(r.chowol_ticket)>=7 || parseInt(r.wonjeong_ticket)>=14 ||
+      return parseInt(odd)>=840 ||
              parseInt(r.daily_ticket)>=14 || r.nightmare_ticket>=14 || r.awakening_ticket>=3 ||
              (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
     }).length;
@@ -1294,7 +1296,7 @@ function renderCharTable() {
     const pcKinaRaw = pcRows[0]?.total_kina;
     const kinaTag = pcKinaRaw ? ` <span class="text-yellow-300 text-xs font-normal ml-1">₭${Number(pcKinaRaw).toLocaleString()}</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="20" class="px-3 py-2 font-bold text-gray-100">
+      <td colspan="22" class="px-3 py-2 font-bold text-gray-100">
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
           <span>${pc}</span>
@@ -1448,8 +1450,6 @@ function renderInfoContent(info) {
     sanctuary:        '성역',
     mail_count:       '우편',
     extract_level:    '정기추출',
-    chowol_ticket:    '초월 티켓',
-    wonjeong_ticket:  '원정 티켓',
     gakin_kina:       '각인키나',
     trade_kina:       '거래키나',
   };
@@ -2088,8 +2088,10 @@ async def get_all_characters(request: Request):
                 "sanctuary": ch.get("sanctuary", ""),
                 "mail_count": ch.get("mail_count", 0),
                 "extract_level": ch.get("extract_level", ""),
-                "chowol_ticket": ch.get("chowol_ticket", 0),
-                "wonjeong_ticket": ch.get("wonjeong_ticket", 0),
+                "potion_count": ch.get("potion_count"),
+                "return_scroll_count": ch.get("return_scroll_count"),
+                "abyss_time": ch.get("abyss_time", ""),
+                "abyss_point": ch.get("abyss_point", 0),
                 "arcana_image": ch.get("arcana_image", False),
                 "equip_image": ch.get("equip_image", False),
                 "gakin_kina": ch.get("gakin_kina", 0),
