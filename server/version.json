@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.199",
+    "version": "1.1.200",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "1e856ffd72e909f1889e98275dcaa6d3ad7476a3187c0b9f53c3cd7197b0fcf2",
+    "sha256": "83e8e683399baa03766b022e8b62fad7f649438fcbafe028c2cd6b681c12225c",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -29,7 +29,7 @@
     "chiyou_5.png": "4ff371741be35ecdbc99d1a3b4d6c0896b3c2456d122fe4ba70ff61b457c60e4",
     "chiyou_6.png": "7530ff92e067411ddad4d0a747f0ff813063f183d84d264dad3f96354d647317",
     "chiyou_7.png": "769fb95541cb64f66bfe744d609c6c4c96a2f8b859cb4abaf0ec9c72ec6f512e",
-    "chiyou_buff.png": "c5fd41a5e5481cbd6f3fe5fb00e6ae4e6c0743632a30c0b1c5619e1d5783f326",
+    "chiyou_buff.png": "05fa091d6ced1789ea223731bb7dd5e5637d6cb15f66b559afc77906e7abf42d",
     "chiyousung.png": "6ca94823c0be9e85ffbc84c70ee514946cec21f3761f46bf145d617d8a52d765",
     "chowol_title.png": "636f21ac0bf3e18090f434bec15dbb1f4b614bd2ab2be6e9bba8af54b26133e9",
     "close.png": "c3c88740bc1560b6f14c7d7bbe1c248c43ec6176da396b1ec03a3064255df549",
@@ -186,6 +186,6 @@
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260619010730",
-  "updated_at": "2026-07-10T12:45:38Z",
+  "updated_at": "2026-07-10T13:47:39Z",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
