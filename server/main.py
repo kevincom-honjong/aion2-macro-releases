@@ -1330,19 +1330,21 @@ function renderCharTable() {
       <th class="px-3 py-1 text-right">장비전투력</th>
       <th class="px-3 py-1 text-right">파워전투력</th>
       <th class="px-3 py-1">오드에너지</th>
-      <th class="px-3 py-1">초월 티켓</th>
-      <th class="px-3 py-1">원정 티켓</th>
       <th class="px-3 py-1 text-center">일일던전</th>
       <th class="px-3 py-1 text-center">악몽</th>
       <th class="px-3 py-1 text-center">각성</th>
       <th class="px-3 py-1">성역</th>
       <th class="px-3 py-1 text-center">우편</th>
+      <th class="px-3 py-1 text-center">물약</th>
+      <th class="px-3 py-1 text-center">귀환</th>
       <th class="px-3 py-1">정기추출</th>
       <th class="px-3 py-1 text-center">아르카나</th>
       <th class="px-3 py-1 text-center">장비</th>
       <th class="px-3 py-1 text-right">각인키나</th>
       <th class="px-3 py-1 text-right">거래키나</th>
       <th class="px-3 py-1 text-right">창고키나</th>
+      <th class="px-3 py-1 text-center">어비스</th>
+      <th class="px-3 py-1 text-right">어비스P</th>
     </tr>`;
     pcRows.forEach(r => {
       html += renderRow(r, idx).replace('<tr ', `<tr data-pc="${pc}" style="display:none" `);
