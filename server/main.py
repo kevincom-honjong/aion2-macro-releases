@@ -9,7 +9,7 @@ Railway 배포용
   DB_PATH             SQLite 파일 경로 (기본: /tmp/macro_control.db)
   PORT                uvicorn 포트 (Railway 자동 설정)
 """
-import os, json, uuid, re, io, zipfile, time
+import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -35,32 +35,58 @@ from database import (
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 API_KEY            = os.getenv("API_KEY", "macro_key_change_me")
 SESSION_TTL        = timedelta(days=7)
+
+# 프로세스 시작마다 고유 — 대시보드가 /ping으로 폴링해 값이 바뀌면 "서버 재시작"으로 보고 자동 새로고침.
+SERVER_BOOT_ID     = uuid.uuid4().hex
+# 세션 서명키.
+#   Railway env SESSION_SECRET(랜덤 문자열)을 설정하면 재배포 후에도 쿠키 유효 → 재로그인 불필요.
+#   미설정 시 부팅마다 랜덤 → 자동 새로고침은 동작하되 재시작 후 1회 재로그인.
+#   ★DASHBOARD_PASSWORD/API_KEY에서 파생하지 않음: 파생하면 토큰 1개 캡처로 비번을 오프라인
+#     브루트포스할 수 있고(API_KEY는 클라 PC에 배포돼 노출↑), 이는 랜덤 토큰 대비 보안 회귀.★
+_SESSION_SECRET_ENV = os.getenv("SESSION_SECRET", "").strip()
+SESSION_SECRET      = (hashlib.sha256(("aion2-session-v1:" + _SESSION_SECRET_ENV).encode()).digest()
+                       if _SESSION_SECRET_ENV else os.urandom(32))
 BUGS_DIR           = os.getenv("BUGS_DIR", "/data/bugs")
 SCREENSHOTS_DIR    = os.getenv("SCREENSHOTS_DIR", "/data/screenshots")
 os.makedirs(BUGS_DIR, exist_ok=True)
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Session store
+# Session (stateless HMAC 서명 토큰 — 서버 재시작에도 유지됨, 인메모리 저장 X)
+#   토큰 형식: base64url(만료ts) "." base64url(HMAC-SHA256(secret, 만료ts))
+#   재배포 후에도 SESSION_SECRET이 동일해 쿠키가 계속 유효 → 재로그인 불필요.
 # ─────────────────────────────────────────────────────────────────────────────
-sessions: dict[str, datetime] = {}   # token → expiry
+def _b64u(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _b64u_dec(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
 def new_session() -> str:
-    token = str(uuid.uuid4())
-    sessions[token] = datetime.now(timezone.utc) + SESSION_TTL
-    return token
+    exp = str(int((datetime.now(timezone.utc) + SESSION_TTL).timestamp())).encode()
+    sig = hmac.new(SESSION_SECRET, exp, hashlib.sha256).digest()
+    return f"{_b64u(exp)}.{_b64u(sig)}"
 
 
 def valid_session(token: Optional[str]) -> bool:
-    if not token or token not in sessions:
+    if not token or "." not in token:
         return False
-    if datetime.now(timezone.utc) > sessions[token]:
-        sessions.pop(token, None)
+    try:
+        p_b64, s_b64 = token.split(".", 1)
+        payload = _b64u_dec(p_b64)
+        sig = _b64u_dec(s_b64)
+    except Exception:
         return False
-    # 사용할 때마다 TTL 갱신 (슬라이딩 세션)
-    sessions[token] = datetime.now(timezone.utc) + SESSION_TTL
-    return True
+    expected = hmac.new(SESSION_SECRET, payload, hashlib.sha256).digest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        exp = int(payload.decode())
+    except Exception:
+        return False
+    return datetime.now(timezone.utc).timestamp() <= exp
 
 
 def check_session(request: Request) -> bool:
@@ -289,6 +315,12 @@ async def do_login(request: Request, response: Response):
 async def do_logout(response: Response):
     response.delete_cookie("session")
     return RedirectResponse("/login")
+
+
+@app.get("/ping")
+async def ping():
+    """재시작 감지용 — 대시보드가 폴링해서 boot 값이 바뀌면 자동 새로고침. (인증 불필요, 랜덤 id만 노출)"""
+    return JSONResponse({"boot": SERVER_BOOT_ID})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -973,10 +1005,23 @@ function connectWS() {
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
   };
-  ws.onclose=()=>{
+  ws.onclose=(e)=>{
     document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-red-500 transition-colors';
+    if(e&&e.code===1008){location.reload();return;}   // 세션 무효(만료 등) → 새로고침으로 로그인 이동
     setTimeout(connectWS,3000);
   };
+}
+
+// ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
+let serverBoot=null;
+async function checkServerBoot(){
+  try{
+    const r=await fetch('/ping',{cache:'no-store'});
+    if(!r.ok)return;
+    const b=(await r.json()).boot;
+    if(serverBoot===null){serverBoot=b;return;}   // 최초 폴링 = 기준값 저장
+    if(b!==serverBoot)location.reload();            // boot 바뀜 = 서버 재시작 → 새로고침
+  }catch(e){/* 재시작 중이라 연결 실패 = 무시, 다음 폴링에서 감지 */}
 }
 
 // ─── 명령 내역 ────────────────────────────────────────────────────────────────
@@ -1560,6 +1605,7 @@ function handleCharInfoMsg(msg) {
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS();
   setInterval(renderCards,60000);
+  checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
 })();
 </script>
 </body></html>"""
