@@ -413,7 +413,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('awakening')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-900/60 hover:bg-orange-700 text-orange-300 transition-colors">각성</button>
   <button onclick="selCmd('abyss')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-900/60 hover:bg-blue-700 text-blue-300 transition-colors">어비스</button>
   <button onclick="selCmd('collect_info')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-900/60 hover:bg-sky-700 text-sky-300 transition-colors">정보수집</button>
-  <input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통)" class="px-2 py-1 rounded-lg text-xs bg-gray-800 border border-gray-700 text-yellow-300 focus:outline-none focus:border-yellow-600" style="width:90px">
+  <input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지" class="px-2 py-1 rounded-lg text-xs bg-gray-800 border border-gray-700 text-yellow-300 focus:outline-none focus:border-yellow-600" style="width:82px">
+  <button id="sale-price-btn" onclick="toggleSalePrice()" class="px-2 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors">확정</button>
   <button onclick="sellAllSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 transition-colors">판매</button>
 </div>
 
@@ -956,21 +957,45 @@ async function selCmd(command, args={}) {
 }
 
 // ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
+// 거래소 가격은 localStorage에 저장(확정) → 사이트 닫았다 열어도·서버 재배포에도 유지.
 function getSalePrice() {
   const el=document.getElementById('sale-price');
   const v=parseInt((el&&el.value)||'0',10);
   return isNaN(v)?0:v;
 }
+function isSalePriceConfirmed(){ return localStorage.getItem('sale_price_confirmed')==='1'; }
+function loadSalePrice() {
+  const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
+  if(!el||!btn) return;
+  const v=localStorage.getItem('sale_price');
+  if(v) el.value=v;
+  if(isSalePriceConfirmed()){ el.readOnly=true; el.classList.add('opacity-60'); btn.textContent='수정'; }
+  else { el.readOnly=false; el.classList.remove('opacity-60'); btn.textContent='확정'; }
+}
+function toggleSalePrice() {
+  const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
+  if(isSalePriceConfirmed()){
+    localStorage.setItem('sale_price_confirmed','0');
+    el.readOnly=false; el.classList.remove('opacity-60'); btn.textContent='확정'; el.focus();
+  } else {
+    const p=parseInt(el.value||'0',10);
+    if(!p||p<=0){alert('거래소 가격을 입력하세요');return;}
+    localStorage.setItem('sale_price', String(p));
+    localStorage.setItem('sale_price_confirmed','1');
+    el.readOnly=true; el.classList.add('opacity-60'); btn.textContent='수정';
+    showToast(`거래소 가격 확정: ${p.toLocaleString()} (유지됨)`);
+  }
+}
 async function sellAllSel() {
   const p=getSalePrice();
-  if(p<=0){alert('거래소 등록 가격을 입력하세요');return;}
+  if(p<=0||!isSalePriceConfirmed()){alert('먼저 거래소 가격을 입력하고 [확정] 하세요');return;}
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   if(!confirm(`선택 ${selectedPcs.size}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
   await selCmd('sell_all',{price:p});
 }
 async function sellAllCard(pc) {
   const p=getSalePrice();
-  if(p<=0){alert('상단 거래소 가격을 먼저 입력하세요');return;}
+  if(p<=0||!isSalePriceConfirmed()){alert('먼저 상단 거래소 가격을 입력하고 [확정] 하세요');return;}
   if(!confirm(`${pc} 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
   closeCardMenu();
   const ok=await sendCmd(pc,'sell_all',{price:p});
@@ -1023,7 +1048,7 @@ function openLogFromMenu(){const id=menuPcId; closeCardMenu(); openLogModal(id);
 async function sellAllFromMenu() {
   if(!menuPcId) return;
   const pc=menuPcId, p=getSalePrice();
-  if(p<=0){alert('상단 거래소 가격을 먼저 입력하세요');return;}
+  if(p<=0||!isSalePriceConfirmed()){alert('먼저 상단 거래소 가격을 입력하고 [확정] 하세요');return;}
   if(!confirm(`${pc} 전 캐릭 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
   closeCardMenu();
   const ok=await sendCmd(pc,'sell_all',{price:p});
@@ -1659,7 +1684,7 @@ function handleCharInfoMsg(msg) {
 (async()=>{
   const res=await fetch('/status');
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
-  renderCards(); loadCmdHistory(); loadCharTable(); connectWS();
+  renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice();
   setInterval(renderCards,60000);
   checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
 })();
