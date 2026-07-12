@@ -2,7 +2,7 @@
 import aiosqlite
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = os.getenv("DB_PATH", "/data/macro_control.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -89,6 +89,16 @@ async def init_db() -> None:
                 filters TEXT DEFAULT '{}'
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS death_events (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                pc_id      TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_death_pc_time ON death_events(pc_id, created_at)"
+        )
         await db.commit()
 
 
@@ -100,11 +110,44 @@ def _now() -> str:
 
 async def upsert_status(pc_id: str, data: dict) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
+        # dead 전환(edge) 감지용으로 이전 상태를 먼저 읽는다.
+        prev_status = None
+        prev_exists = False
+        async with db.execute("SELECT data FROM pc_status WHERE pc_id=?", (pc_id,)) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            prev_exists = True
+            try:
+                prev_status = (json.loads(row[0]) or {}).get("status")
+            except Exception:
+                prev_status = None
         await db.execute(
             "INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)",
             (pc_id, json.dumps(data, ensure_ascii=False), _now()),
         )
+        # non-dead → dead 전환일 때만 사망 이벤트 1건 기록.
+        #   · 반복 "dead" 보고(어비스 사망 유지·30초 자동보고)는 prev==dead라 중복 안 됨.
+        #   · prev_exists 요구: 재배포로 DB 비운 뒤 이미 죽은 PC가 "dead"로 재푸시할 때
+        #     prev=None인 걸 사망으로 오탐하지 않도록(첫 보고가 dead인 정상 시나리오는 없음).
+        if prev_exists and prev_status != "dead" and data.get("status") == "dead":
+            await db.execute(
+                "INSERT INTO death_events(pc_id, created_at) VALUES(?,?)", (pc_id, _now())
+            )
+            # 테이블 비대화 방지 — 6시간 지난 이벤트 정리(30분 집계엔 넉넉).
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
+            await db.execute("DELETE FROM death_events WHERE created_at < ?", (cutoff,))
         await db.commit()
+
+
+async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
+    """cutoff_iso(UTC ISO) 이후 pc_id별 사망 이벤트 수."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT pc_id, COUNT(*) FROM death_events WHERE created_at >= ? GROUP BY pc_id",
+            (cutoff_iso,),
+        ) as cur:
+            rows = await cur.fetchall()
+    return {r[0]: r[1] for r in rows}
 
 
 async def get_all_statuses() -> list[dict]:
@@ -140,6 +183,7 @@ async def delete_pc_all_data(pc_id: str) -> None:
         await db.execute("DELETE FROM updater_commands WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM logs             WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM char_info        WHERE pc_id=?", (pc_id,))
+        await db.execute("DELETE FROM death_events      WHERE pc_id=?", (pc_id,))
         await db.commit()
 
 

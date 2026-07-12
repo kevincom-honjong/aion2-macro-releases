@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 
 from database import (
     init_db, upsert_status, get_all_statuses, get_status, delete_status,
-    delete_pc_all_data,
+    delete_pc_all_data, get_death_counts_since,
     insert_command, get_pending_command, ack_command, cancel_command, get_logs,
     insert_log, get_recent_commands,
     upsert_updater_status, get_all_updater_statuses,
@@ -176,6 +176,10 @@ async def _build_full_state() -> list[dict]:
     updater_statuses = await get_all_updater_statuses()
     all_filters = await get_all_slot_filters()
 
+    # 최근 30분 사망 횟수 (pc_id별)
+    _death_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    death_counts = await get_death_counts_since(_death_cutoff)
+
     updater_map: dict[str, dict] = {}
     for u in updater_statuses:
         pid = u.get("pc_id")
@@ -208,6 +212,7 @@ async def _build_full_state() -> list[dict]:
             # updater 기록 자체가 없으면 offline
             pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(pid, 0)
+        pc["deaths_30m"] = death_counts.get(pid, 0)
         pc["slot_filters"] = all_filters.get(pid, {})
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
@@ -232,6 +237,7 @@ async def _build_full_state() -> list[dict]:
                 "_updater_state":   u.get("macro_state", "unknown"),
                 "_updater_version": u.get("updater_version", ""),
                 "_bug_count":       bug_counts.get(pid, 0),
+                "deaths_30m":       death_counts.get(pid, 0),
             })
     return statuses
 
@@ -696,6 +702,7 @@ function buildCard(pc) {
       <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="text-gray-400">서버</span> <span class="text-white font-medium">${pc.server}</span></div>`:''}
       <div><span class="text-gray-400">최근</span> <span class="text-white font-medium">${relTime(pc.last_active)}</span></div>
+      <div><span class="text-gray-400">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-white font-medium'}">${pc.deaths_30m||0}회</span></div>
     </div>
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
