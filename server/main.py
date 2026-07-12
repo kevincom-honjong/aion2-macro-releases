@@ -544,7 +544,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button class="menu-item text-orange-400" onclick="cardCmd('exit')">✕ 매크로 종료</button>
   <button class="menu-item text-yellow-400" onclick="cardCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-purple-400" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
-  <button class="menu-item text-blue-400"   onclick="cardCmd('sell')">$ 판매</button>
+  <button class="menu-item text-yellow-400" onclick="sellAllFromMenu()">$ 판매(전 캐릭)</button>
   <button class="menu-item text-cyan-400"   onclick="collectInfoFromMenu()">📡 정보수집</button>
   <button class="menu-item text-gray-300"   onclick="cardCmd('go_home')">⌂ 귀환</button>
   <div class="border-t border-gray-700 my-1"></div>
@@ -1019,6 +1019,17 @@ function cardCmdSwitch() {
 }
 
 function openLogFromMenu(){const id=menuPcId; closeCardMenu(); openLogModal(id);}
+
+async function sellAllFromMenu() {
+  if(!menuPcId) return;
+  const pc=menuPcId, p=getSalePrice();
+  if(p<=0){alert('상단 거래소 가격을 먼저 입력하세요');return;}
+  if(!confirm(`${pc} 전 캐릭 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
+  closeCardMenu();
+  const ok=await sendCmd(pc,'sell_all',{price:p});
+  showToast(ok?`✓ 판매 → ${pc} (거래소가 ${p.toLocaleString()})`:`✗ 판매 전송 실패`);
+  loadCmdHistory();
+}
 
 async function screenshotFromMenu() {
   if(!menuPcId) return;
