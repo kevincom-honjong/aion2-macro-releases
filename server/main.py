@@ -412,12 +412,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="selCmd('nightmare')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-pink-900/60 hover:bg-pink-700 text-pink-300 transition-colors">악몽</button>
   <button onclick="selCmd('awakening')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-900/60 hover:bg-orange-700 text-orange-300 transition-colors">각성</button>
   <button onclick="selCmd('abyss')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-900/60 hover:bg-blue-700 text-blue-300 transition-colors">어비스</button>
-  <button onclick="selCmd('mission')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-teal-900/60 hover:bg-teal-700 text-teal-300 transition-colors">사명</button>
-  <button onclick="selCmd('shugo')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors">슈고</button>
-  <button onclick="selCmd('subquest')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-lime-900/60 hover:bg-lime-700 text-lime-300 transition-colors">서브퀘</button>
-  <button onclick="selCmd('sealed_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-900/60 hover:bg-rose-700 text-rose-300 transition-colors">봉인던전</button>
-  <button onclick="selCmd('wardrobe')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-violet-900/60 hover:bg-violet-700 text-violet-300 transition-colors">옷장</button>
   <button onclick="selCmd('collect_info')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-900/60 hover:bg-sky-700 text-sky-300 transition-colors">정보수집</button>
+  <input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통)" class="px-2 py-1 rounded-lg text-xs bg-gray-800 border border-gray-700 text-yellow-300 focus:outline-none focus:border-yellow-600" style="width:90px">
+  <button onclick="sellAllSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 transition-colors">판매</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
@@ -958,6 +955,29 @@ async function selCmd(command, args={}) {
   loadCmdHistory();
 }
 
+// ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
+function getSalePrice() {
+  const el=document.getElementById('sale-price');
+  const v=parseInt((el&&el.value)||'0',10);
+  return isNaN(v)?0:v;
+}
+async function sellAllSel() {
+  const p=getSalePrice();
+  if(p<=0){alert('거래소 등록 가격을 입력하세요');return;}
+  if(!selectedPcs.size){alert('PC를 선택하세요');return;}
+  if(!confirm(`선택 ${selectedPcs.size}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
+  await selCmd('sell_all',{price:p});
+}
+async function sellAllCard(pc) {
+  const p=getSalePrice();
+  if(p<=0){alert('상단 거래소 가격을 먼저 입력하세요');return;}
+  if(!confirm(`${pc} 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
+  closeCardMenu();
+  const ok=await sendCmd(pc,'sell_all',{price:p});
+  showToast(ok?`✓ 판매 → ${pc} (거래소가 ${p.toLocaleString()})`:`✗ 판매 전송 실패`);
+  loadCmdHistory();
+}
+
 // ─── 카드 메뉴 ────────────────────────────────────────────────────────────────
 function openCardMenu(pc_id, e) {
   e.stopPropagation();
@@ -1386,12 +1406,8 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300 whitespace-nowrap">일일던전</button>
             <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
-            <button onclick="sendCmd('${pc}','mission')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap">사명</button>
-            <button onclick="sendCmd('${pc}','shugo')" class="px-1.5 py-0.5 text-xs rounded bg-amber-900/60 hover:bg-amber-700 text-amber-300 whitespace-nowrap">슈고</button>
-            <button onclick="sendCmd('${pc}','subquest')" class="px-1.5 py-0.5 text-xs rounded bg-lime-900/60 hover:bg-lime-700 text-lime-300 whitespace-nowrap">서브퀘</button>
-            <button onclick="sendCmd('${pc}','sealed_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-rose-900/60 hover:bg-rose-700 text-rose-300 whitespace-nowrap">봉인던전</button>
-            <button onclick="sendCmd('${pc}','wardrobe')" class="px-1.5 py-0.5 text-xs rounded bg-violet-900/60 hover:bg-violet-700 text-violet-300 whitespace-nowrap">옷장</button>
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
+            <button onclick="sellAllCard('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">판매</button>
           </div>
         </div>
       </td>
