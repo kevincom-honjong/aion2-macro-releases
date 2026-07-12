@@ -7,6 +7,9 @@ from datetime import datetime, timezone, timedelta
 DB_PATH = os.getenv("DB_PATH", "/data/macro_control.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
+# 같은 PC의 사망을 이 초 이내 중복 기록하지 않음(사망→부활 처리 중 상태 오가며 중복 방지).
+DEATH_DEBOUNCE_SEC = 60
+
 
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -130,12 +133,25 @@ async def upsert_status(pc_id: str, data: dict) -> None:
         #   · prev_exists 요구: 재배포로 DB 비운 뒤 이미 죽은 PC가 "dead"로 재푸시할 때
         #     prev=None인 걸 사망으로 오탐하지 않도록(첫 보고가 dead인 정상 시나리오는 없음).
         if prev_exists and prev_status != "dead" and data.get("status") == "dead":
-            await db.execute(
-                "INSERT INTO death_events(pc_id, created_at) VALUES(?,?)", (pc_id, _now())
-            )
-            # 테이블 비대화 방지 — 6시간 지난 이벤트 정리(30분 집계엔 넉넉).
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
-            await db.execute("DELETE FROM death_events WHERE created_at < ?", (cutoff,))
+            # 디바운스: 같은 PC가 최근 DEATH_DEBOUNCE_SEC 내 이미 사망 기록됐으면 스킵.
+            #   사망→부활 처리 중 상태가 dead↔hunting/abyss로 잠깐 오가며(30초 자동보고 개입,
+            #   부활 실패 재감지 등) 같은 사망이 여러 전환으로 중복 기록되는 것을 방지.
+            #   실제 연속 사망은 부활+이동(일반 ~80s+) 또는 Delete 재시작(어비스 수 분)이 필요해
+            #   60초보다 훨씬 길므로, 진짜 사망을 합칠 위험 없이 중복만 제거.
+            debounce_cut = (datetime.now(timezone.utc)
+                            - timedelta(seconds=DEATH_DEBOUNCE_SEC)).strftime("%Y-%m-%dT%H:%M:%S")
+            async with db.execute(
+                "SELECT 1 FROM death_events WHERE pc_id=? AND created_at >= ? LIMIT 1",
+                (pc_id, debounce_cut),
+            ) as cur:
+                dup = await cur.fetchone()
+            if dup is None:
+                await db.execute(
+                    "INSERT INTO death_events(pc_id, created_at) VALUES(?,?)", (pc_id, _now())
+                )
+                # 테이블 비대화 방지 — 6시간 지난 이벤트 정리(30분 집계엔 넉넉).
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
+                await db.execute("DELETE FROM death_events WHERE created_at < ?", (cutoff,))
         await db.commit()
 
 
