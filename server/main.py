@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 
 from database import (
     init_db, upsert_status, get_all_statuses, get_status, delete_status,
-    delete_pc_all_data, get_death_counts_since,
+    delete_pc_all_data, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, ack_command, cancel_command, get_logs,
     insert_log, get_recent_commands,
     upsert_updater_status, get_all_updater_statuses,
@@ -327,6 +327,28 @@ async def do_logout(response: Response):
 async def ping():
     """재시작 감지용 — 대시보드가 폴링해서 boot 값이 바뀌면 자동 새로고침. (인증 불필요, 랜덤 id만 노출)"""
     return JSONResponse({"boot": SERVER_BOOT_ID})
+
+
+@app.get("/debug/deaths")
+async def debug_deaths(request: Request):
+    """[진단용] death_events 원본 + 현재시각/컷오프/집계. 사망수 안 줄어드는 원인 추적."""
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+    events = await get_all_death_events()
+    counts = await get_death_counts_since(cutoff)
+    # pc별 이벤트 타임스탬프 나열
+    by_pc: dict[str, list] = {}
+    for e in events:
+        by_pc.setdefault(e["pc_id"], []).append(e["created_at"])
+    return JSONResponse({
+        "server_now_utc": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "cutoff_30m_utc": cutoff,
+        "total_events": len(events),
+        "counts_30m": counts,
+        "events_by_pc": by_pc,
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────

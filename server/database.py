@@ -150,6 +150,16 @@ async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
     return {r[0]: r[1] for r in rows}
 
 
+async def get_all_death_events() -> list[dict]:
+    """[진단용] 모든 death_events (pc_id, created_at) 최신순."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT pc_id, created_at FROM death_events ORDER BY created_at DESC LIMIT 500"
+        ) as cur:
+            rows = await cur.fetchall()
+    return [{"pc_id": r[0], "created_at": r[1]} for r in rows]
+
+
 async def get_all_statuses() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
