@@ -1284,10 +1284,10 @@ function fmtSlotUptime(slotUptime, activeSlot, fallback) {
   if (hours == null && fallback) hours = Number(fallback);
   if (hours == null) return '–';
   const totalMin = Math.round(hours * 60);
-  if (totalMin < 60) return totalMin + ' 분';
+  if (totalMin < 60) return totalMin + 'm';
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
-  return m > 0 ? h + '시간 ' + m + '분' : h + '시간';
+  return m > 0 ? h + 'h ' + m + 'm' : h + 'h';
 }
 function fmtAt(iso) {
   if (!iso) return '–';
