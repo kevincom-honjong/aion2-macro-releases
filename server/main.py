@@ -655,9 +655,9 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
     const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:38px" title="${name}${done?' ✓ '+time:isActive?' 진행 중':''}">
+      style="min-width:0" title="${name}${done?' ✓ '+time:isActive?' 진행 중':''}">
       <span class="font-bold text-xs leading-none">${icon}</span>
-      <span style="font-size:9px;line-height:1.2;max-width:38px;overflow:hidden;white-space:nowrap">${short}</span>
+      <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap">${short}</span>
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
   }).join('');
@@ -666,7 +666,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
       <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span></span>
       ${pc._total_kina?`<span class="text-yellow-400 font-medium" style="font-size:10px">창고키나: ₭${Number(pc._total_kina).toLocaleString('en-US')}</span>`:''}
     </div>
-    <div class="flex gap-1">${slots}</div>
+    <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
   </div>`;
 }
 
