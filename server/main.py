@@ -1715,7 +1715,7 @@ async def all_statuses(request: Request):
 async def pc_logs(pc_id: str, request: Request):
     if not check_session(request):
         raise HTTPException(status_code=401)
-    logs = await get_logs(pc_id, limit=1000)
+    logs = await get_logs(pc_id, limit=2000)
     return JSONResponse({"logs": logs})
 
 

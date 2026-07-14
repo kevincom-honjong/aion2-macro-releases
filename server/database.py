@@ -308,12 +308,13 @@ async def insert_log(pc_id: str, level: str, message: str) -> None:
             (pc_id, level, message, _now()),
         )
         await db.commit()
-    # 오래된 로그 자동 정리 (PC당 최대 500개)
+    # 오래된 로그 자동 정리 (PC당 최대 3000개 — 스팸 로그는 클라에서 서버 전송 제외하므로
+    # 중요 이벤트만 3000개면 몇 시간~며칠치 보존됨)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             DELETE FROM logs WHERE pc_id=? AND id NOT IN (
-                SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT 500
+                SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT 3000
             )
             """,
             (pc_id, pc_id),
