@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.222",
+    "version": "1.1.223",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "354d41ec98f0a8b9efe04167e7dba1e3be3a88841e30b2d717397739ff89a6b8",
+    "sha256": "35f7bb9a9930b62f4cc15bbc0c520c7e99fd3d2e6dd6809ef5f24d02189fa7b1",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -179,7 +179,9 @@
     "치유성.png": "31e4131e3a0f2487b0fc97097171b4d23dbb44d97945cc7a2c484e3d79ab4b36",
     "화면 캡처 2026-01-14 011016.png": "34cdc0cb2078d857e63773e4e23ad9f69ccb920f568513fbf51d5e9b36a9965d",
     "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb",
-    "gwonsung.png": "8d962082e9ec56640d21ff38b9cf58cb47468b35f7a05291afe68337e7e28f6d"
+    "gwonsung.png": "8d962082e9ec56640d21ff38b9cf58cb47468b35f7a05291afe68337e7e28f6d",
+    "eternal_island.png": "b7e9282fcd24488a556df6fe31dfaa8c6a67e45e6cecca852f08a6942d7fab08",
+    "eternal_map_target.png": "57abd62cdf75bb2ac6455e442af49f7837bb62631edc7827dea07b69d06d707a"
   },
   "updater": {
     "version": "3.0.2",
