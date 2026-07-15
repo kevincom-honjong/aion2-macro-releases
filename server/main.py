@@ -628,6 +628,14 @@ const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray
 
 function fmtKina(n) { return (!n&&n!==0)?'–':'₭'+Number(n).toLocaleString('en-US'); }
 function fmtRate(n) { return (!n&&n!==0)?'–':'₭'+Number(n).toLocaleString('en-US')+'/hr'; }
+// 큰 키나 축약: 1천만↑ → X.X억, 1만↑ → X만 (카드 창고키나가 길고 작게 보이던 것 개선)
+function fmtKinaShort(n) {
+  if (n==null) return '–';
+  const a=Math.abs(n);
+  if (a>=1e7) return '₭'+(n/1e8).toFixed(1)+'억';
+  if (a>=1e4) return '₭'+Math.round(n/1e4).toLocaleString('en-US')+'만';
+  return '₭'+Number(n).toLocaleString('en-US');
+}
 function relTime(iso) {
   if (!iso) return '–';
   const d = Math.floor((Date.now()-new Date(iso+'Z').getTime())/1000);
@@ -666,7 +674,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
       <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span></span>
-      ${pc._total_kina?`<span class="text-yellow-400 font-medium" style="font-size:10px">창고키나: ₭${Number(pc._total_kina).toLocaleString('en-US')}</span>`:''}
+      ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
   </div>`;
@@ -719,7 +727,7 @@ function buildCard(pc) {
     </div>
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
-      <div><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+' % / h' : '–'}</span></div>
+      <div class="whitespace-nowrap"><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
       <div class="col-span-2"><span class="text-gray-400">맵</span> <span class="text-white font-medium">${pc.map_name||'–'}</span></div>
       <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="text-gray-400">서버</span> <span class="text-white font-medium">${pc.server}</span></div>`:''}
