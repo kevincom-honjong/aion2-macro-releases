@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.236",
+    "version": "1.1.237",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "d67ca66c3c50bb04cc7e1c565a774f2810b0a88bcd2f8f32c9d42a3c3e43224e",
+    "sha256": "96e348b996a4ab28305045b42461ca5d74ee7b9b1403f339d41f5bbb36d0ae05",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -190,6 +190,6 @@
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260619010730",
-  "updated_at": "2026-07-15T14:40:16Z",
+  "updated_at": "2026-07-15T16:22:53Z",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
