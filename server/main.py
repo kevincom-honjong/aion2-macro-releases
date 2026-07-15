@@ -1711,7 +1711,12 @@ function handleCharInfoMsg(msg) {
 async def dashboard(request: Request):
     if not check_session(request):
         return RedirectResponse("/login")
-    return HTML_DASHBOARD
+    # ★no-store: 대시보드 HTML을 브라우저가 캐시해 옛 버전(옛 컬럼/JS)을 보여주던 문제 방지.
+    #   배포 때마다 새 대시보드가 바로 뜨게 함(컬럼 어긋남 등 stale 렌더 방지).
+    return HTMLResponse(HTML_DASHBOARD, headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache", "Expires": "0",
+    })
 
 
 @app.get("/status")
