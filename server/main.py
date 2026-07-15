@@ -479,7 +479,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
           oninput="filterCharTable()">
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm text-left">
+        <table class="w-full text-sm text-left whitespace-nowrap">
           <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
             <tr>
               <th class="px-3 py-2 text-center w-8">✓</th>
