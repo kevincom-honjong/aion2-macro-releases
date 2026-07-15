@@ -31,14 +31,19 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.2"
+UPDATER_VERSION  = "3.0.3"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
 CONTROL_API_KEY  = "aion2_secret_2026"
 
 TIMEOUT_CONNECT  = 15
-TIMEOUT_DOWNLOAD = 120
+TIMEOUT_DOWNLOAD = 180   # 청크 간 최대 대기(초). 75MB 느린망 대비 120→180
+
+# 다운로드 재시도: 대시보드 '재시작' 업데이트가 75MB 받다 한 번 삐끗(순단/타임아웃)하면
+# 재시도 없이 실패 → 옛 버전으로 재시작하던 문제 해결. 재시도마다 백오프 후 처음부터 다시 받음.
+DOWNLOAD_MAX_RETRIES  = 4
+DOWNLOAD_RETRY_BACKOFF = (3, 8, 15)   # 시도 2·3·4 전 대기(초)
 
 MACRO_EXE        = r"C:\auto\혼종_통합_자동.exe"
 MACRO_EXE_BACKUP = r"C:\auto\혼종_통합_자동.exe.bak"
@@ -147,36 +152,61 @@ def get_local_image_hashes() -> dict:
     return hashes
 
 
-def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool:
-    tmp_path = dest_path + ".tmp"
-    try:
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        r = requests.get(url, stream=True,
-                         timeout=(TIMEOUT_CONNECT, TIMEOUT_DOWNLOAD))
-        r.raise_for_status()
-        with open(tmp_path, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=65536):
-                f.write(chunk)
-        if expected_sha256:
-            actual = sha256_file(tmp_path)
-            if actual != expected_sha256:
-                err(f"[다운로드] 해시 불일치: {os.path.basename(dest_path)}")
-                os.remove(tmp_path)
-                return False
-        shutil.move(tmp_path, dest_path)
-        os.utime(dest_path, None)
-        return True
-    except requests.exceptions.ConnectionError:
-        err(f"[다운로드] 연결 실패: {url}")
-    except requests.exceptions.Timeout:
-        err(f"[다운로드] 타임아웃: {url}")
-    except Exception as e:
-        err(f"[다운로드] 실패 {url}: {e}")
-    if os.path.exists(tmp_path):
+def _safe_remove(path: str):
+    if os.path.exists(path):
         try:
-            os.remove(tmp_path)
+            os.remove(path)
         except Exception:
             pass
+
+
+def _download_once(url: str, tmp_path: str, dest_path: str, expected_sha256):
+    """1회 시도. 성공 시 (True, bytes), 실패 시 (False, 사유문자열)."""
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    r = requests.get(url, stream=True, timeout=(TIMEOUT_CONNECT, TIMEOUT_DOWNLOAD))
+    r.raise_for_status()
+    written = 0
+    with open(tmp_path, 'wb') as f:
+        for chunk in r.iter_content(chunk_size=65536):
+            if chunk:
+                f.write(chunk)
+                written += len(chunk)
+    if expected_sha256 and sha256_file(tmp_path) != expected_sha256:
+        return False, "해시 불일치"
+    shutil.move(tmp_path, dest_path)
+    os.utime(dest_path, None)
+    return True, written
+
+
+def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool:
+    """네트워크가 흔들려도 끝까지 받도록 재시도. 실패(순단/타임아웃/스트림끊김/해시불일치)마다
+    tmp 정리 후 백오프 대기하고 처음부터 다시 받음. 대시보드 '재시작' 업데이트 안정화 핵심."""
+    tmp_path = dest_path + ".tmp"
+    last_reason = ""
+    name = os.path.basename(dest_path)
+    for attempt in range(1, DOWNLOAD_MAX_RETRIES + 1):
+        try:
+            ok, info = _download_once(url, tmp_path, dest_path, expected_sha256)
+            if ok:
+                if attempt > 1:
+                    log(f"[다운로드] {name} 재시도 성공 (시도 {attempt}/{DOWNLOAD_MAX_RETRIES}, {info//1024}KB)")
+                return True
+            last_reason = info   # 해시 불일치
+        except requests.exceptions.ConnectionError:
+            last_reason = "연결 실패"
+        except requests.exceptions.Timeout:
+            last_reason = "타임아웃"
+        except requests.exceptions.ChunkedEncodingError:
+            last_reason = "스트림 끊김"
+        except Exception as e:
+            last_reason = str(e)
+        _safe_remove(tmp_path)
+        err(f"[다운로드] {name} 실패 (시도 {attempt}/{DOWNLOAD_MAX_RETRIES}, {last_reason})")
+        if attempt < DOWNLOAD_MAX_RETRIES:
+            backoff = DOWNLOAD_RETRY_BACKOFF[min(attempt - 1, len(DOWNLOAD_RETRY_BACKOFF) - 1)]
+            log(f"[다운로드] {backoff}초 후 재시도...")
+            time.sleep(backoff)
+    err(f"[다운로드] {name} 최종 실패 ({DOWNLOAD_MAX_RETRIES}회 시도, 마지막: {last_reason}): {url}")
     return False
 
 
