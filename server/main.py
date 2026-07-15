@@ -1464,6 +1464,7 @@ function renderCharTable() {
       <th class="px-3 py-1">#</th>
       <th class="px-3 py-1">이름</th>
       <th class="px-3 py-1">직업</th>
+      <th class="px-3 py-1 text-center">수집</th>
       <th class="px-3 py-1 text-right">장비전투력</th>
       <th class="px-3 py-1 text-right">파워전투력</th>
       <th class="px-3 py-1">오드에너지</th>
