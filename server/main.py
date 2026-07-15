@@ -486,6 +486,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('slot')"># ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('name')">이름 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('char_class')">직업 ⇅</th>
+              <th class="px-3 py-2 text-center">수집</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('gear_power')">장비전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('power_power')">파워전투력 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('odd_energy')">오드에너지 ⇅</th>
@@ -1308,7 +1309,9 @@ function toggleCharTable() {
 
 async function loadCharTable() {
   try {
-    const r = await fetch('/characters');
+    // ★캐시버스터+no-store: 브라우저가 GET /characters를 캐시해 새로고침 눌러도 옛 데이터
+    //   보여주던 문제 수정(수집 직후 갱신 안 되던 원인).
+    const r = await fetch('/characters?t=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
     charTableData = d.characters || [];
@@ -1316,6 +1319,13 @@ async function loadCharTable() {
     renderCharTable();
     refreshSummary(Object.values(state));
   } catch(e) { console.error('캐릭터 테이블 로드 실패', e); }
+}
+
+// 캐릭터 1명(슬롯)만 정보수집 — 스프레드 각 행의 📡 버튼. 나머지 슬롯은 서버가 병합 보존.
+async function collectSlot(pc, slot) {
+  const ok = await sendCmd(pc, 'collect_info', {slot});
+  showToast(ok ? `📡 ${pc} 슬롯 ${slot} 단일 정보수집 요청` : `${pc} 요청 실패`);
+  if (typeof loadCmdHistory === 'function') loadCmdHistory();
 }
 
 function renderCharTable() {
@@ -1381,6 +1391,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
       <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
       <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${cls}</td>
+      <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${r.slot})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
       <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
       <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
@@ -1426,7 +1437,7 @@ function renderCharTable() {
     const pcKinaRaw = pcRows[0]?.total_kina;
     const kinaTag = pcKinaRaw ? ` <span class="text-yellow-300 text-xs font-normal ml-1">₭${Number(pcKinaRaw).toLocaleString()}</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="22" class="px-3 py-2 font-bold text-gray-100">
+      <td colspan="23" class="px-3 py-2 font-bold text-gray-100">
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
           <span>${pc}</span>
@@ -2074,9 +2085,16 @@ async def receive_char_info(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
     total_kina = data.get("total_kina", 0)
     chars = data.get("characters", [])
-    await upsert_char_info(pc_id, total_kina, chars)
+    merge = bool(data.get("merge", False))   # 단일 캐릭 수집: slot 기준 병합(나머지 보존)
+    merged = await upsert_char_info(pc_id, total_kina, chars, merge=merge)
+    # 병합 시 최종 total_kina를 다시 읽어 브로드캐스트(0으로 보냈으면 기존값 유지됐으므로)
+    final_kina = total_kina
+    if merge:
+        info = await get_char_info(pc_id)
+        if info:
+            final_kina = info.get("total_kina", total_kina)
     await manager.broadcast({"type": "char_info", "pc_id": pc_id,
-                              "total_kina": total_kina, "chars": chars,
+                              "total_kina": final_kina, "chars": merged,
                               "collected_at": data.get("collected_at", "")})
     return JSONResponse({"ok": True})
 

@@ -410,13 +410,38 @@ async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
 
 # ── 캐릭터 세부정보 ───────────────────────────────────────────────────────────
 
-async def upsert_char_info(pc_id: str, total_kina: int, chars: list) -> None:
+async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool = False) -> list:
+    """캐릭터 정보 저장. merge=True면 기존 chars에 slot 기준으로 병합(단일 캐릭 수집용 —
+    한 슬롯만 보내도 나머지 슬롯이 안 지워짐). total_kina=0이면 기존값 유지.
+    반환: 최종 저장된 chars 리스트(WS 브로드캐스트용)."""
     async with aiosqlite.connect(DB_PATH) as db:
+        if merge:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT total_kina, chars FROM char_info WHERE pc_id=?", (pc_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            existing = []
+            existing_kina = 0
+            if row:
+                try:
+                    existing = json.loads(row["chars"]) or []
+                except Exception:
+                    existing = []
+                existing_kina = row["total_kina"] or 0
+            by_slot = {c.get("slot"): c for c in existing if isinstance(c, dict)}
+            for c in chars:
+                if isinstance(c, dict):
+                    by_slot[c.get("slot")] = c
+            chars = [by_slot[k] for k in sorted(by_slot, key=lambda x: (x is None, x))]
+            if not total_kina:
+                total_kina = existing_kina
         await db.execute(
             "INSERT OR REPLACE INTO char_info(pc_id, total_kina, chars, collected_at) VALUES(?,?,?,?)",
             (pc_id, total_kina, json.dumps(chars, ensure_ascii=False), _now()),
         )
         await db.commit()
+    return chars
 
 
 async def get_all_char_info() -> list[dict]:
