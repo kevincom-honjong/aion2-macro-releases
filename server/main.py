@@ -1370,14 +1370,15 @@ const VN_T = {
   vi:{title:'🇻🇳 Nhân vật', reset:'Đặt lại tất cả', done:'Xong', nodata:'Không có dữ liệu'},
   ko:{title:'🇰🇷 캐릭터',    reset:'전체 초기화',      done:'완료', nodata:'데이터 없음'},
 };
+// red: 스프레드와 동일 기준 — 오드 현재≥840(만충), 일일 14/14, 각성 3/3 → 빨간 굵게.
 const VIETNAM_COLS = [
-  {key:'pc_id',            vi:'PC',                 ko:'PC',         align:'left',   fmt:r=>r.pc_id||'–'},
-  {key:'slot',             vi:'Nhân vật',           ko:'캐릭터',      align:'left',   fmt:r=>r.slot||'–'},
-  {key:'gear_power',       vi:'Lực chiến trang bị', ko:'장비전투력',  align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
-  {key:'power_power',      vi:'Lực chiến Power',    ko:'파워전투력',  align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
-  {key:'odd_energy',       vi:'Năng lượng Odd',     ko:'오드에너지',  align:'left',   fmt:r=>r.odd_energy||'–'},
-  {key:'daily_ticket',     vi:'Phụ bản ngày',       ko:'일일던전',    align:'center', fmt:r=>r.daily_ticket||'–'},
-  {key:'awakening_ticket', vi:'Thức tỉnh',          ko:'각성',       align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–'},
+  {key:'pc_id',            vi:'PC',        ko:'PC',    align:'left',   fmt:r=>r.pc_id||'–'},
+  {key:'slot',             vi:'NV',        ko:'캐릭',   align:'left',   fmt:r=>r.slot||'–'},
+  {key:'gear_power',       vi:'Trang bị',  ko:'장비',   align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
+  {key:'power_power',      vi:'Power',     ko:'파워',   align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
+  {key:'odd_energy',       vi:'Odd',       ko:'오드',   align:'left',   fmt:r=>r.odd_energy||'–', red:r=>{const n=parseInt(r.odd_energy);return !isNaN(n)&&n>=840;}},
+  {key:'daily_ticket',     vi:'Ngày',      ko:'일일',   align:'center', fmt:r=>r.daily_ticket||'–', red:r=>{const n=parseInt(r.daily_ticket);return !isNaN(n)&&n>=14;}},
+  {key:'awakening_ticket', vi:'Thức tỉnh', ko:'각성',   align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–', red:r=>r.awakening_ticket!=null&&r.awakening_ticket>=3},
 ];
 function _ta(a){ return a==='right'?'text-right':a==='center'?'text-center':'text-left'; }
 // 자가체크(작업완료) — 기기(휴대폰) localStorage에 저장. pc+slot 키라 데이터 갱신돼도 유지.
@@ -1432,9 +1433,12 @@ function renderVietnam(){
   document.getElementById('vietnam-body').innerHTML = rows.length
     ? rows.map(r=>{
         const d = vnDone(r.pc_id, r.slot);
-        return `<tr class="${d?'bg-green-900/30':'bg-gray-900'}">`+
+        return `<tr class="${d?'bg-green-900/40':'bg-gray-900'}">`+
           `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${r.slot},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
-          VIETNAM_COLS.map(c=>`<td class="px-3 py-1.5 ${_ta(c.align)} ${d?'text-gray-500':'text-gray-200'}">${c.fmt(r)}</td>`).join('')+
+          VIETNAM_COLS.map(c=>{
+            const cls = (c.red && c.red(r)) ? 'text-red-400 font-bold' : 'text-gray-200';
+            return `<td class="px-3 py-1.5 ${_ta(c.align)} ${cls}">${c.fmt(r)}</td>`;
+          }).join('')+
           `</tr>`;
       }).join('')
     : `<tr><td colspan="${VIETNAM_COLS.length+1}" class="text-center text-gray-600 py-8">${T.nodata}</td></tr>`;
