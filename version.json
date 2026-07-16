@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.243",
+    "version": "1.1.244",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "416691ff63d7636bb2f04aafef87396f576de7c19f4cfd46526fd8ef5875c688",
+    "sha256": "5304e42f4b84d8ee982e58ae81a60e58dfe8399bd12d759bf5391f44d44ea3f2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -182,7 +182,9 @@
     "gwonsung.png": "8d962082e9ec56640d21ff38b9cf58cb47468b35f7a05291afe68337e7e28f6d",
     "eternal_island.png": "b7e9282fcd24488a556df6fe31dfaa8c6a67e45e6cecca852f08a6942d7fab08",
     "eternal_map_target.png": "bc870a798d14f5ac05545927e27e7b93c167696ee311ca231ae6dab2fd80c636",
-    "suhosung.png": "e4a7dab7b7148f088a5e2975c46e3d2d0c38a44674e71453d6288b352d2bba46"
+    "suhosung.png": "e4a7dab7b7148f088a5e2975c46e3d2d0c38a44674e71453d6288b352d2bba46",
+    "awakening_portal.png": "fae798532f756badd7cc6a9323ffee794369e595872183a5386403dbe52afa60",
+    "awakening_result.png": "e5313b35f90169efd51416104d8c28d4a02a7756b578318d72f993c73be96a85"
   },
   "updater": {
     "version": "3.0.3",
@@ -190,6 +192,6 @@
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260619010730",
-  "updated_at": "2026-07-16T14:34:50Z",
+  "updated_at": "2026-07-16T15:59:55Z",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
