@@ -382,6 +382,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 z-30">
   <span class="text-2xl">⚔</span>
   <h1 class="font-bold text-indigo-400 tracking-wide text-base sm:text-lg">Macro Control Panel</h1>
+  <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
@@ -534,6 +535,25 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       </div>
     </div>
     <div id="log-entries" class="flex-1 overflow-y-auto p-4 log-box text-xs space-y-0.5 scrollbar-thin"></div>
+  </div>
+</div>
+
+<!-- 베트남어 캐릭터 뷰 모달 -->
+<div id="vietnam-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+  <div class="bg-gray-900 w-full max-w-3xl max-h-[85vh] flex flex-col rounded-xl border border-gray-700 shadow-2xl">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
+      <h2 class="font-bold text-red-400">🇻🇳 Nhân vật (Việt Nam)</h2>
+      <div class="flex items-center gap-2">
+        <button onclick="loadVietnam()" class="text-xs px-2 py-1 bg-red-800/60 hover:bg-red-700 text-red-200 rounded">↻ Làm mới</button>
+        <button onclick="closeVietnamModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-auto p-3 scrollbar-thin">
+      <table class="w-full text-sm text-left whitespace-nowrap">
+        <thead class="text-xs text-gray-400 uppercase bg-gray-800/90 sticky top-0"><tr id="vietnam-head"></tr></thead>
+        <tbody id="vietnam-body" class="divide-y divide-gray-800"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -1335,6 +1355,60 @@ async function collectSlot(pc, slot) {
   const ok = await sendCmd(pc, 'collect_info', {slot});
   showToast(ok ? `📡 ${pc} 슬롯 ${slot} 단일 정보수집 요청` : `${pc} 요청 실패`);
   if (typeof loadCmdHistory === 'function') loadCmdHistory();
+}
+
+// ─── 베트남어 캐릭터 뷰 (PC/캐릭/장비·파워전투력/오드/일일던전/각성, 컬럼별 정렬) ──────
+let vietnamData = [];
+let vietnamSort = {key:'pc_id', asc:true};
+const VIETNAM_COLS = [
+  {key:'pc_id',            label:'PC',                 align:'left',   fmt:r=>r.pc_id||'–'},
+  {key:'slot',             label:'Nhân vật',           align:'left',   fmt:r=>r.slot||'–'},
+  {key:'gear_power',       label:'Lực chiến trang bị', align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
+  {key:'power_power',      label:'Lực chiến Power',    align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
+  {key:'odd_energy',       label:'Năng lượng Odd',     align:'left',   fmt:r=>r.odd_energy||'–'},
+  {key:'daily_ticket',     label:'Phụ bản ngày',       align:'center', fmt:r=>r.daily_ticket||'–'},
+  {key:'awakening_ticket', label:'Thức tỉnh',          align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–'},
+];
+function _ta(a){ return a==='right'?'text-right':a==='center'?'text-center':'text-left'; }
+async function openVietnamModal(){
+  document.getElementById('vietnam-modal').classList.remove('hidden');
+  await loadVietnam();
+}
+function closeVietnamModal(){ document.getElementById('vietnam-modal').classList.add('hidden'); }
+async function loadVietnam(){
+  try{
+    const r = await fetch('/characters?t='+Date.now(), {cache:'no-store'});
+    if(r.ok) vietnamData = (await r.json()).characters || [];
+  }catch(e){ console.error('vietnam load', e); }
+  renderVietnam();
+}
+function sortVietnam(key){
+  if(vietnamSort.key===key) vietnamSort.asc = !vietnamSort.asc;
+  else vietnamSort = {key, asc:true};
+  renderVietnam();
+}
+function _vietnamVal(r, key){
+  if(key==='odd_energy') return parseOddEnergy(r.odd_energy);
+  const v = r[key];
+  const n = Number(String(v==null?'':v).replace(/[^\d.-]/g,''));
+  return isNaN(n) ? String(v==null?'':v) : n;
+}
+function renderVietnam(){
+  const {key, asc} = vietnamSort;
+  const rows = [...vietnamData].sort((a,b)=>{
+    let va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
+    if(typeof va==='number' && typeof vb==='number') return asc?va-vb:vb-va;
+    va=String(va).toLowerCase(); vb=String(vb).toLowerCase();
+    return asc?va.localeCompare(vb):vb.localeCompare(va);
+  });
+  document.getElementById('vietnam-head').innerHTML = VIETNAM_COLS.map(c=>{
+    const arrow = vietnamSort.key===c.key ? (vietnamSort.asc?' ▲':' ▼') : ' ⇅';
+    return `<th class="px-3 py-2 cursor-pointer hover:text-white ${_ta(c.align)}" onclick="sortVietnam('${c.key}')">${c.label}${arrow}</th>`;
+  }).join('');
+  document.getElementById('vietnam-body').innerHTML = rows.length
+    ? rows.map((r,i)=>`<tr class="${i%2===0?'bg-gray-900':'bg-gray-800/40'}">`+
+        VIETNAM_COLS.map(c=>`<td class="px-3 py-1.5 ${_ta(c.align)} text-gray-200">${c.fmt(r)}</td>`).join('')+`</tr>`).join('')
+    : `<tr><td colspan="${VIETNAM_COLS.length}" class="text-center text-gray-600 py-8">Không có dữ liệu</td></tr>`;
 }
 
 function renderCharTable() {
