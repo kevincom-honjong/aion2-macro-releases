@@ -538,17 +538,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- 베트남어 캐릭터 뷰 모달 -->
-<div id="vietnam-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
-  <div class="bg-gray-900 w-full max-w-3xl max-h-[85vh] flex flex-col rounded-xl border border-gray-700 shadow-2xl">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
-      <h2 class="font-bold text-red-400">🇻🇳 Nhân vật (Việt Nam)</h2>
-      <div class="flex items-center gap-2">
-        <button onclick="loadVietnam()" class="text-xs px-2 py-1 bg-red-800/60 hover:bg-red-700 text-red-200 rounded">↻ Làm mới</button>
-        <button onclick="closeVietnamModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+<!-- 베트남어 캐릭터 뷰 모달 (모바일 가시성 + 언어토글 + 자가체크) -->
+<div id="vietnam-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-2 sm:p-4">
+  <div class="bg-gray-900 w-full max-w-3xl max-h-[93vh] flex flex-col rounded-xl border border-gray-700 shadow-2xl">
+    <div class="flex items-center justify-between px-3 py-2.5 border-b border-gray-800 gap-2">
+      <h2 class="font-bold text-red-400 text-base shrink-0" id="vn-title">🇻🇳 Nhân vật</h2>
+      <div class="flex items-center gap-1.5 flex-wrap justify-end">
+        <div class="flex rounded-lg overflow-hidden border border-gray-700 text-xs font-semibold">
+          <button id="vn-lang-vi" onclick="vnSetLang('vi')">VI</button>
+          <button id="vn-lang-ko" onclick="vnSetLang('ko')">KO</button>
+        </div>
+        <button id="vn-reset" onclick="vnResetAll()" class="text-xs px-2 py-1 bg-gray-700/70 hover:bg-gray-600 text-gray-200 rounded whitespace-nowrap">Đặt lại</button>
+        <button onclick="loadVietnam()" class="text-xs px-2 py-1 bg-red-800/60 hover:bg-red-700 text-red-200 rounded">↻</button>
+        <button onclick="closeVietnamModal()" class="text-gray-400 hover:text-gray-200 text-xl leading-none px-1">✕</button>
       </div>
     </div>
-    <div class="flex-1 overflow-auto p-3 scrollbar-thin">
+    <div class="flex-1 overflow-auto p-2 scrollbar-thin">
       <table class="w-full text-sm text-left whitespace-nowrap">
         <thead class="text-xs text-gray-400 uppercase bg-gray-800/90 sticky top-0"><tr id="vietnam-head"></tr></thead>
         <tbody id="vietnam-body" class="divide-y divide-gray-800"></tbody>
@@ -1357,19 +1362,30 @@ async function collectSlot(pc, slot) {
   if (typeof loadCmdHistory === 'function') loadCmdHistory();
 }
 
-// ─── 베트남어 캐릭터 뷰 (PC/캐릭/장비·파워전투력/오드/일일던전/각성, 컬럼별 정렬) ──────
+// ─── 베트남어 캐릭터 뷰 (모바일 가시성 + VI/KO 토글 + 행별 자가체크 localStorage) ──────
 let vietnamData = [];
 let vietnamSort = {key:'pc_id', asc:true};
+let vietnamLang = 'vi';   // 기본 베트남어
+const VN_T = {
+  vi:{title:'🇻🇳 Nhân vật', reset:'Đặt lại tất cả', done:'Xong', nodata:'Không có dữ liệu'},
+  ko:{title:'🇰🇷 캐릭터',    reset:'전체 초기화',      done:'완료', nodata:'데이터 없음'},
+};
 const VIETNAM_COLS = [
-  {key:'pc_id',            label:'PC',                 align:'left',   fmt:r=>r.pc_id||'–'},
-  {key:'slot',             label:'Nhân vật',           align:'left',   fmt:r=>r.slot||'–'},
-  {key:'gear_power',       label:'Lực chiến trang bị', align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
-  {key:'power_power',      label:'Lực chiến Power',    align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
-  {key:'odd_energy',       label:'Năng lượng Odd',     align:'left',   fmt:r=>r.odd_energy||'–'},
-  {key:'daily_ticket',     label:'Phụ bản ngày',       align:'center', fmt:r=>r.daily_ticket||'–'},
-  {key:'awakening_ticket', label:'Thức tỉnh',          align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–'},
+  {key:'pc_id',            vi:'PC',                 ko:'PC',         align:'left',   fmt:r=>r.pc_id||'–'},
+  {key:'slot',             vi:'Nhân vật',           ko:'캐릭터',      align:'left',   fmt:r=>r.slot||'–'},
+  {key:'gear_power',       vi:'Lực chiến trang bị', ko:'장비전투력',  align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
+  {key:'power_power',      vi:'Lực chiến Power',    ko:'파워전투력',  align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
+  {key:'odd_energy',       vi:'Năng lượng Odd',     ko:'오드에너지',  align:'left',   fmt:r=>r.odd_energy||'–'},
+  {key:'daily_ticket',     vi:'Phụ bản ngày',       ko:'일일던전',    align:'center', fmt:r=>r.daily_ticket||'–'},
+  {key:'awakening_ticket', vi:'Thức tỉnh',          ko:'각성',       align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–'},
 ];
 function _ta(a){ return a==='right'?'text-right':a==='center'?'text-center':'text-left'; }
+// 자가체크(작업완료) — 기기(휴대폰) localStorage에 저장. pc+slot 키라 데이터 갱신돼도 유지.
+function vnKey(pc, slot){ return 'vn_done_'+pc+'_'+slot; }
+function vnDone(pc, slot){ return localStorage.getItem(vnKey(pc,slot))==='1'; }
+function vnToggle(pc, slot, on){ on?localStorage.setItem(vnKey(pc,slot),'1'):localStorage.removeItem(vnKey(pc,slot)); renderVietnam(); }
+function vnResetAll(){ Object.keys(localStorage).filter(k=>k.indexOf('vn_done_')===0).forEach(k=>localStorage.removeItem(k)); renderVietnam(); }
+function vnSetLang(l){ vietnamLang=l; renderVietnam(); }
 async function openVietnamModal(){
   document.getElementById('vietnam-modal').classList.remove('hidden');
   await loadVietnam();
@@ -1394,6 +1410,12 @@ function _vietnamVal(r, key){
   return isNaN(n) ? String(v==null?'':v) : n;
 }
 function renderVietnam(){
+  const L = vietnamLang, T = VN_T[L];
+  document.getElementById('vn-title').textContent = T.title;
+  document.getElementById('vn-reset').textContent = T.reset;
+  const on='px-2 py-1 bg-red-700 text-white', off='px-2 py-1 text-gray-400 hover:text-gray-200';
+  document.getElementById('vn-lang-vi').className = L==='vi'?on:off;
+  document.getElementById('vn-lang-ko').className = L==='ko'?on:off;
   const {key, asc} = vietnamSort;
   const rows = [...vietnamData].sort((a,b)=>{
     let va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
@@ -1401,14 +1423,21 @@ function renderVietnam(){
     va=String(va).toLowerCase(); vb=String(vb).toLowerCase();
     return asc?va.localeCompare(vb):vb.localeCompare(va);
   });
-  document.getElementById('vietnam-head').innerHTML = VIETNAM_COLS.map(c=>{
-    const arrow = vietnamSort.key===c.key ? (vietnamSort.asc?' ▲':' ▼') : ' ⇅';
-    return `<th class="px-3 py-2 cursor-pointer hover:text-white ${_ta(c.align)}" onclick="sortVietnam('${c.key}')">${c.label}${arrow}</th>`;
-  }).join('');
+  document.getElementById('vietnam-head').innerHTML =
+    `<th class="px-2 py-2 text-center">${T.done}</th>` +
+    VIETNAM_COLS.map(c=>{
+      const arrow = vietnamSort.key===c.key ? (vietnamSort.asc?' ▲':' ▼') : ' ⇅';
+      return `<th class="px-3 py-2 cursor-pointer hover:text-white ${_ta(c.align)}" onclick="sortVietnam('${c.key}')">${c[L]}${arrow}</th>`;
+    }).join('');
   document.getElementById('vietnam-body').innerHTML = rows.length
-    ? rows.map((r,i)=>`<tr class="${i%2===0?'bg-gray-900':'bg-gray-800/40'}">`+
-        VIETNAM_COLS.map(c=>`<td class="px-3 py-1.5 ${_ta(c.align)} text-gray-200">${c.fmt(r)}</td>`).join('')+`</tr>`).join('')
-    : `<tr><td colspan="${VIETNAM_COLS.length}" class="text-center text-gray-600 py-8">Không có dữ liệu</td></tr>`;
+    ? rows.map(r=>{
+        const d = vnDone(r.pc_id, r.slot);
+        return `<tr class="${d?'bg-green-900/30':'bg-gray-900'}">`+
+          `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${r.slot},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
+          VIETNAM_COLS.map(c=>`<td class="px-3 py-1.5 ${_ta(c.align)} ${d?'text-gray-500':'text-gray-200'}">${c.fmt(r)}</td>`).join('')+
+          `</tr>`;
+      }).join('')
+    : `<tr><td colspan="${VIETNAM_COLS.length+1}" class="text-center text-gray-600 py-8">${T.nodata}</td></tr>`;
 }
 
 function renderCharTable() {
