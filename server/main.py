@@ -678,7 +678,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <span class="price-wrap"><span class="price-k">₭</span><input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지"></span>
     <button id="sale-price-btn" onclick="toggleSalePrice()" class="chip chip-gray">확정</button>
     <button onclick="sellAllSel()" class="chip chip-yellow">판매</button>
-    <button onclick="settleSel()" class="chip chip-amber" title="등록 없이 전 캐릭 판매대금(정산)만 수령">정산</button>
+    <button onclick="settleSel()" class="chip chip-amber" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">정산</button>
   </div>
 </div>
 
@@ -851,7 +851,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="cm-grid2">
     <button class="cm-btn chip-purple cm-span2" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
     <button class="cm-btn chip-yellow" onclick="sellAllFromMenu()" title="전 캐릭 순회 판매 (상단 거래소가 확정 필요)">$ 판매</button>
-    <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="등록 없이 전 캐릭 판매대금(정산)만 수령">₭ 정산</button>
+    <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">₭ 정산</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
   </div>
@@ -1416,17 +1416,17 @@ async function sellAllFromMenu() {
   loadCmdHistory();
 }
 
-// ─── 정산(settle) — 등록 없이 전 캐릭 순회하며 판매대금만 수령 (가격 불필요) ─────
+// ─── 정산(settle) — 판매대금 수령. 계정 단위라 1캐릭만 접속해 걷고 종료 (가격 불필요) ───
 async function settleSel() {
   if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 정산 실행\n(등록 없이 전 캐릭 판매대금 수령 — 캐릭당 ~1분)`))return;
+  if(!confirm(`선택 ${selectedPcs.size}대 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
   await selCmd('settle');
 }
 
 async function settleFromMenu() {
   if(!menuPcId) return;
   const pc=menuPcId;
-  if(!confirm(`${pc} 전 캐릭 정산 실행\n(등록 없이 판매대금 수령 — 캐릭당 ~1분)`))return;
+  if(!confirm(`${pc} 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
   closeCardMenu();
   const ok=await sendCmd(pc,'settle',{});
   showToast(ok?`✓ 정산 → ${pc}`:`✗ 정산 전송 실패`);
