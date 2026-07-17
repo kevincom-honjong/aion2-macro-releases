@@ -478,6 +478,35 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     background-size:220% 100%;animation:shine 6s linear infinite;opacity:.9}
   .cmd-bar{background:rgba(8,11,24,.78)!important;border-bottom:1px solid rgba(99,102,241,.2);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
 
+  /* ── 명령바 콘솔 그룹 + 네온 칩 ── */
+  .cmd-group{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+    padding:8px 10px 6px;border:1px solid rgba(99,102,241,.22);border-radius:12px;
+    background:linear-gradient(160deg,rgba(20,26,48,.55),rgba(10,14,28,.6))}
+  .cmd-group:hover{border-color:rgba(129,140,248,.45)}
+  .cmd-legend{position:absolute;top:-8px;left:10px;padding:1px 7px;border-radius:5px;
+    font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:8px;font-weight:600;letter-spacing:.24em;
+    color:#a5b4fc;background:#0b0f1f;border:1px solid rgba(99,102,241,.35);pointer-events:none}
+  .chip{--c:148,163,184;padding:4px 11px;border-radius:9px;font-size:12px;font-weight:700;line-height:1.25;
+    color:rgb(var(--c));border:1px solid rgba(var(--c),.45);background:rgba(var(--c),.09);
+    box-shadow:inset 0 0 10px -6px rgba(var(--c),.8);white-space:nowrap}
+  .chip:hover{background:rgba(var(--c),.24);color:#fff;border-color:rgba(var(--c),.95);
+    box-shadow:0 0 16px -3px rgba(var(--c),.65),inset 0 0 10px -6px rgba(var(--c),.8)}
+  .chip-indigo{--c:129,140,248} .chip-gray{--c:148,163,184} .chip-green{--c:74,222,128}
+  .chip-red{--c:248,113,113}   .chip-cyan{--c:34,211,238}   .chip-purple{--c:192,132,252}
+  .chip-pink{--c:244,114,182}  .chip-orange{--c:251,146,60} .chip-blue{--c:96,165,250}
+  .chip-sky{--c:56,189,248}    .chip-yellow{--c:250,204,21} .chip-amber{--c:251,191,36}
+  .sel-badge{font-size:11px;font-weight:800;color:#c7d2fe;padding:3px 11px;border-radius:999px;white-space:nowrap;
+    background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
+    border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
+  .price-wrap{position:relative;display:inline-flex;align-items:center}
+  .price-wrap .price-k{position:absolute;left:9px;font-size:11px;font-weight:800;color:#fde047;opacity:.85;pointer-events:none}
+  #sale-price{width:104px;padding:4px 8px 4px 22px;border-radius:9px;font-size:12px;font-weight:700;color:#fde047;
+    font-family:'Orbitron',ui-sans-serif,sans-serif;background:rgba(250,204,21,.07);
+    border:1px solid rgba(250,204,21,.4);outline:none;transition:border-color .15s,box-shadow .15s}
+  #sale-price:focus{border-color:#facc15;box-shadow:0 0 14px -4px rgba(250,204,21,.75)}
+  #sale-price::placeholder{color:rgba(250,204,21,.45);font-family:ui-sans-serif,system-ui,sans-serif;font-weight:500}
+  #sale-price::-webkit-outer-spin-button,#sale-price::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
   /* ── 브랜드 ── */
   @keyframes shine{to{background-position:200% center}}
   .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 30%,#f0abfc 60%,#fde047 80%,#c7d2fe);background-size:200% auto;
@@ -574,34 +603,42 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
 </header>
 
-<!-- 명령 바 -->
-<div class="cmd-bar px-4 py-2 flex flex-wrap gap-2 items-center sticky top-[52px] z-20 backdrop-blur">
+<!-- 명령 바 (콘솔 그룹 패널 — 기능/핸들러 무변경, 스킨만) -->
+<div class="cmd-bar px-4 pt-3 pb-2 flex flex-wrap gap-x-3 gap-y-2 items-stretch sticky top-[52px] z-20 backdrop-blur">
   <!-- 그룹 1: 선택 -->
-  <span id="sel-label" class="text-xs text-indigo-400 font-semibold shrink-0">0개 선택</span>
-  <button onclick="selectAllPcs()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 transition-colors">전체선택</button>
-  <button onclick="clearSelection()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-gray-700/60 hover:bg-gray-600 text-gray-300 transition-colors">전체해제</button>
-
-  <div class="h-4 w-px bg-gray-700 mx-1 shrink-0"></div>
+  <div class="cmd-group">
+    <span class="cmd-legend">SELECT</span>
+    <span id="sel-label" class="sel-badge shrink-0">0개 선택</span>
+    <button onclick="selectAllPcs()" class="chip chip-indigo">전체선택</button>
+    <button onclick="clearSelection()" class="chip chip-gray">전체해제</button>
+  </div>
 
   <!-- 그룹 2: 매크로 제어 -->
-  <span class="text-xs text-gray-600 shrink-0">매크로:</span>
-  <button onclick="selCmd('start')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-900/60 hover:bg-green-700 text-green-300 transition-colors">▶ 시작</button>
-  <button onclick="selCmd('exit')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-red-900/60 hover:bg-red-700 text-red-300 transition-colors">✕ 종료</button>
-  <button onclick="selUpdaterCmd('update')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-cyan-900/60 hover:bg-cyan-700 text-cyan-300 transition-colors">↑ 업데이트+재시작</button>
+  <div class="cmd-group">
+    <span class="cmd-legend">MACRO</span>
+    <button onclick="selCmd('start')" class="chip chip-green">▶ 시작</button>
+    <button onclick="selCmd('exit')" class="chip chip-red">✕ 종료</button>
+    <button onclick="selUpdaterCmd('update')" class="chip chip-cyan">↑ 업데이트+재시작</button>
+  </div>
 
-  <div class="h-4 w-px bg-gray-700 mx-1 shrink-0"></div>
+  <!-- 그룹 3: 콘텐츠 -->
+  <div class="cmd-group">
+    <span class="cmd-legend">CONTENT</span>
+    <button onclick="selCmd('daily_dungeon')" class="chip chip-purple">일일던전</button>
+    <button onclick="selCmd('nightmare')" class="chip chip-pink">악몽</button>
+    <button onclick="selCmd('awakening')" class="chip chip-orange">각성</button>
+    <button onclick="selCmd('abyss')" class="chip chip-blue">어비스</button>
+    <button onclick="selCmd('collect_info')" class="chip chip-sky">정보수집</button>
+  </div>
 
-  <!-- 그룹 3: 기능 -->
-  <span class="text-xs text-gray-600 shrink-0">기능:</span>
-  <button onclick="selCmd('daily_dungeon')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-900/60 hover:bg-purple-700 text-purple-300 transition-colors">일일던전</button>
-  <button onclick="selCmd('nightmare')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-pink-900/60 hover:bg-pink-700 text-pink-300 transition-colors">악몽</button>
-  <button onclick="selCmd('awakening')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-900/60 hover:bg-orange-700 text-orange-300 transition-colors">각성</button>
-  <button onclick="selCmd('abyss')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-900/60 hover:bg-blue-700 text-blue-300 transition-colors">어비스</button>
-  <button onclick="selCmd('collect_info')" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky-900/60 hover:bg-sky-700 text-sky-300 transition-colors">정보수집</button>
-  <input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지" class="px-2 py-1 rounded-lg text-xs bg-gray-800 border border-gray-700 text-yellow-300 focus:outline-none focus:border-yellow-600" style="width:82px">
-  <button id="sale-price-btn" onclick="toggleSalePrice()" class="px-2 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors">확정</button>
-  <button onclick="sellAllSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 transition-colors">판매</button>
-  <button onclick="settleSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors" title="등록 없이 전 캐릭 판매대금(정산)만 수령">정산</button>
+  <!-- 그룹 4: 거래 -->
+  <div class="cmd-group">
+    <span class="cmd-legend">TRADE</span>
+    <span class="price-wrap"><span class="price-k">₭</span><input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지"></span>
+    <button id="sale-price-btn" onclick="toggleSalePrice()" class="chip chip-gray">확정</button>
+    <button onclick="sellAllSel()" class="chip chip-yellow">판매</button>
+    <button onclick="settleSel()" class="chip chip-amber" title="등록 없이 전 캐릭 판매대금(정산)만 수령">정산</button>
+  </div>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
