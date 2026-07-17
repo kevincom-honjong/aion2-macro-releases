@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.255",
+    "version": "1.1.256",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "061d4c0d5cf8a34846f705ec1ab1dbb467b85f30fc4225036485afcd3aae4a90",
+    "sha256": "dd2489fdc14fa7fa7d292dcffe5a564bba2386e6247e6f5edaa3a5d498956c18",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -21,6 +21,8 @@
     "arcana_title.png": "f921a005325a0605b79ff0df783bc858f051e2fd3524ca8cdc400106ad128873",
     "attendance.png": "7c03914cbf9308c53fb0129781fcdd80d2cca2f24134f3998b491f35196b7622",
     "attendance_close.png": "cde2541b7f726126a62e8bf9aea724a70dd843b57ada9fadc6ad5bab70023294",
+    "awakening_portal.png": "fae798532f756badd7cc6a9323ffee794369e595872183a5386403dbe52afa60",
+    "awakening_result.png": "e5313b35f90169efd51416104d8c28d4a02a7756b578318d72f993c73be96a85",
     "awakening_title.png": "478fcb8ad63ce3e390075b86e43b81ffb2d226e499a7862515c972e77b9ab2b5",
     "captcha.png": "7cba617703fa0cadd31eeb9f967735687c791225c92ba97fc508cfe4776fbf4c",
     "char_select.png": "4d8bdea4f08ad8cc907b6f7c2a904be5f8604eb5a2aa93e845f79afef244ed32",
@@ -51,6 +53,8 @@
     "equip_title.png": "cfd433cc2416196cf4aaf4e81a0b185ce1a6197b8626bb27b4f5dcfa0be0ab04",
     "error.png": "8a727f1dad5345ac2af634d89610eefc570de9f56ecda07b63e65925b8b942dd",
     "error_confirm.png": "f53a74ff1b206f95bfc26e1c02953c835a205e62bee96c039801a339e96fa297",
+    "eternal_island.png": "b7e9282fcd24488a556df6fe31dfaa8c6a67e45e6cecca852f08a6942d7fab08",
+    "eternal_map_target.png": "bc870a798d14f5ac05545927e27e7b93c167696ee311ca231ae6dab2fd80c636",
     "expedition_title.png": "2917451d68c3929a716a2582379626caf38e01734d125c88a5f0ea322a172134",
     "extract_title.png": "284e127208f8cc75cc976bf6eb421c32beb0da321093265601a63a67a56c9be4",
     "files.zip": "c1dc2db899567caa2cb87b132b938d080f9fe3b70ef67390f2d3840681eb8585",
@@ -70,6 +74,7 @@
     "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
     "gung_7.png": "a9aa69708522dadeeef80f1ba6f077a4a7e0757eef0c6ea92f6b266e6387640e",
     "gungsung.png": "1efc7e6fe4b1042d768c05b223dbba75664f3b1ed204f8d5ac19dedeb27f05f6",
+    "gwonsung.png": "8d962082e9ec56640d21ff38b9cf58cb47468b35f7a05291afe68337e7e28f6d",
     "hobup_1.png": "559d55f76df42190161bbf93c64519316929fca662f3d105017d0231cd8bee55",
     "hobup_2.png": "d50ae364014f89f1599514122429ea1c459fc5d722673ce587fd981043a2e48e",
     "hobup_4.png": "23c8d8c2536f98b04097d390910575bead9d80be1c542a329df7a7f62260af81",
@@ -108,6 +113,7 @@
     "password.png": "32d97c260031eedb2ceb5df408eb46d75e831a013d279573d21f263aff14c6d6",
     "pin.png": "376d573449fe690331fb1fa67bad16d9dc999c39b6177ac0a36382a0eed93909",
     "power_icon.png": "3d175c5dd3a429235808b942548747adefa2463d978a80fdb5873b0b469825ab",
+    "power_meter.png": "67262bb4792ab828f38747997098d48e7eb962ef85c09c04c7ab3b77222b1947",
     "purple.png": "1d2d08c704ac1da21832980f032d4ffd5c0b246e1c255d4d2ee501be19078ee2",
     "pvp.png": "d7d7dcfbf6c070634246bdebcf6bb8d59af1d82f37bb8749ab06459fddc262a7",
     "pya_check.png": "ab392152c98f7f6a2fc19465c900fdc2225348fc62a4b253f1a93d9e415e97a5",
@@ -141,6 +147,7 @@
     "stream.png": "dc8f81d2c6c43946d54f36592b1b66eba032301613039bfcef583083830a798d",
     "stream1.png": "1f5faae4b952fb1da07e740b22a165364da3f77c2cdd67d7e14fa8b22e3e1c7c",
     "stream2.png": "ae15f492c1b007f0b796523dff82a5bcf28a82fa819991b853cfd5d79f109c10",
+    "suhosung.png": "e4a7dab7b7148f088a5e2975c46e3d2d0c38a44674e71453d6288b352d2bba46",
     "summon.png": "cd02a70530701c217870d5c9b6a2250f5e0accb5b89513cd910a0d891f8f0bea",
     "temple_btn_off.png": "fe0ab4f60fe6d5ace78c224feb611339fee6e9e363e8488e978b48fc2b8e1dad",
     "temple_btn_on.png": "9542226557cb35fa9c634157d548d6befb343522d9669fc73b5dc081b0dfca27",
@@ -178,20 +185,14 @@
     "창고.png": "61619c890c27328ce1fcc1ce3d490881de6e13c7d98d58a02793e83129120b96",
     "치유성.png": "31e4131e3a0f2487b0fc97097171b4d23dbb44d97945cc7a2c484e3d79ab4b36",
     "화면 캡처 2026-01-14 011016.png": "34cdc0cb2078d857e63773e4e23ad9f69ccb920f568513fbf51d5e9b36a9965d",
-    "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb",
-    "gwonsung.png": "8d962082e9ec56640d21ff38b9cf58cb47468b35f7a05291afe68337e7e28f6d",
-    "eternal_island.png": "b7e9282fcd24488a556df6fe31dfaa8c6a67e45e6cecca852f08a6942d7fab08",
-    "eternal_map_target.png": "bc870a798d14f5ac05545927e27e7b93c167696ee311ca231ae6dab2fd80c636",
-    "suhosung.png": "e4a7dab7b7148f088a5e2975c46e3d2d0c38a44674e71453d6288b352d2bba46",
-    "awakening_portal.png": "fae798532f756badd7cc6a9323ffee794369e595872183a5386403dbe52afa60",
-    "awakening_result.png": "e5313b35f90169efd51416104d8c28d4a02a7756b578318d72f993c73be96a85"
+    "화면 캡처 2026-01-14 034136.png": "e42f1d7ca05d617fc7b6c60ace5818340952d6687bdb43fa87348812601433fb"
   },
   "updater": {
     "version": "3.0.3",
     "sha256": "b43df9ceb4015455ac21e07f77eb1930c1b3a94a2f70595f196536012db40fef",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260619010730",
-  "updated_at": "2026-07-17T06:06:17",
+  "images_version": "20260717073924",
+  "updated_at": "2026-07-17T07:39:24",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨."
 }
