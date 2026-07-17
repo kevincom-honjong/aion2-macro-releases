@@ -411,7 +411,16 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .scrollbar-thin::-webkit-scrollbar{width:4px}
   .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
   .scrollbar-thin::-webkit-scrollbar-thumb{background:linear-gradient(#6366f1,#22d3ee);border-radius:4px}
-  .card-sel{outline:2px solid #22d3ee!important;outline-offset:1px;box-shadow:0 0 18px rgba(34,211,238,.35)!important}
+  /* ── 카드 선택 표시 v2: 상태 글로우(초록 등)와 확실히 구분 ──
+     ① 시안 이중 링 + 배경 틴트 ② 우상단 "✔ 선택됨" 뱃지 ③ ★선택 중엔 미선택 카드 디밍★ */
+  .card-sel{outline:2.5px solid #22d3ee!important;outline-offset:2px;
+    box-shadow:0 0 0 6px rgba(34,211,238,.16),0 0 28px rgba(34,211,238,.55)!important;
+    background-image:linear-gradient(160deg,rgba(34,211,238,.10),transparent 55%)!important}
+  .card-sel::before{content:'✔ 선택됨';position:absolute;top:-9px;right:10px;z-index:2;
+    padding:1px 8px;border-radius:999px;font-size:10px;font-weight:800;color:#04202a;letter-spacing:.02em;
+    background:linear-gradient(90deg,#22d3ee,#67e8f9);box-shadow:0 0 12px rgba(34,211,238,.85)}
+  main:has(.card-sel) [id^="card-"]:not(.card-sel){opacity:.45;filter:saturate(.5) brightness(.75)}
+  main:has(.card-sel) [id^="card-"]:not(.card-sel):hover{opacity:.95;filter:none}
   .card-dragging{opacity:.4;outline:2px dashed #6366f1!important}
   .card-dragover{outline:2px solid #818cf8!important;outline-offset:2px}
   .menu-item{display:block;width:100%;text-align:left;padding:5px 14px;font-size:.75rem;font-weight:600;transition:background .1s}
@@ -565,7 +574,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     filter:drop-shadow(0 0 6px var(--tile-glow))}
 
   /* ── PC 카드: 상태색 글로우 + 호버 리프트 + 회전 네온 보더(호버) ── */
-  div[id^="card-"]{box-shadow:0 6px 22px -10px rgba(0,0,0,.6);transition:transform .18s ease,box-shadow .18s ease}
+  div[id^="card-"]{box-shadow:0 6px 22px -10px rgba(0,0,0,.6);
+    transition:transform .18s ease,box-shadow .18s ease,opacity .2s ease,filter .2s ease}
   div[id^="card-"]:hover{transform:translateY(-3px) scale(1.008)}
   /* 상태별 은은한 외곽광 (STATUS_CFG border 클래스 기준 — 기능 신호 강화) */
   div[id^="card-"].border-green-700  {box-shadow:0 0 0 1px rgba(34,197,94,.22), 0 6px 26px -8px rgba(34,197,94,.3)}
