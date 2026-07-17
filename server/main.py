@@ -1254,7 +1254,7 @@ function openCardMenu(pc_id, e) {
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
   if(left+174>window.innerWidth) left=window.innerWidth-178;
-  if(top+470>window.innerHeight) top=e.clientY-474;   // 메뉴 항목 추가(정산)로 높이 상향
+  if(top+620>window.innerHeight) top=e.clientY-624;   // 실측 메뉴 높이(~615px) 기준 — 하단 우클릭 시 잘리던 것 수정
   if(top<4) top=4;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
