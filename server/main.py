@@ -1332,7 +1332,7 @@ function openCardMenu(pc_id, e) {
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
   if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
-  if(top+450>window.innerHeight) top=e.clientY-454;            // 메뉴 v2 높이 ~440px
+  if(top+480>window.innerHeight) top=e.clientY-484;            // 메뉴 v2 실측 높이 472px
   if(top<4) top=4;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
