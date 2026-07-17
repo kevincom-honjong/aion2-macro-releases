@@ -498,6 +498,29 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .sel-badge{font-size:11px;font-weight:800;color:#c7d2fe;padding:3px 11px;border-radius:999px;white-space:nowrap;
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
+  /* ── 카드 컨텍스트 메뉴 v2 ── */
+  .cm-panel{width:238px;padding:9px;border-radius:14px;
+    background:linear-gradient(165deg,rgba(17,23,45,.97),rgba(8,12,26,.98));
+    border:1px solid rgba(99,102,241,.4);
+    box-shadow:0 18px 50px -12px rgba(0,0,0,.85),0 0 30px -10px rgba(99,102,241,.5);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .cm-head{display:flex;align-items:center;gap:7px;padding:2px 3px 8px;margin-bottom:2px;
+    border-bottom:1px solid rgba(99,102,241,.28);font-size:13px}
+  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:8px;font-weight:600;letter-spacing:.24em;
+    color:#818cf8;opacity:.95;margin:8px 2px 4px}
+  .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+  .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:5px}
+  .cm-span2{grid-column:span 2}
+  .cm-btn{--c:148,163,184;padding:5px 6px;border-radius:8px;font-size:11.5px;font-weight:700;text-align:center;
+    color:rgb(var(--c));border:1px solid rgba(var(--c),.4);background:rgba(var(--c),.08);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cm-btn:hover{background:rgba(var(--c),.24);color:#fff;border-color:rgba(var(--c),.95);
+    box-shadow:0 0 12px -3px rgba(var(--c),.65)}
+  .cm-danger{width:100%;margin-top:9px;padding:5px;border-radius:8px;font-size:11px;font-weight:700;color:#f87171;
+    border:1px dashed rgba(248,113,113,.45);background:rgba(248,113,113,.05)}
+  .cm-danger:hover{background:rgba(239,68,68,.22);color:#fecaca;border-style:solid;box-shadow:0 0 14px -4px rgba(239,68,68,.6)}
+
   .price-wrap{position:relative;display:inline-flex;align-items:center}
   .price-wrap .price-k{position:absolute;left:9px;font-size:11px;font-weight:800;color:#fde047;opacity:.85;pointer-events:none}
   #sale-price{width:104px;padding:4px 8px 4px 22px;border-radius:9px;font-size:12px;font-weight:700;color:#fde047;
@@ -793,34 +816,45 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- 카드 드롭다운 메뉴 -->
-<div id="card-menu" class="hidden fixed z-50 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl py-1.5 min-w-[168px]"
-     onclick="event.stopPropagation()">
-  <div class="px-3 py-1 text-xs text-gray-500 border-b border-gray-700 mb-1" id="menu-pc-label">PC-??</div>
-  <button class="menu-item text-green-400"  onclick="cardCmd('start')">▶ 매크로 시작</button>
-  <button class="menu-item text-red-400"    onclick="cardCmd('stop')">■ 매크로 정지</button>
-  <button class="menu-item text-orange-400" onclick="cardCmd('exit')">✕ 매크로 종료</button>
-  <!-- 재시작 = 업데이터 restart(프로세스 kill+재기동). 매크로 'restart' 명령은 스레드 좀비를
-       만드는 가짜 재시작이라 폐기(v1.1.255) — 이 버튼이 진짜 재시작으로 연결됨 -->
-  <button class="menu-item text-yellow-400" onclick="updaterCmd('restart')">↺ 재시작</button>
-  <button class="menu-item text-purple-400" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
-  <button class="menu-item text-yellow-400" onclick="sellAllFromMenu()">$ 판매(전 캐릭)</button>
-  <button class="menu-item text-amber-300"  onclick="settleFromMenu()">₭ 정산(전 캐릭)</button>
-  <button class="menu-item text-cyan-400"   onclick="collectInfoFromMenu()">📡 정보수집</button>
-  <button class="menu-item text-gray-300"   onclick="cardCmd('go_home')">⌂ 귀환</button>
-  <div class="border-t border-gray-700 my-1"></div>
-  <button class="menu-item text-indigo-400" onclick="openLogFromMenu()">📋 로그 보기</button>
-  <button class="menu-item text-cyan-400"   onclick="openInfoFromMenu()">📊 세부정보</button>
-  <button class="menu-item text-yellow-400" onclick="screenshotFromMenu()">📸 스크린샷</button>
-  <button class="menu-item text-red-500"    onclick="deletePCFromMenu()">🗑 삭제</button>
-  <div class="border-t border-gray-700 my-1"></div>
-  <div class="px-3 py-1 text-xs text-gray-500 font-semibold">업데이터 제어</div>
-  <button class="menu-item text-green-300"  onclick="updaterCmd('start')">▶ 시작</button>
-  <button class="menu-item text-red-300"    onclick="updaterCmd('stop')">■ 정지</button>
-  <button class="menu-item text-orange-300" onclick="updaterCmd('exit')">✕ 종료</button>
-  <button class="menu-item text-yellow-300" onclick="updaterCmd('restart')">↺ 재시작</button>
-  <button class="menu-item text-cyan-300"   onclick="updaterCmd('update')">↑ 업데이트+재시작</button>
-  <button class="menu-item text-purple-300" onclick="updaterCmd('update_only')">⬆ 업데이트만</button>
+<!-- 카드 컨텍스트 메뉴 v2 — 2열 콘솔 그리드 (핸들러 전부 보존, 구조만 재편)
+     기존 세로 19줄(~615px)이 하단서 잘리고 스캔 느리던 것 → 그룹 그리드 ~440px.
+     '재시작'은 updaterCmd(프로세스 kill+재기동)=진짜 재시작. 업데이터 줄의 ▶■는
+     매크로 '프로세스' 제어(크래시된 PC 살리기/강제종료), ✕는 업데이터 자체 종료. -->
+<div id="card-menu" class="hidden fixed z-50 cm-panel" onclick="event.stopPropagation()">
+  <div class="cm-head" id="menu-pc-label">PC-??</div>
+  <div class="cm-sec">MACRO</div>
+  <div class="cm-grid2">
+    <button class="cm-btn chip-green"  onclick="cardCmd('start')">▶ 시작</button>
+    <button class="cm-btn chip-gray"   onclick="cardCmd('stop')">■ 정지</button>
+    <button class="cm-btn chip-red"    onclick="cardCmd('exit')">✕ 종료</button>
+    <button class="cm-btn chip-yellow" onclick="updaterCmd('restart')" title="매크로 프로세스 재시작 (업데이터 경유 — 진짜 재시작)">↺ 재시작</button>
+  </div>
+  <div class="cm-sec">ACTION</div>
+  <div class="cm-grid2">
+    <button class="cm-btn chip-purple cm-span2" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
+    <button class="cm-btn chip-yellow" onclick="sellAllFromMenu()" title="전 캐릭 순회 판매 (상단 거래소가 확정 필요)">$ 판매</button>
+    <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="등록 없이 전 캐릭 판매대금(정산)만 수령">₭ 정산</button>
+    <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
+    <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
+  </div>
+  <div class="cm-sec">VIEW</div>
+  <div class="cm-grid3">
+    <button class="cm-btn chip-indigo" onclick="openLogFromMenu()">📋 로그</button>
+    <button class="cm-btn chip-sky"    onclick="openInfoFromMenu()">📊 정보</button>
+    <button class="cm-btn chip-pink"   onclick="screenshotFromMenu()">📸 스샷</button>
+  </div>
+  <div class="cm-sec">UPDATER · 프로세스</div>
+  <div class="cm-grid4">
+    <button class="cm-btn chip-green"  onclick="updaterCmd('start')" title="매크로 프로세스 시작 (크래시된 PC 살리기)">▶</button>
+    <button class="cm-btn chip-gray"   onclick="updaterCmd('stop')" title="매크로 프로세스 강제종료">■</button>
+    <button class="cm-btn chip-red"    onclick="updaterCmd('exit')" title="업데이터 자체 종료 (원격제어 끊김 — 주의)">✕</button>
+    <button class="cm-btn chip-yellow" onclick="updaterCmd('restart')" title="매크로 프로세스 재시작">↺</button>
+  </div>
+  <div class="cm-grid2">
+    <button class="cm-btn chip-cyan cm-span2"   onclick="updaterCmd('update')">↑ 업데이트+재시작</button>
+    <button class="cm-btn chip-purple cm-span2" onclick="updaterCmd('update_only')">⬆ 업데이트만</button>
+  </div>
+  <button class="cm-danger" onclick="deletePCFromMenu()">🗑 이 PC를 목록에서 삭제</button>
 </div>
 
 <!-- 버그 모달 -->
@@ -1287,11 +1321,18 @@ function openCardMenu(pc_id, e) {
     return;
   }
   menuPcId=pc_id;
-  document.getElementById('menu-pc-label').textContent=pc_id;
+  // 헤더에 실시간 상태 + 매크로 버전 표시 (메뉴 v2 — 열 때마다 state에서 스냅샷)
+  const pc=state[pc_id]||{};
+  const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
+  const ver=pc.macro_version?`v${pc.macro_version}`:'';
+  document.getElementById('menu-pc-label').innerHTML=
+    `<span class="font-bold text-gray-100">${pc_id}</span>`+
+    `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
+    (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
-  if(left+174>window.innerWidth) left=window.innerWidth-178;
-  if(top+620>window.innerHeight) top=e.clientY-624;   // 실측 메뉴 높이(~615px) 기준 — 하단 우클릭 시 잘리던 것 수정
+  if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
+  if(top+450>window.innerHeight) top=e.clientY-454;            // 메뉴 v2 높이 ~440px
   if(top<4) top=4;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
