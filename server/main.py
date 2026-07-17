@@ -1217,10 +1217,12 @@ function selectAllPcs() {
 
 async function selUpdaterCmd(command, args={}) {
   if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
+  const n=selectedPcs.size;
   for(const id of selectedPcs) {
     await fetch(`/updater/command/${id}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command,...args})});
   }
-  showToast(`${selectedPcs.size}대 업데이터 ${command}`);
+  showToast(`${n}대 업데이터 ${command} (선택 해제됨)`);
+  clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 중복 명령 방지★
 }
 
 // ─── 슬롯 필터 토글 / 전체선택·해제 ─────────────────────────────────────────
@@ -1269,9 +1271,11 @@ async function bulkCmd(command, args={}) {
 
 async function selCmd(command, args={}) {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
+  const n=selectedPcs.size;
   await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
-  showToast(`✓ ${command} → 선택 ${selectedPcs.size}대`);
+  showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
+  clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
 }
 
 // ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
