@@ -150,7 +150,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan, title="Macro Control Panel")
+app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,24 +264,46 @@ HTML_LOGIN = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Macro Control — Login</title>
+<title>⚔ 혼종 사령부 — Login</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>tailwind.config={darkMode:'class'}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  body{background:
+    radial-gradient(900px 600px at 20% 0%,rgba(99,102,241,.22),transparent 60%),
+    radial-gradient(800px 600px at 80% 100%,rgba(34,211,238,.14),transparent 55%),
+    #070b17!important}
+  @keyframes aurora{0%,100%{transform:translate3d(-4%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.12)}}
+  body::after{content:'';position:fixed;top:-20vh;left:50%;width:90vw;height:60vh;margin-left:-45vw;pointer-events:none;z-index:-1;
+    background:radial-gradient(closest-side,rgba(99,102,241,.25),transparent 70%);filter:blur(60px);animation:aurora 14s ease-in-out infinite}
+  @keyframes shine{to{background-position:200% center}}
+  .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 35%,#f0abfc 70%,#c7d2fe);background-size:200% auto;
+    -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;animation:shine 7s linear infinite}
+  .brand-sub{font-family:'Orbitron',sans-serif;font-size:.62rem;letter-spacing:.34em;color:#818cf8}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+  .brand-emblem{filter:drop-shadow(0 0 12px rgba(129,140,248,.95));animation:floaty 3s ease-in-out infinite;display:inline-block}
+  .login-card{background:linear-gradient(165deg,rgba(17,24,39,.88),rgba(10,14,28,.94));backdrop-filter:blur(12px);
+    border:1px solid rgba(99,102,241,.3);box-shadow:0 20px 60px -20px rgba(79,70,229,.45)}
+  .login-btn{background:linear-gradient(90deg,#4f46e5,#7c3aed 50%,#06b6d4);background-size:200% auto;transition:background-position .3s,transform .15s}
+  .login-btn:hover{background-position:right center;transform:translateY(-1px)}
+</style>
 </head>
-<body class="bg-gray-950 text-gray-100 flex items-center justify-center min-h-screen">
+<body class="text-gray-100 flex items-center justify-center min-h-screen">
 <div class="w-full max-w-sm">
-  <div class="bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-800">
+  <div class="login-card rounded-2xl p-8">
     <div class="text-center mb-8">
-      <div class="text-4xl mb-2">⚔</div>
-      <h1 class="text-xl font-bold text-indigo-400 tracking-wide">Macro Control Panel</h1>
-      <p class="text-gray-500 text-sm mt-1">매크로 관제 시스템</p>
+      <div class="brand-emblem text-5xl mb-3">⚔</div>
+      <h1 class="brand-title text-2xl font-extrabold tracking-wide">혼종 사령부</h1>
+      <p class="brand-sub mt-1">HONJONG COMMAND</p>
+      <p class="text-gray-500 text-sm mt-3">AION2 매크로 관제 시스템</p>
     </div>
     <div id="err" class="hidden bg-red-900/50 border border-red-700 text-red-300 rounded-lg px-4 py-2 text-sm mb-4"></div>
     <input id="pw" type="password" placeholder="비밀번호"
-      class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 mb-4"
+      class="w-full bg-gray-800/70 border border-gray-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 mb-4"
       onkeydown="if(event.key==='Enter')login()">
     <button onclick="login()"
-      class="w-full bg-indigo-600 hover:bg-indigo-500 rounded-lg py-3 font-bold text-sm transition-colors">
+      class="login-btn w-full rounded-lg py-3 font-bold text-sm text-white">
       로그인
     </button>
   </div>
@@ -359,29 +381,92 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Macro Control Panel</title>
+<title>⚔ 혼종 사령부 — AION2 관제</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>tailwind.config={darkMode:'class'}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap" rel="stylesheet">
 <style>
   @keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.5}}
-  .pulse{animation:pulse-badge 1.5s infinite}
+  .pulse{animation:pulse-badge 1.5s infinite;box-shadow:0 0 9px 1px currentColor}
   .log-box{font-family:'Consolas','D2Coding',monospace}
   .scrollbar-thin::-webkit-scrollbar{width:4px}
   .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
-  .scrollbar-thin::-webkit-scrollbar-thumb{background:#374151;border-radius:4px}
-  .card-sel{outline:2px solid #6366f1!important;outline-offset:1px}
+  .scrollbar-thin::-webkit-scrollbar-thumb{background:linear-gradient(#6366f1,#22d3ee);border-radius:4px}
+  .card-sel{outline:2px solid #22d3ee!important;outline-offset:1px;box-shadow:0 0 18px rgba(34,211,238,.35)!important}
   .card-dragging{opacity:.4;outline:2px dashed #6366f1!important}
   .card-dragover{outline:2px solid #818cf8!important;outline-offset:2px}
   .menu-item{display:block;width:100%;text-align:left;padding:5px 14px;font-size:.75rem;font-weight:600;transition:background .1s}
   .menu-item:hover{background:rgba(255,255,255,.08)}
+
+  /* ══ 삐까뻔쩍 스킨 (기능 무관 — 시각만) ══ */
+  /* 배경: 딥스페이스 그라데이션 + 오로라 블롭 + 홀로그램 그리드 */
+  body{background:
+    radial-gradient(1200px 800px at 15% -10%,rgba(99,102,241,.18),transparent 60%),
+    radial-gradient(1000px 700px at 85% 10%,rgba(192,132,252,.13),transparent 55%),
+    radial-gradient(900px 900px at 50% 110%,rgba(34,211,238,.10),transparent 55%),
+    #070b17!important;background-attachment:fixed}
+  body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:-1;
+    background-image:linear-gradient(rgba(129,140,248,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,.05) 1px,transparent 1px);
+    background-size:44px 44px;
+    -webkit-mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%);
+    mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%)}
+  @keyframes aurora{0%,100%{transform:translate3d(-4%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.12)}}
+  body::after{content:'';position:fixed;top:-28vh;left:50%;width:92vw;height:58vh;margin-left:-46vw;pointer-events:none;z-index:-1;
+    background:radial-gradient(closest-side,rgba(99,102,241,.22),rgba(34,211,238,.10) 55%,transparent 72%);
+    filter:blur(58px);animation:aurora 16s ease-in-out infinite}
+
+  /* 헤더/명령바: 유리 패널 */
+  .glass-header{background:rgba(8,11,23,.78)!important;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border-bottom:1px solid rgba(99,102,241,.35);box-shadow:0 2px 24px rgba(79,70,229,.18)}
+  .cmd-bar{background:rgba(10,14,28,.75)!important;border-bottom:1px solid rgba(99,102,241,.18);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
+
+  /* 브랜드 */
+  @keyframes shine{to{background-position:200% center}}
+  .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 35%,#f0abfc 70%,#c7d2fe);background-size:200% auto;
+    -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
+    animation:shine 7s linear infinite}
+  .brand-sub{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:.6rem;letter-spacing:.3em;color:#818cf8;opacity:.85;transform:translateY(1px)}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+  .brand-emblem{filter:drop-shadow(0 0 8px rgba(129,140,248,.9));animation:floaty 3s ease-in-out infinite}
+
+  /* 전광판 타일: 네온 상단바 + 글로우 숫자 + 호버 리프트 */
+  .stat-tile{position:relative;background:linear-gradient(160deg,rgba(17,24,39,.85),rgba(10,14,28,.92));
+    border:1px solid rgba(99,102,241,.22);border-radius:1rem;padding:1rem;overflow:hidden;
+    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+  .stat-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--tile),transparent);opacity:.9}
+  .stat-tile::after{content:'';position:absolute;top:-42%;left:50%;width:130%;height:85%;transform:translateX(-50%);
+    background:radial-gradient(closest-side,var(--tile-glow),transparent 70%);opacity:.22;pointer-events:none}
+  .stat-tile:hover{transform:translateY(-3px);border-color:var(--tile);box-shadow:0 10px 34px -10px var(--tile-glow)}
+  .tile-green {--tile:#4ade80;--tile-glow:rgba(74,222,128,.5)}
+  .tile-blue  {--tile:#60a5fa;--tile-glow:rgba(96,165,250,.5)}
+  .tile-yellow{--tile:#facc15;--tile-glow:rgba(250,204,21,.45)}
+  .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.55)}
+  .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.45)}
+  .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
+    white-space:nowrap;text-shadow:0 0 18px var(--tile-glow)}
+  .stat-tile .stat-label{font-size:.8rem;color:#94a3b8;margin-top:.3rem;letter-spacing:.06em}
+  .stat-tile .stat-icon{position:absolute;right:.8rem;top:.7rem;font-size:1.2rem;opacity:.45}
+
+  /* PC 카드: 호버 리프트 + 글로우 (상태색 배경/테두리는 그대로 살림) */
+  div[id^="card-"]{box-shadow:0 4px 18px -8px rgba(0,0,0,.55);transition:transform .18s ease,box-shadow .18s ease}
+  div[id^="card-"]:hover{transform:translateY(-2px);box-shadow:0 10px 30px -10px rgba(99,102,241,.4)}
+
+  /* 버튼: 살짝 떠오르는 손맛 */
+  button{transition:transform .15s ease,box-shadow .15s ease,background-color .15s,color .15s}
+  button:hover{transform:translateY(-1px)}
+  button:active{transform:translateY(0) scale(.97)}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
 <!-- HEADER -->
-<header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 z-30">
-  <span class="text-2xl">⚔</span>
-  <h1 class="font-bold text-indigo-400 tracking-wide text-base sm:text-lg">Macro Control Panel</h1>
+<header class="glass-header px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 z-30">
+  <span class="brand-emblem text-2xl">⚔</span>
+  <h1 class="brand-title font-extrabold tracking-wide text-base sm:text-lg whitespace-nowrap">혼종 사령부</h1>
+  <span class="brand-sub hidden md:inline">HONJONG COMMAND</span>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
@@ -391,7 +476,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 </header>
 
 <!-- 명령 바 -->
-<div class="bg-gray-900/90 border-b border-gray-800 px-4 py-2 flex flex-wrap gap-2 items-center sticky top-[52px] z-20 backdrop-blur">
+<div class="cmd-bar px-4 py-2 flex flex-wrap gap-2 items-center sticky top-[52px] z-20 backdrop-blur">
   <!-- 그룹 1: 선택 -->
   <span id="sel-label" class="text-xs text-indigo-400 font-semibold shrink-0">0개 선택</span>
   <button onclick="selectAllPcs()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 transition-colors">전체선택</button>
@@ -423,25 +508,30 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
   <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 창고키나) -->
   <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-green-400" id="cnt-online">0</div>
-      <div class="text-sm text-gray-400 mt-1">온라인</div>
+    <div class="stat-tile tile-green">
+      <div class="stat-icon">🖥️</div>
+      <div class="stat-num text-green-400" id="cnt-online">0</div>
+      <div class="stat-label">온라인</div>
     </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
-      <div class="text-sm text-gray-400 mt-1">완료</div>
+    <div class="stat-tile tile-blue">
+      <div class="stat-icon">✅</div>
+      <div class="stat-num text-blue-400" id="cnt-completed">0</div>
+      <div class="stat-label">완료</div>
     </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-yellow-400" id="cnt-odd-energy">–</div>
-      <div class="text-sm text-gray-400 mt-1">오드에너지</div>
+    <div class="stat-tile tile-yellow">
+      <div class="stat-icon">⚡</div>
+      <div class="stat-num text-yellow-400" id="cnt-odd-energy">–</div>
+      <div class="stat-label">오드에너지</div>
     </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-indigo-400" id="cnt-awakening">–</div>
-      <div class="text-sm text-gray-400 mt-1">각성전</div>
+    <div class="stat-tile tile-indigo">
+      <div class="stat-icon">⚔️</div>
+      <div class="stat-num text-indigo-400" id="cnt-awakening">–</div>
+      <div class="stat-label">각성전</div>
     </div>
-    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-yellow-300" id="cnt-total-kina">–</div>
-      <div class="text-sm text-gray-400 mt-1">창고키나</div>
+    <div class="stat-tile tile-gold">
+      <div class="stat-icon">💰</div>
+      <div class="stat-num text-yellow-300" id="cnt-total-kina">–</div>
+      <div class="stat-label">창고키나</div>
     </div>
   </div>
 
@@ -2488,6 +2578,6 @@ async def updater_check(request: Request):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    print(f"Macro Control Panel: http://localhost:{port}")
+    print(f"혼종 사령부: http://localhost:{port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
 # Tue Apr  7 08:52:44     2026
