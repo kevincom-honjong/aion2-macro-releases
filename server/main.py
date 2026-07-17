@@ -599,9 +599,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   div[id^="card-"]:hover::after{opacity:1;animation:spin-border 2.4s linear infinite}
   @keyframes spin-border{to{--spin:360deg}}
 
-  /* ── 완료 뱃지 (카드 이름 옆) ── */
-  .done-badge{padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;line-height:1.5;
-    white-space:nowrap;margin-left:4px;letter-spacing:.02em}
+  /* ── 완료 스탬프 (카드 이름 옆, 이모지만 — 색깔 필이 신호) ── */
+  .done-badge{padding:1px 5px;border-radius:999px;font-size:11px;line-height:1.4;
+    white-space:nowrap;margin-left:4px}
   .done-hunt{color:#bbf7d0;background:rgba(34,197,94,.18);border:1px solid rgba(74,222,128,.55);
     box-shadow:0 0 8px -2px rgba(74,222,128,.6)}
   .done-awaken{color:#c7d2fe;background:rgba(99,102,241,.22);border:1px solid rgba(129,140,248,.6);
@@ -970,12 +970,10 @@ function isHuntDone(dp){
   return dp.every(c=>c.completed && ((c.completed_time||'').replace('T',' ')>=cut));
 }
 function isAwakenDone(pc_id){
+  // 규칙(사용자 확정): 전 캐릭터 각성 티켓 0/3이면 스탬프 — 단순 판정.
+  // (수요일 05시 초기화 후엔 게임이 3/3으로 돌아가고 다음 정보수집 때 DB 갱신돼 자연 소멸)
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
-  if(!rows.length) return false;
-  const cut=fmtTs(lastWeeklyReset());
-  // 전 캐릭 티켓 0 + 정보수집이 주간 초기화 이후에 돈 것만 인정 (지난주 0이 남은 stale DB 차단)
-  return rows.every(r=>parseInt(r.awakening_ticket)===0)
-      && rows.every(r=>((r.collected_at||'').replace('T',' ')>=cut));
+  return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
 }
 
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
@@ -1040,10 +1038,10 @@ function buildCard(pc) {
   const activeTag = (activeName && isOnline)
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
-  // 완료 뱃지: 사냥(오늘 전 슬롯 완료, 매일 05시 초기화) / 각성전(전 캐릭 티켓 소진, 수요일 05시 초기화)
+  // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3
   const doneBadges =
-    (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹 사냥완료</span>`:'') +
-    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="이번 주 각성전 완료(전 캐릭 티켓 소진) — 수요일 새벽 5시 초기화">⚔ 각성완료</span>`:'');
+    (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹</span>`:'') +
+    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 전 캐릭 0/3 (수요일 새벽 5시 초기화)">⚔</span>`:'');
   return `<div id="card-${pc.pc_id}"
     class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none"
     onclick="toggleSelect('${pc.pc_id}',event)"
