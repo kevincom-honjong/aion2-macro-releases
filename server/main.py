@@ -599,6 +599,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   div[id^="card-"]:hover::after{opacity:1;animation:spin-border 2.4s linear infinite}
   @keyframes spin-border{to{--spin:360deg}}
 
+  /* ── 완료 뱃지 (카드 이름 옆) ── */
+  .done-badge{padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;line-height:1.5;
+    white-space:nowrap;margin-left:4px;letter-spacing:.02em}
+  .done-hunt{color:#bbf7d0;background:rgba(34,197,94,.18);border:1px solid rgba(74,222,128,.55);
+    box-shadow:0 0 8px -2px rgba(74,222,128,.6)}
+  .done-awaken{color:#c7d2fe;background:rgba(99,102,241,.22);border:1px solid rgba(129,140,248,.6);
+    box-shadow:0 0 8px -2px rgba(129,140,248,.65)}
+
   /* ── 섹션 헤더 네온 라인 / 토스트 ── */
   main section h2{position:relative}
   main section h2::after{content:'';position:absolute;left:0;bottom:-5px;width:170px;height:2px;border-radius:2px;
@@ -949,6 +957,27 @@ function relTime(iso) {
 
 const CLASS_LABEL = {gungsung:'궁성',spirit:'정령성',kumsung:'검성',chiyousung:'치유성'};
 
+// ─── 완료 뱃지 (사냥=매일 05:00 초기화 / 각성전=매주 수요일 05:00 초기화) ─────────
+// 완료 판정에 '초기화 경계 이후 데이터'만 인정 — PC가 밤새 꺼져 있어도 어제 완료가
+// 오늘 완료로 둔갑하지 않게 시각 게이트.
+function fmtTs(d){const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+function lastDailyReset(){const d=new Date();if(d.getHours()<5)d.setDate(d.getDate()-1);d.setHours(5,0,0,0);return d;}
+function lastWeeklyReset(){const d=lastDailyReset();while(d.getDay()!==3)d.setDate(d.getDate()-1);return d;}  // 3=수요일
+function isHuntDone(dp){
+  if(!dp||!dp.length) return false;
+  const cut=fmtTs(lastDailyReset());
+  return dp.every(c=>c.completed && ((c.completed_time||'').replace('T',' ')>=cut));
+}
+function isAwakenDone(pc_id){
+  const rows=charTableData.filter(r=>r.pc_id===pc_id);
+  if(!rows.length) return false;
+  const cut=fmtTs(lastWeeklyReset());
+  // 전 캐릭 티켓 0 + 정보수집이 주간 초기화 이후에 돈 것만 인정 (지난주 0이 남은 stale DB 차단)
+  return rows.every(r=>parseInt(r.awakening_ticket)===0)
+      && rows.every(r=>((r.collected_at||'').replace('T',' ')>=cut));
+}
+
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
 function buildDailyProgress(dp, activeSlot, charNames, pc) {
   if (!dp || !dp.length) return '';
@@ -1011,6 +1040,10 @@ function buildCard(pc) {
   const activeTag = (activeName && isOnline)
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
+  // 완료 뱃지: 사냥(오늘 전 슬롯 완료, 매일 05시 초기화) / 각성전(전 캐릭 티켓 소진, 수요일 05시 초기화)
+  const doneBadges =
+    (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹 사냥완료</span>`:'') +
+    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="이번 주 각성전 완료(전 캐릭 티켓 소진) — 수요일 새벽 5시 초기화">⚔ 각성완료</span>`:'');
   return `<div id="card-${pc.pc_id}"
     class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none"
     onclick="toggleSelect('${pc.pc_id}',event)"
@@ -1019,7 +1052,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-2 min-w-0">
         <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 select-none" style="font-size:14px;line-height:1" title="드래그로 순서 변경">⠿</span>
         <div class="min-w-0">
-          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${bugBadge}${activeTag}</div>
+          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${doneBadges}${bugBadge}${activeTag}</div>
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
@@ -1662,7 +1695,7 @@ async function loadCharTable() {
     charTableData = d.characters || [];
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
-    refreshSummary(Object.values(state));
+    renderCards();   // 각성완료 뱃지가 charTableData 기반 — 로드 후 카드 재렌더(내부에서 refreshSummary 호출)
   } catch(e) { console.error('캐릭터 테이블 로드 실패', e); }
 }
 
