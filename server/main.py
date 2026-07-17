@@ -287,9 +287,27 @@ HTML_LOGIN = """<!DOCTYPE html>
     border:1px solid rgba(99,102,241,.3);box-shadow:0 20px 60px -20px rgba(79,70,229,.45)}
   .login-btn{background:linear-gradient(90deg,#4f46e5,#7c3aed 50%,#06b6d4);background-size:200% auto;transition:background-position .3s,transform .15s}
   .login-btn:hover{background-position:right center;transform:translateY(-1px)}
+  /* 별밭 + 신스웨이브 지평선 (대시보드와 동일 테마) */
+  #bg-fx{position:fixed;inset:0;pointer-events:none;z-index:-1;overflow:hidden}
+  #bg-fx .stars{position:absolute;left:0;right:0;top:-100%;height:200%;
+    background-image:radial-gradient(1px 1px at 25px 35px,rgba(255,255,255,.9),transparent 45%),
+      radial-gradient(1.5px 1.5px at 210px 160px,rgba(165,243,252,.9),transparent 45%),
+      radial-gradient(1px 1px at 125px 90px,rgba(240,171,252,.7),transparent 45%),
+      radial-gradient(1px 1px at 80px 225px,rgba(255,255,255,.5),transparent 45%);
+    background-size:340px 290px;animation:star-drift 160s linear infinite}
+  @keyframes star-drift{to{transform:translateY(50%)}}
+  #bg-fx .horizon{position:absolute;left:-25%;right:-25%;bottom:-2px;height:32vh;opacity:.5;
+    transform:perspective(430px) rotateX(63deg);transform-origin:50% 100%;overflow:hidden;
+    -webkit-mask-image:linear-gradient(to top,#000 25%,transparent 96%);mask-image:linear-gradient(to top,#000 25%,transparent 96%)}
+  #bg-fx .horizon::before{content:'';position:absolute;left:0;right:0;top:-88px;bottom:-88px;
+    background:repeating-linear-gradient(90deg,rgba(129,140,248,.42) 0 1px,transparent 1px 64px),
+      repeating-linear-gradient(0deg,rgba(232,121,249,.36) 0 1px,transparent 1px 44px);
+    animation:grid-run 3s linear infinite}
+  @keyframes grid-run{to{transform:translateY(44px)}}
 </style>
 </head>
 <body class="text-gray-100 flex items-center justify-center min-h-screen">
+<div id="bg-fx" aria-hidden="true"><div class="stars"></div><div class="horizon"></div></div>
 <div class="w-full max-w-sm">
   <div class="login-card rounded-2xl p-8">
     <div class="text-center mb-8">
@@ -399,68 +417,149 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .menu-item{display:block;width:100%;text-align:left;padding:5px 14px;font-size:.75rem;font-weight:600;transition:background .1s}
   .menu-item:hover{background:rgba(255,255,255,.08)}
 
-  /* ══ 삐까뻔쩍 스킨 (기능 무관 — 시각만) ══ */
-  /* 배경: 딥스페이스 그라데이션 + 오로라 블롭 + 홀로그램 그리드 */
+  /* ══ FABULOUS 스킨 v2 — 사이버펑크 사령부 ══
+     별밭 2겹+혜성+신스웨이브 지평선+오로라. 애니메이션은 전부 transform/opacity(GPU)라
+     카드 17장+WS 실시간 갱신에서도 부하 없음. 기능/DOM 무관 — 시각 전용. */
   body{background:
-    radial-gradient(1200px 800px at 15% -10%,rgba(99,102,241,.18),transparent 60%),
-    radial-gradient(1000px 700px at 85% 10%,rgba(192,132,252,.13),transparent 55%),
-    radial-gradient(900px 900px at 50% 110%,rgba(34,211,238,.10),transparent 55%),
-    #070b17!important;background-attachment:fixed}
+    radial-gradient(1400px 900px at 12% -12%,rgba(99,102,241,.30),transparent 55%),
+    radial-gradient(1100px 800px at 88% 5%,rgba(232,121,249,.18),transparent 55%),
+    radial-gradient(1000px 1000px at 50% 115%,rgba(34,211,238,.15),transparent 55%),
+    #04060f!important;background-attachment:fixed}
   body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:-1;
-    background-image:linear-gradient(rgba(129,140,248,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,.05) 1px,transparent 1px);
+    background-image:linear-gradient(rgba(129,140,248,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,.06) 1px,transparent 1px);
     background-size:44px 44px;
     -webkit-mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%);
     mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%)}
-  @keyframes aurora{0%,100%{transform:translate3d(-4%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.12)}}
+  @keyframes aurora{0%,100%{transform:translate3d(-4%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.14)}}
   body::after{content:'';position:fixed;top:-28vh;left:50%;width:92vw;height:58vh;margin-left:-46vw;pointer-events:none;z-index:-1;
-    background:radial-gradient(closest-side,rgba(99,102,241,.22),rgba(34,211,238,.10) 55%,transparent 72%);
-    filter:blur(58px);animation:aurora 16s ease-in-out infinite}
+    background:radial-gradient(closest-side,rgba(99,102,241,.30),rgba(232,121,249,.12) 45%,rgba(34,211,238,.12) 60%,transparent 74%);
+    filter:blur(56px);animation:aurora 14s ease-in-out infinite}
 
-  /* 헤더/명령바: 유리 패널 */
-  .glass-header{background:rgba(8,11,23,.78)!important;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-    border-bottom:1px solid rgba(99,102,241,.35);box-shadow:0 2px 24px rgba(79,70,229,.18)}
-  .cmd-bar{background:rgba(10,14,28,.75)!important;border-bottom:1px solid rgba(99,102,241,.18);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
+  /* ── 배경 FX: 별밭 2겹(드리프트+트윙클) / 혜성 / 신스웨이브 지평선 그리드 ── */
+  #bg-fx{position:fixed;inset:0;pointer-events:none;z-index:-1;overflow:hidden}
+  #bg-fx .stars{position:absolute;left:0;right:0;top:-100%;height:200%;
+    background-image:
+      radial-gradient(1px 1px at 25px 35px,rgba(255,255,255,.9),transparent 45%),
+      radial-gradient(1px 1px at 125px 90px,rgba(199,210,254,.8),transparent 45%),
+      radial-gradient(1.6px 1.6px at 210px 160px,rgba(165,243,252,.9),transparent 45%),
+      radial-gradient(1px 1px at 80px 225px,rgba(255,255,255,.55),transparent 45%),
+      radial-gradient(1.3px 1.3px at 305px 60px,rgba(240,171,252,.7),transparent 45%),
+      radial-gradient(1px 1px at 170px 250px,rgba(255,255,255,.4),transparent 45%);
+    background-size:340px 290px;animation:star-drift 160s linear infinite}
+  #bg-fx .stars.s2{background-size:560px 470px;opacity:.55;
+    animation:star-drift 260s linear infinite reverse,twinkle 6s ease-in-out infinite}
+  @keyframes star-drift{to{transform:translateY(50%)}}
+  @keyframes twinkle{0%,100%{opacity:.55}50%{opacity:.2}}
+  #bg-fx .comet{position:absolute;top:6%;left:-14%;width:190px;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(165,243,252,.85) 65%,#fff);
+    filter:drop-shadow(0 0 8px rgba(103,232,249,.95));opacity:0;
+    animation:comet 12s ease-in 3s infinite}
+  @keyframes comet{0%{transform:translate3d(0,0,0) rotate(16deg);opacity:0}
+    2%{opacity:1}11%{transform:translate3d(135vw,45vh,0) rotate(16deg);opacity:0}100%{opacity:0}}
+  #bg-fx .horizon{position:absolute;left:-25%;right:-25%;bottom:-2px;height:30vh;opacity:.5;
+    transform:perspective(430px) rotateX(63deg);transform-origin:50% 100%;overflow:hidden;
+    -webkit-mask-image:linear-gradient(to top,#000 25%,transparent 96%);
+    mask-image:linear-gradient(to top,#000 25%,transparent 96%)}
+  #bg-fx .horizon::before{content:'';position:absolute;left:0;right:0;top:-88px;bottom:-88px;
+    background:
+      repeating-linear-gradient(90deg,rgba(129,140,248,.42) 0 1px,transparent 1px 64px),
+      repeating-linear-gradient(0deg,rgba(232,121,249,.36) 0 1px,transparent 1px 44px);
+    animation:grid-run 3s linear infinite}
+  @keyframes grid-run{to{transform:translateY(44px)}}
+  #bg-fx .hglow{position:absolute;left:6%;right:6%;bottom:20vh;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(232,121,249,.55) 30%,rgba(34,211,238,.55) 70%,transparent);
+    filter:blur(1.5px);opacity:.55}
 
-  /* 브랜드 */
+  /* ── 헤더/명령바: 유리 패널 + 네온 언더라인 스윕 ── */
+  .glass-header{background:rgba(6,9,20,.8)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+    border-bottom:1px solid rgba(99,102,241,.4);box-shadow:0 2px 28px rgba(79,70,229,.22)}
+  .glass-header::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;pointer-events:none;
+    background:linear-gradient(90deg,transparent,#6366f1 25%,#e879f9 50%,#22d3ee 75%,transparent);
+    background-size:220% 100%;animation:shine 6s linear infinite;opacity:.9}
+  .cmd-bar{background:rgba(8,11,24,.78)!important;border-bottom:1px solid rgba(99,102,241,.2);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
+
+  /* ── 브랜드 ── */
   @keyframes shine{to{background-position:200% center}}
-  .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 35%,#f0abfc 70%,#c7d2fe);background-size:200% auto;
+  .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 30%,#f0abfc 60%,#fde047 80%,#c7d2fe);background-size:200% auto;
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
-    animation:shine 7s linear infinite}
-  .brand-sub{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:.6rem;letter-spacing:.3em;color:#818cf8;opacity:.85;transform:translateY(1px)}
-  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
-  .brand-emblem{filter:drop-shadow(0 0 8px rgba(129,140,248,.9));animation:floaty 3s ease-in-out infinite}
+    animation:shine 6s linear infinite}
+  .brand-sub{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:.6rem;letter-spacing:.3em;color:#818cf8;opacity:.9;transform:translateY(1px)}
+  @keyframes floaty{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-3px) rotate(4deg)}}
+  .brand-emblem{display:inline-block;filter:drop-shadow(0 0 10px rgba(129,140,248,1)) drop-shadow(0 0 24px rgba(232,121,249,.7));
+    animation:floaty 3s ease-in-out infinite}
 
-  /* 전광판 타일: 네온 상단바 + 글로우 숫자 + 호버 리프트 */
-  .stat-tile{position:relative;background:linear-gradient(160deg,rgba(17,24,39,.85),rgba(10,14,28,.92));
-    border:1px solid rgba(99,102,241,.22);border-radius:1rem;padding:1rem;overflow:hidden;
+  /* ── 전광판 타일: 흐르는 네온 라인 + 그라데이션 발광 숫자 + 호버 리프트 ── */
+  .stat-tile{position:relative;background:linear-gradient(160deg,rgba(23,29,52,.88),rgba(9,13,28,.94));
+    border:1px solid rgba(99,102,241,.28);border-radius:1rem;padding:1rem;overflow:hidden;
     backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
     transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
   .stat-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
-    background:linear-gradient(90deg,transparent,var(--tile),transparent);opacity:.9}
+    background:linear-gradient(90deg,transparent,var(--tile) 40%,#fff 50%,var(--tile) 60%,transparent);
+    background-size:220% 100%;animation:shine 4.5s linear infinite;opacity:.95}
   .stat-tile::after{content:'';position:absolute;top:-42%;left:50%;width:130%;height:85%;transform:translateX(-50%);
-    background:radial-gradient(closest-side,var(--tile-glow),transparent 70%);opacity:.22;pointer-events:none}
-  .stat-tile:hover{transform:translateY(-3px);border-color:var(--tile);box-shadow:0 10px 34px -10px var(--tile-glow)}
-  .tile-green {--tile:#4ade80;--tile-glow:rgba(74,222,128,.5)}
-  .tile-blue  {--tile:#60a5fa;--tile-glow:rgba(96,165,250,.5)}
-  .tile-yellow{--tile:#facc15;--tile-glow:rgba(250,204,21,.45)}
-  .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.55)}
-  .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.45)}
+    background:radial-gradient(closest-side,var(--tile-glow),transparent 70%);opacity:.26;pointer-events:none}
+  .stat-tile:hover{transform:translateY(-4px) scale(1.02);border-color:var(--tile);box-shadow:0 14px 40px -10px var(--tile-glow)}
+  .tile-green {--tile:#4ade80;--tile-glow:rgba(74,222,128,.55)}
+  .tile-blue  {--tile:#60a5fa;--tile-glow:rgba(96,165,250,.55)}
+  .tile-yellow{--tile:#facc15;--tile-glow:rgba(250,204,21,.5)}
+  .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.6)}
+  .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
-    white-space:nowrap;text-shadow:0 0 18px var(--tile-glow)}
-  .stat-tile .stat-label{font-size:.8rem;color:#94a3b8;margin-top:.3rem;letter-spacing:.06em}
-  .stat-tile .stat-icon{position:absolute;right:.8rem;top:.7rem;font-size:1.2rem;opacity:.45}
+    white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 0 14px var(--tile-glow))}
+  .stat-tile .stat-label{font-size:.8rem;color:#a5b4c8;margin-top:.3rem;letter-spacing:.08em}
+  .stat-tile .stat-icon{position:absolute;right:.8rem;top:.7rem;font-size:1.2rem;opacity:.5;
+    filter:drop-shadow(0 0 6px var(--tile-glow))}
 
-  /* PC 카드: 호버 리프트 + 글로우 (상태색 배경/테두리는 그대로 살림) */
-  div[id^="card-"]{box-shadow:0 4px 18px -8px rgba(0,0,0,.55);transition:transform .18s ease,box-shadow .18s ease}
-  div[id^="card-"]:hover{transform:translateY(-2px);box-shadow:0 10px 30px -10px rgba(99,102,241,.4)}
+  /* ── PC 카드: 상태색 글로우 + 호버 리프트 + 회전 네온 보더(호버) ── */
+  div[id^="card-"]{box-shadow:0 6px 22px -10px rgba(0,0,0,.6);transition:transform .18s ease,box-shadow .18s ease}
+  div[id^="card-"]:hover{transform:translateY(-3px) scale(1.008)}
+  /* 상태별 은은한 외곽광 (STATUS_CFG border 클래스 기준 — 기능 신호 강화) */
+  div[id^="card-"].border-green-700  {box-shadow:0 0 0 1px rgba(34,197,94,.22), 0 6px 26px -8px rgba(34,197,94,.3)}
+  div[id^="card-"].border-blue-700   {box-shadow:0 0 0 1px rgba(59,130,246,.25),0 6px 26px -8px rgba(59,130,246,.32)}
+  div[id^="card-"].border-indigo-700 {box-shadow:0 0 0 1px rgba(99,102,241,.28),0 6px 26px -8px rgba(99,102,241,.36)}
+  div[id^="card-"].border-fuchsia-700{box-shadow:0 0 0 1px rgba(217,70,239,.25),0 6px 26px -8px rgba(217,70,239,.32)}
+  div[id^="card-"].border-purple-700 {box-shadow:0 0 0 1px rgba(168,85,247,.25),0 6px 26px -8px rgba(168,85,247,.3)}
+  div[id^="card-"].border-orange-700 {box-shadow:0 0 0 1px rgba(249,115,22,.28),0 6px 26px -8px rgba(249,115,22,.34)}
+  div[id^="card-"].border-pink-700   {box-shadow:0 0 0 1px rgba(236,72,153,.28),0 6px 26px -8px rgba(236,72,153,.34)}
+  div[id^="card-"].border-red-700    {box-shadow:0 0 0 1px rgba(239,68,68,.4),  0 6px 30px -8px rgba(239,68,68,.45)}
+  div[id^="card-"].border-cyan-700   {box-shadow:0 0 0 1px rgba(34,211,238,.25),0 6px 26px -8px rgba(34,211,238,.32)}
+  div[id^="card-"].border-amber-700  {box-shadow:0 0 0 1px rgba(245,158,11,.28),0 6px 26px -8px rgba(245,158,11,.34)}
+  div[id^="card-"].border-lime-700   {box-shadow:0 0 0 1px rgba(132,204,22,.25),0 6px 26px -8px rgba(132,204,22,.3)}
+  /* 호버 시 회전하는 네온 테두리 (호버에만 애니 → 평시 부하 0) */
+  @property --spin{syntax:'<angle>';inherits:false;initial-value:0deg}
+  div[id^="card-"]::after{content:'';position:absolute;inset:-1px;border-radius:.85rem;padding:1.5px;
+    background:conic-gradient(from var(--spin),transparent 0deg 120deg,#818cf8 160deg,#e879f9 190deg,#22d3ee 220deg,transparent 260deg 360deg);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;
+    opacity:0;transition:opacity .25s;pointer-events:none}
+  div[id^="card-"]:hover::after{opacity:1;animation:spin-border 2.4s linear infinite}
+  @keyframes spin-border{to{--spin:360deg}}
 
-  /* 버튼: 살짝 떠오르는 손맛 */
+  /* ── 섹션 헤더 네온 라인 / 토스트 ── */
+  main section h2{position:relative}
+  main section h2::after{content:'';position:absolute;left:0;bottom:-5px;width:170px;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,#6366f1,#22d3ee 55%,transparent);opacity:.75}
+  #toast{background:rgba(13,18,38,.92)!important;border:1px solid rgba(129,140,248,.55)!important;
+    box-shadow:0 0 26px rgba(99,102,241,.4);backdrop-filter:blur(8px)}
+
+  /* ── 버튼: 떠오르는 손맛 ── */
   button{transition:transform .15s ease,box-shadow .15s ease,background-color .15s,color .15s}
   button:hover{transform:translateY(-1px)}
   button:active{transform:translateY(0) scale(.97)}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<!-- 배경 FX (별밭 2겹 + 혜성 + 신스웨이브 지평선) — 시각 전용, pointer-events 없음 -->
+<div id="bg-fx" aria-hidden="true">
+  <div class="stars"></div>
+  <div class="stars s2"></div>
+  <div class="comet"></div>
+  <div class="horizon"></div>
+  <div class="hglow"></div>
+</div>
 
 <!-- HEADER -->
 <header class="glass-header px-4 sm:px-6 py-3 flex items-center gap-3 sticky top-0 z-30">
@@ -502,6 +601,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지" class="px-2 py-1 rounded-lg text-xs bg-gray-800 border border-gray-700 text-yellow-300 focus:outline-none focus:border-yellow-600" style="width:82px">
   <button id="sale-price-btn" onclick="toggleSalePrice()" class="px-2 py-1 rounded-lg text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors">확정</button>
   <button onclick="sellAllSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 transition-colors">판매</button>
+  <button onclick="settleSel()" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-900/60 hover:bg-amber-700 text-amber-300 transition-colors" title="등록 없이 전 캐릭 판매대금(정산)만 수령">정산</button>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
@@ -663,9 +763,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button class="menu-item text-green-400"  onclick="cardCmd('start')">▶ 매크로 시작</button>
   <button class="menu-item text-red-400"    onclick="cardCmd('stop')">■ 매크로 정지</button>
   <button class="menu-item text-orange-400" onclick="cardCmd('exit')">✕ 매크로 종료</button>
-  <button class="menu-item text-yellow-400" onclick="cardCmd('restart')">↺ 재시작</button>
+  <!-- 재시작 = 업데이터 restart(프로세스 kill+재기동). 매크로 'restart' 명령은 스레드 좀비를
+       만드는 가짜 재시작이라 폐기(v1.1.255) — 이 버튼이 진짜 재시작으로 연결됨 -->
+  <button class="menu-item text-yellow-400" onclick="updaterCmd('restart')">↺ 재시작</button>
   <button class="menu-item text-purple-400" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
   <button class="menu-item text-yellow-400" onclick="sellAllFromMenu()">$ 판매(전 캐릭)</button>
+  <button class="menu-item text-amber-300"  onclick="settleFromMenu()">₭ 정산(전 캐릭)</button>
   <button class="menu-item text-cyan-400"   onclick="collectInfoFromMenu()">📡 정보수집</button>
   <button class="menu-item text-gray-300"   onclick="cardCmd('go_home')">⌂ 귀환</button>
   <div class="border-t border-gray-700 my-1"></div>
@@ -1151,7 +1254,7 @@ function openCardMenu(pc_id, e) {
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
   if(left+174>window.innerWidth) left=window.innerWidth-178;
-  if(top+440>window.innerHeight) top=e.clientY-444;
+  if(top+470>window.innerHeight) top=e.clientY-474;   // 메뉴 항목 추가(정산)로 높이 상향
   if(top<4) top=4;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
@@ -1187,6 +1290,23 @@ async function sellAllFromMenu() {
   closeCardMenu();
   const ok=await sendCmd(pc,'sell_all',{price:p});
   showToast(ok?`✓ 판매 → ${pc} (거래소가 ${p.toLocaleString()})`:`✗ 판매 전송 실패`);
+  loadCmdHistory();
+}
+
+// ─── 정산(settle) — 등록 없이 전 캐릭 순회하며 판매대금만 수령 (가격 불필요) ─────
+async function settleSel() {
+  if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
+  if(!confirm(`선택 ${selectedPcs.size}대 정산 실행\n(등록 없이 전 캐릭 판매대금 수령 — 캐릭당 ~1분)`))return;
+  await selCmd('settle');
+}
+
+async function settleFromMenu() {
+  if(!menuPcId) return;
+  const pc=menuPcId;
+  if(!confirm(`${pc} 전 캐릭 정산 실행\n(등록 없이 판매대금 수령 — 캐릭당 ~1분)`))return;
+  closeCardMenu();
+  const ok=await sendCmd(pc,'settle',{});
+  showToast(ok?`✓ 정산 → ${pc}`:`✗ 정산 전송 실패`);
   loadCmdHistory();
 }
 
