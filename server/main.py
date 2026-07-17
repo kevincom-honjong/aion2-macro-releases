@@ -421,19 +421,23 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <main class="p-4 sm:p-6 space-y-6">
 
-  <!-- 전광판 -->
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+  <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 창고키나) -->
+  <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-green-400" id="cnt-online">0</div>
       <div class="text-sm text-gray-400 mt-1">온라인</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
+      <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
+      <div class="text-sm text-gray-400 mt-1">완료</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-yellow-400" id="cnt-odd-energy">–</div>
       <div class="text-sm text-gray-400 mt-1">오드에너지</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
-      <div class="text-2xl font-bold text-blue-400" id="cnt-completed">0</div>
-      <div class="text-sm text-gray-400 mt-1">완료</div>
+      <div class="text-2xl font-bold text-indigo-400" id="cnt-awakening">–</div>
+      <div class="text-sm text-gray-400 mt-1">각성전</div>
     </div>
     <div class="bg-gray-900 rounded-xl p-4 border border-gray-800">
       <div class="text-2xl font-bold text-yellow-300" id="cnt-total-kina">–</div>
@@ -898,11 +902,15 @@ function refreshSummary(pcs) {
       c.totalKina += p._total_kina;
     }
   });
-  // 오드에너지 합산 (charTableData 기준)
-  let totalOdd = 0;
-  charTableData.forEach(r => { totalOdd += parseOddEnergy(r.odd_energy); });
+  // 오드에너지 + 각성전 티켓 합산 (charTableData 기준)
+  let totalOdd = 0, totalAwaken = 0, awakenSeen = false;
+  charTableData.forEach(r => {
+    totalOdd += parseOddEnergy(r.odd_energy);
+    if (r.awakening_ticket != null) { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
+  });
   document.getElementById('cnt-online').textContent=c.online;
   document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
+  document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
   document.getElementById('cnt-completed').textContent=c.completed;
   document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
 }
