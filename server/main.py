@@ -1717,8 +1717,8 @@ const VN_T = {
 const VIETNAM_COLS = [
   {key:'pc_id',            vi:'PC',        ko:'PC',    align:'left',   fmt:r=>r.pc_id||'–'},
   {key:'slot',             vi:'NV',        ko:'캐릭',   align:'left',   fmt:r=>r.slot||'–'},
-  {key:'gear_power',       vi:'Trang bị',  ko:'장비',   align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–'},
-  {key:'power_power',      vi:'Power',     ko:'파워',   align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–'},
+  {key:'gear_power',       vi:'Trang bị',  ko:'장비',   align:'right',  fmt:r=>r.gear_power?Number(r.gear_power).toLocaleString():'–', red:r=>{const n=parseInt(r.gear_power)||0;return n>0&&n<3000;}},
+  {key:'power_power',      vi:'Power',     ko:'파워',   align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–', red:r=>{const n=parseInt(r.power_power)||0;return n>0&&n<200000;}},
   {key:'odd_energy',       vi:'Odd',       ko:'오드',   align:'left',   fmt:r=>r.odd_energy||'–', red:r=>{const n=parseInt(r.odd_energy);return !isNaN(n)&&n>=840;}},
   {key:'daily_ticket',     vi:'Ngày',      ko:'일일',   align:'center', fmt:r=>r.daily_ticket||'–', red:r=>{const n=parseInt(r.daily_ticket);return !isNaN(n)&&n>=14;}},
   {key:'awakening_ticket', vi:'Thức tỉnh', ko:'각성',   align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–', red:r=>r.awakening_ticket!=null&&r.awakening_ticket>=3},
@@ -1807,6 +1807,10 @@ function renderCharTable() {
     const slotEnabled = pcFilters[String(r.slot)] !== false;
     const gp = r.gear_power ? Number(r.gear_power).toLocaleString() : '–';
     const pp = r.power_power ? Number(r.power_power).toLocaleString() : '–';
+    // 저전투력 경고(사용자 기준): 장비 <3,000 / 파워 <200,000 → 빨간 글씨 (0/누락은 '–'라 제외)
+    const gpNum = parseInt(r.gear_power) || 0, ppNum = parseInt(r.power_power) || 0;
+    const gpLow = gpNum > 0 && gpNum < 3000;
+    const ppLow = ppNum > 0 && ppNum < 200000;
     const classColors = {'궁성':'text-green-400','검성':'text-orange-400','치유성':'text-pink-400','호법성':'text-purple-400','정령성':'text-blue-400','살성':'text-red-400','마도성':'text-cyan-400'};
     const cls = r.char_class || '–';
     const clsColor = classColors[cls] || 'text-gray-400';
@@ -1851,8 +1855,8 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
       <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${cls}</td>
       <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${r.slot})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
-      <td class="px-3 py-1.5 text-right text-gray-200">${gp}</td>
-      <td class="px-3 py-1.5 text-right text-cyan-400 font-medium">${pp}</td>
+      <td class="px-3 py-1.5 text-right ${gpLow?'':'text-gray-200'}">${gpLow?rc(gp):gp}</td>
+      <td class="px-3 py-1.5 text-right font-medium ${ppLow?'':'text-cyan-400'}">${ppLow?rc(pp):pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
       <td class="px-3 py-1.5 text-center">${dailyFull?rc(daily):daily}</td>
       <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):nm}</td>
