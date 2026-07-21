@@ -458,6 +458,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   #bg-fx .stars.s2{background-size:560px 470px;opacity:.55;
     animation:star-drift 260s linear infinite reverse,twinkle 6s ease-in-out infinite}
   @keyframes star-drift{to{transform:translateY(50%)}}
+  .fx-off #bg-fx *{animation-play-state:paused!important}  /* 탭 백그라운드 시 배경 애니 정지 */
   @keyframes twinkle{0%,100%{opacity:.55}50%{opacity:.2}}
   #bg-fx .comet{position:absolute;top:6%;left:-14%;width:190px;height:2px;border-radius:2px;
     background:linear-gradient(90deg,transparent,rgba(165,243,252,.85) 65%,#fff);
@@ -480,12 +481,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     filter:blur(1.5px);opacity:.55}
 
   /* ── 헤더/명령바: 유리 패널 + 네온 언더라인 스윕 ── */
-  .glass-header{background:rgba(6,9,20,.8)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  /* ★성능(2026-07-21): sticky 요소의 backdrop-filter 제거 — 뒤 배경(별밭/오로라)이 상시
+     애니메이션이라 매 프레임 블러 재계산 = 사이트 느려짐의 주범. 불투명도만 올려 동일 룩. */
+  .glass-header{background:rgba(6,9,20,.94)!important;
     border-bottom:1px solid rgba(99,102,241,.4);box-shadow:0 2px 28px rgba(79,70,229,.22)}
   .glass-header::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;pointer-events:none;
     background:linear-gradient(90deg,transparent,#6366f1 25%,#e879f9 50%,#22d3ee 75%,transparent);
     background-size:220% 100%;animation:shine 6s linear infinite;opacity:.9}
-  .cmd-bar{background:rgba(8,11,24,.78)!important;border-bottom:1px solid rgba(99,102,241,.2);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
+  .cmd-bar{background:rgba(8,11,24,.92)!important;border-bottom:1px solid rgba(99,102,241,.2);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
 
   /* ── 명령바 콘솔 그룹 + 네온 칩 ── */
   .cmd-group{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:6px;
@@ -552,7 +555,6 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ── 전광판 타일: 흐르는 네온 라인 + 그라데이션 발광 숫자 + 호버 리프트 ── */
   .stat-tile{position:relative;background:linear-gradient(160deg,rgba(23,29,52,.88),rgba(9,13,28,.94));
     border:1px solid rgba(99,102,241,.28);border-radius:1rem;padding:1rem;overflow:hidden;
-    backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
     transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
   .stat-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
     background:linear-gradient(90deg,transparent,var(--tile) 40%,#fff 50%,var(--tile) 60%,transparent);
@@ -645,7 +647,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 </header>
 
 <!-- 명령 바 (콘솔 그룹 패널 — 기능/핸들러 무변경, 스킨만) -->
-<div class="cmd-bar px-4 pt-3 pb-2 flex flex-wrap gap-x-3 gap-y-2 items-stretch sticky top-[52px] z-20 backdrop-blur">
+<div class="cmd-bar px-4 pt-3 pb-2 flex flex-wrap gap-x-3 gap-y-2 items-stretch sticky top-[52px] z-20">
   <!-- 그룹 1: 선택 -->
   <div class="cmd-group">
     <span class="cmd-legend">SELECT</span>
@@ -1457,13 +1459,19 @@ async function deletePCFromMenu() {
 }
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
+// ★WS state 렌더 디바운스(성능, 2026-07-21): 17대가 30초 주기 보고 = state 브로드캐스트가
+//   ~2초에 한 번인데 그때마다 카드 전체 innerHTML 재구축은 낭비(장시간 열어두면 체감 느려짐).
+//   700ms로 모아서 1회만 렌더.★
+let _renderTimer=null;
+function scheduleRender(){ if(_renderTimer) return; _renderTimer=setTimeout(()=>{_renderTimer=null; renderCards();},700); }
+
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
   ws.onmessage=(e)=>{
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;renderCards();}
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;scheduleRender();}
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -2150,8 +2158,10 @@ function handleCharInfoMsg(msg) {
     renderCards();
   }
   if (infoModalPc === msg.pc_id) renderInfoContent(charInfoCache[msg.pc_id]);
-  // 캐릭터 테이블도 갱신
-  if (charTableVisible) loadCharTable();
+  // ★캐릭터 데이터 항상 리로드(2026-07-21 사용자: "각성전 완료돼도 갯수/뱃지 갱신 안 됨") —
+  //   전광판 각성전 수치·⚔뱃지가 charTableData 기반인데 기존엔 스프레드 열려있을 때만
+  //   리로드해서 새로고침 전까지 안 바뀜. loadCharTable이 내부에서 renderCards까지 해줌.★
+  loadCharTable();
   showToast(`✓ ${msg.pc_id} 정보수집 완료`);
 }
 
@@ -2161,7 +2171,10 @@ function handleCharInfoMsg(msg) {
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice();
   setInterval(renderCards,60000);
+  setInterval(loadCharTable,120000);   // 각성티켓/뱃지 폴백 갱신(WS char_info 놓쳐도 2분 내 반영)
   checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
+  // 탭이 백그라운드면 배경 이펙트(별밭/오로라/혜성) 애니메이션 정지 — GPU 낭비 방지
+  document.addEventListener('visibilitychange',()=>{document.documentElement.classList.toggle('fx-off',document.hidden);});
 })();
 </script>
 </body></html>"""
