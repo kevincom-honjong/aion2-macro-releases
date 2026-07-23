@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.3"
+UPDATER_VERSION  = "3.0.4"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -312,26 +312,24 @@ def start_macro() -> bool:
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
         # 콘솔 최소화 → 게임 화면 클릭
+        # ★v3.0.4: 기존 '포그라운드 창 2연속 최소화'(1=매크로콘솔, 2=updater콘솔 가정)는
+        #   매크로 콘솔을 내린 순간 포그라운드가 된 게임 창을 두 번째로 내려버리는 오발이
+        #   있었음(07-24 05시 실사고: 다수 PC 게임창 최소화 → 매크로 클릭 전부 바탕화면행).
+        #   제목 기반 정밀 최소화(_minimize_consoles) + 게임 창 복원(_focus_game_window)로 교체.★
         time.sleep(2.0)
         try:
+            _minimize_consoles()
+            time.sleep(0.5)
+            _focus_game_window()
+            time.sleep(0.5)
             import ctypes
             user32 = ctypes.windll.user32
-            # 현재 포그라운드 윈도우(매크로 콘솔) 최소화
-            hwnd = user32.GetForegroundWindow()
-            if hwnd:
-                user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
-            time.sleep(0.5)
-            # updater 콘솔도 최소화
-            hwnd2 = user32.GetForegroundWindow()
-            if hwnd2:
-                user32.ShowWindow(hwnd2, 6)
-            time.sleep(0.5)
-            # 이제 게임 화면이 보임 → 클릭
+            # 게임 화면 클릭 (포커스 확실화)
             user32.SetCursorPos(640, 360)
             user32.mouse_event(0x0002, 0, 0, 0, 0)
             time.sleep(0.05)
             user32.mouse_event(0x0004, 0, 0, 0, 0)
-            log("[매크로] 콘솔 최소화 → 게임 클릭 (640,360)")
+            log("[매크로] 콘솔 정밀 최소화 → 게임 창 복원 → 클릭 (640,360)")
         except Exception:
             pass
         return True
