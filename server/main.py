@@ -1399,10 +1399,10 @@ async function cardCmd(command, args={}) {
 }
 
 function cardCmdSwitch() {
-  const slot=prompt(`${menuPcId} — 전환할 슬롯 번호 (1~5):`, '1');
+  const slot=prompt(`${menuPcId} — 전환할 슬롯 번호 (1~9):`, '1');
   if(slot===null){closeCardMenu();return;}
   const n=parseInt(slot);
-  if(isNaN(n)||n<1||n>5){alert('1~5 사이 숫자를 입력하세요');return;}
+  if(isNaN(n)||n<1||n>9){alert('1~9 사이 숫자를 입력하세요');return;}
   cardCmd('switch_char',{slot:n});
 }
 
