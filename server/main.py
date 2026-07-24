@@ -1490,11 +1490,14 @@ async function deletePCFromMenu() {
 let _renderTimer=null;
 function scheduleRender(){ if(_renderTimer) return; _renderTimer=setTimeout(()=>{_renderTimer=null; renderCards();},700); }
 
+let _ws=null, _wsLastMsg=0;
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws`);
+  _ws=ws; _wsLastMsg=Date.now();
   ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
   ws.onmessage=(e)=>{
+    _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
     if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;scheduleRender();}
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
@@ -1507,6 +1510,11 @@ function connectWS() {
     setTimeout(connectWS,3000);
   };
 }
+
+// ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
+//   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
+//   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
+setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);
 
 // ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
 let serverBoot=null;
@@ -2199,7 +2207,14 @@ function handleCharInfoMsg(msg) {
   setInterval(loadCharTable,120000);   // 각성티켓/뱃지 폴백 갱신(WS char_info 놓쳐도 2분 내 반영)
   checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
   // 탭이 백그라운드면 배경 이펙트(별밭/오로라/혜성) 애니메이션 정지 — GPU 낭비 방지
-  document.addEventListener('visibilitychange',()=>{document.documentElement.classList.toggle('fx-off',document.hidden);});
+  // + 복귀 시 즉시 최신화(2026-07-25): 백그라운드 절전으로 밀린 화면/죽은 WS를 그 자리에서 복구
+  document.addEventListener('visibilitychange',()=>{
+    document.documentElement.classList.toggle('fx-off',document.hidden);
+    if(!document.hidden){
+      renderCards(); loadCharTable(); loadCmdHistory();
+      if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} }
+    }
+  });
 })();
 </script>
 </body></html>"""
