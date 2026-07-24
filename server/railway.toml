@@ -1,5 +1,9 @@
 [build]
 builder = "nixpacks"
+# ★서버 코드가 바뀔 때만 재배포(2026-07-24): exe/이미지 릴리스 푸시(하루 20커밋)마다
+#   Railway가 서버를 재시작해 대시보드가 1분씩 죽고 휘발성 로그/버그스샷도 날아가던 것 차단.
+#   패턴은 repo 루트 기준.★
+watchPatterns = ["server/**"]
 
 [deploy]
 startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
