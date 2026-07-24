@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.4"
+UPDATER_VERSION  = "3.0.5"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -395,6 +395,7 @@ def self_update(updater_info: dict):
         err("[자가업데이트] 다운로드 실패 — 기존 버전 유지")
         return
 
+    launched = False
     try:
         # 이전 백업 삭제
         if os.path.exists(old_bak):
@@ -416,11 +417,16 @@ def self_update(updater_info: dict):
             cwd=exe_dir,
             creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
+        launched = True
         log(f"[자가업데이트] 새 버전 실행 완료 → 자신 종료")
         time.sleep(1)
         os._exit(0)
     except Exception as e:
         err(f"[자가업데이트] 실패: {e}")
+        # ★새 인스턴스가 이미 떠 있으면 내가 남는 순간 이중 실행(명령 나눠먹기/파일 잠금
+        #   꼬임) — 무조건 종료(v3.0.5). (새 쪽 부팅 시 잔여 프로세스 강제 정리도 있음)★
+        if launched:
+            os._exit(0)
         # 복구 시도
         try:
             if not os.path.exists(target) and os.path.exists(old_bak):
@@ -832,6 +838,28 @@ def _upload_bugs():
 # ==================================================
 # 진입점
 # ==================================================
+def _kill_stale_updater_processes():
+    """다른 updater 프로세스 강제 종료 (v3.0.5) — 자가업데이트 후 구버전이 안 죽고 남으면
+    이중 실행(명령 나눠먹기, updater_old.exe 잠금으로 파일 정리 실패, 재자가업데이트 루프)이
+    되던 것 차단. 새 인스턴스가 부팅하며 잔여를 정리하므로 어떤 경로로 꼬여도 1개로 수렴."""
+    me = os.getpid()
+    try:
+        import psutil
+        for p in psutil.process_iter(['pid', 'exe', 'name']):
+            try:
+                if p.pid == me:
+                    continue
+                base = (os.path.basename(p.info.get('exe') or p.info.get('name') or "")).lower()
+                if base.startswith("updater") and base.endswith(".exe"):
+                    log(f"[정리] 잔여 updater 프로세스 강제 종료: PID {p.pid} ({base})")
+                    p.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        time.sleep(0.5)   # 종료 후 파일 잠금 해제 대기 (이어지는 파일 정리 성공률)
+    except Exception as e:
+        err(f"[정리] 잔여 updater 정리 실패 (무시): {e}")
+
+
 def _cleanup_old_updaters():
     """이전 버전 파일 삭제 (updater_old.exe, updater_v*.exe, updater_new.exe)"""
     current = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
@@ -853,6 +881,7 @@ def _cleanup_old_updaters():
 def main():
     log("=" * 60)
     log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
+    _kill_stale_updater_processes()
     _cleanup_old_updaters()
     load_pc_id()
     log(f"[업데이터] PC: {pc_id}")
