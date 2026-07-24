@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.5"
+UPDATER_VERSION  = "3.0.6"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -257,6 +257,8 @@ def _focus_game_window():
         ShowWindow = user32.ShowWindow
         BringWindowToTop = user32.BringWindowToTop
 
+        IsIconic = user32.IsIconic
+
         found = [False]
         def callback(hwnd, lParam):
             title = ctypes.create_unicode_buffer(256)
@@ -264,7 +266,10 @@ def _focus_game_window():
             t = title.value.lower()
             # PURPLE On-NCSOFT - Chrome 또는 purpleon 등
             if ('purple' in t or 'aion' in t or 'ncsoft' in t) and 'chrome' in t:
-                ShowWindow(hwnd, 9)  # SW_RESTORE
+                # ★SW_RESTORE는 '최소화일 때만'(v3.0.6) — 전체화면 창에 쏘면 창모드로
+                #   풀려버림(PC-18 실사고: 게임 전체화면 해제→창모드+스트리밍 끊김)★
+                if IsIconic(hwnd):
+                    ShowWindow(hwnd, 9)  # SW_RESTORE
                 BringWindowToTop(hwnd)
                 SetForegroundWindow(hwnd)
                 log(f"[포커스] 게임 창 활성화: {title.value}")
@@ -281,7 +286,8 @@ def _focus_game_window():
                 GetWindowTextW(hwnd, title, 256)
                 t = title.value.lower()
                 if 'chrome' in t and user32.IsWindowVisible(hwnd):
-                    ShowWindow(hwnd, 9)
+                    if IsIconic(hwnd):
+                        ShowWindow(hwnd, 9)
                     BringWindowToTop(hwnd)
                     SetForegroundWindow(hwnd)
                     log(f"[포커스] 크롬 창 활성화: {title.value}")
