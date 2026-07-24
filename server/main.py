@@ -38,6 +38,7 @@ SESSION_TTL        = timedelta(days=7)
 
 # 프로세스 시작마다 고유 — 대시보드가 /ping으로 폴링해 값이 바뀌면 "서버 재시작"으로 보고 자동 새로고침.
 SERVER_BOOT_ID     = uuid.uuid4().hex
+SERVER_BOOT_TS     = time.time()   # /health 업타임 계산용 (자발 재시작 원인 추적, 2026-07-25)
 # 세션 서명키.
 #   Railway env SESSION_SECRET(랜덤 문자열)을 설정하면 재배포 후에도 쿠키 유효 → 재로그인 불필요.
 #   미설정 시 부팅마다 랜덤 → 자동 새로고침은 동작하되 재시작 후 1회 재로그인.
@@ -367,6 +368,23 @@ async def do_logout(response: Response):
 async def ping():
     """재시작 감지용 — 대시보드가 폴링해서 boot 값이 바뀌면 자동 새로고침. (인증 불필요, 랜덤 id만 노출)"""
     return JSONResponse({"boot": SERVER_BOOT_ID})
+
+
+@app.get("/health")
+async def health():
+    """[진단] 업타임+메모리 — Railway 자발 재시작(배포 무관 boot 변경) 원인 추적용(2026-07-25).
+    uptime이 짧으면 최근 크래시/재시작, rss가 계속 오르면 메모리 누수→OOM 의심. (민감정보 없음)"""
+    rss_mb = None
+    try:
+        import resource
+        rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)  # Linux: KB→MB
+    except Exception:
+        pass
+    return JSONResponse({
+        "boot": SERVER_BOOT_ID[:8],
+        "uptime_s": int(time.time() - SERVER_BOOT_TS),
+        "rss_max_mb": rss_mb,
+    })
 
 
 @app.get("/debug/deaths")
