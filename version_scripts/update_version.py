@@ -15,6 +15,7 @@ VERSION_FILE     = os.path.join(REPO_ROOT, "version.json")
 EXE_DIR          = os.path.join(REPO_ROOT, "exe")
 IMAGES_DIR       = os.path.join(REPO_ROOT, "images2")
 EXE_FILENAME     = "혼종_통합_자동.exe"
+RENTAL_FILENAME  = "혼종_렌탈.exe"
 UPDATER_FILENAME = "updater.exe"
 GITHUB_RAW_BASE  = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main"
 
@@ -76,6 +77,29 @@ def main():
             print(f"[exe] 변경 없음 (v{ver['exe']['version']})")
     else:
         print(f"[exe] 파일 없음: {exe_path}")
+
+    # ── rental exe 처리 (2026-07-26: 지인 대여 에디션) ──────────────
+    # 버전은 항상 main exe 버전과 동기화 — 릴리스 태그 v<버전> 하나에 macro-/rental- 두 에셋을 올림
+    rental_path = os.path.join(EXE_DIR, RENTAL_FILENAME)
+    if os.path.exists(rental_path):
+        new_hash = sha256_file(rental_path)
+        rinfo = ver.get("rental") or {}
+        if new_hash != rinfo.get("sha256", ""):
+            ver["rental"] = {
+                "version":  ver["exe"]["version"],
+                "sha256":   new_hash,
+                "filename": RENTAL_FILENAME,
+            }
+            print(f"[rental] 갱신: v{ver['exe']['version']} (hash 변경)")
+            changed = True
+        elif rinfo.get("version") != ver["exe"]["version"]:
+            ver["rental"]["version"] = ver["exe"]["version"]
+            print(f"[rental] 버전 동기화: v{ver['exe']['version']}")
+            changed = True
+        else:
+            print(f"[rental] 변경 없음 (v{rinfo.get('version','?')})")
+    else:
+        print(f"[rental] 파일 없음: {rental_path}")
 
     # ── images2 처리 ──────────────────────────────
     if os.path.exists(IMAGES_DIR):

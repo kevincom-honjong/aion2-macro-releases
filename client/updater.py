@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.6"
+UPDATER_VERSION  = "3.0.7"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -47,6 +47,7 @@ DOWNLOAD_RETRY_BACKOFF = (3, 8, 15)   # 시도 2·3·4 전 대기(초)
 
 MACRO_EXE        = r"C:\auto\혼종_통합_자동.exe"
 MACRO_EXE_BACKUP = r"C:\auto\혼종_통합_자동.exe.bak"
+EDITION          = "main"   # info.txt edition=rental 이면 load_pc_id에서 rental로 전환(v3.0.7)
 IMAGES_DIR       = r"C:\auto\images2"
 LOCAL_VERSION    = r"C:\auto\version.json"
 LOG_FILE         = r"C:\auto\updater.log"
@@ -87,7 +88,7 @@ _state_lock = threading.Lock()
 # PC ID 로드
 # ==================================================
 def load_pc_id() -> str:
-    global pc_id
+    global pc_id, CONTROL_API_KEY, EDITION, MACRO_EXE, MACRO_EXE_BACKUP
     try:
         if os.path.exists(INFO_TXT):
             with open(INFO_TXT, 'r', encoding='utf-8') as f:
@@ -100,6 +101,17 @@ def load_pc_id() -> str:
             pc_id = (kv.get('pc_id') or kv.get('pc_name')
                      or (lines[0].strip() if lines else 'PC-?'))
             log(f"[업데이터] PC ID: {pc_id}")
+            # ★v3.0.7: 테넌트/렌탈 지원 — info.txt로 API키·에디션 오버라이드.
+            #   control_api_key: 지인 테넌트 키(하드코딩 기본키는 main 테넌트 전용)
+            #   edition=rental : 렌탈 채널(혼종_렌탈.exe)로 업데이트·실행★
+            if kv.get('control_api_key'):
+                CONTROL_API_KEY = kv['control_api_key']
+                log("[업데이터] control_api_key 오버라이드 (info.txt)")
+            if (kv.get('edition') or '').lower() == 'rental':
+                EDITION = 'rental'
+                MACRO_EXE = r"C:\auto\혼종_렌탈.exe"
+                MACRO_EXE_BACKUP = r"C:\auto\혼종_렌탈.exe.bak"
+                log("[업데이터] 에디션: rental (혼종_렌탈.exe 채널)")
     except Exception as e:
         err(f"[업데이터] info.txt 읽기 실패: {e}")
     return pc_id
@@ -457,6 +469,7 @@ def check_and_update() -> bool:
                 "exe_version":     local.get("exe_version", "0.0.0"),
                 "image_hashes":    local_image_hashes,
                 "updater_version": UPDATER_VERSION,
+                "edition":         EDITION,   # v3.0.7: rental이면 서버가 렌탈 채널 exe 응답
             },
             timeout=(TIMEOUT_CONNECT, 15),
         )

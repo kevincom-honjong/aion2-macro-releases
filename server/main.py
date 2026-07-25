@@ -43,17 +43,33 @@ SESSION_TTL        = timedelta(days=7)
 #   - "main" = 기존 DASHBOARD_PASSWORD/API_KEY, 접두사 없이 저장 → 기존 함대·데이터 완전 호환.
 # 테넌트 추가: Railway env TENANTS_JSON = {"friend1": {"password": "지인비번", "api_key": "지인매크로키"}}
 def _load_tenants() -> dict:
-    t = {"main": {"password": DASHBOARD_PASSWORD, "api_key": API_KEY}}
+    t = {"main": {"password": DASHBOARD_PASSWORD, "api_key": API_KEY, "expires": ""}}
     try:
         extra = json.loads(os.getenv("TENANTS_JSON", "") or "{}")
         for name, v in extra.items():
             name = str(name)
             if not isinstance(v, dict) or name == "main" or NS_SEP in name:
                 continue
-            t[name] = {"password": str(v.get("password", "")), "api_key": str(v.get("api_key", ""))}
+            t[name] = {"password": str(v.get("password", "")),
+                       "api_key": str(v.get("api_key", "")),
+                       # 기간제(2026-07-26): "expires": "2026-08-31" (KST 그날 23:59까지 유효, 빈값=무기한)
+                       "expires": str(v.get("expires", ""))}
     except Exception as e:
         print(f"[TENANTS] TENANTS_JSON 파싱 실패(무시): {e}")
     return t
+
+
+def tenant_expired(tenant: str) -> bool:
+    """기간제 만료 여부 — expires(YYYY-MM-DD, KST 기준 당일 23:59까지 유효). main/빈값은 무기한."""
+    exp = (TENANTS.get(tenant) or {}).get("expires") or ""
+    if not exp:
+        return False
+    try:
+        # KST(UTC+9) 자정 경계: 만료일 다음날 00:00 KST = 만료일 15:00 UTC
+        end = datetime.strptime(exp, "%Y-%m-%d") + timedelta(hours=15)
+        return datetime.now(timezone.utc).replace(tzinfo=None) >= end
+    except Exception:
+        return False   # 형식 오류 시 잠그지 않음 (오타로 지인 전체 정지 방지)
 
 
 NS_SEP = "::"
@@ -157,13 +173,20 @@ def valid_session(token: Optional[str]) -> Optional[str]:
 
 
 def check_session(request: Request) -> Optional[str]:
-    """유효 세션이면 테넌트명 반환(truthy), 아니면 None — 기존 `if not check_session(...)` 호환."""
-    return valid_session(request.cookies.get("session"))
+    """유효 세션이면 테넌트명 반환(truthy), 아니면 None — 기존 `if not check_session(...)` 호환.
+    기간제 만료 테넌트는 기존 세션도 즉시 무효(2026-07-26)."""
+    tenant = valid_session(request.cookies.get("session"))
+    if tenant and tenant_expired(tenant):
+        return None
+    return tenant
 
 
 def check_api_key(request: Request) -> Optional[str]:
-    """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None."""
-    return KEY_TO_TENANT.get(request.headers.get("X-Api-Key", ""))
+    """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None. 만료 테넌트 키는 전면 차단."""
+    tenant = KEY_TO_TENANT.get(request.headers.get("X-Api-Key", ""))
+    if tenant and tenant_expired(tenant):
+        return None
+    return tenant
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,6 +468,8 @@ async def do_login(request: Request, response: Response):
     body = await request.json()
     # 비밀번호 → 테넌트 결정 (테넌트별 독립 대시보드, 2026-07-25)
     tenant = PW_TO_TENANT.get(body.get("password") or "")
+    if tenant and tenant_expired(tenant):
+        raise HTTPException(status_code=403, detail="이용 기간이 만료되었습니다")
     if not tenant:
         raise HTTPException(status_code=401, detail="Wrong password")
     token = new_session(tenant)
@@ -464,6 +489,33 @@ async def do_logout(response: Response):
 async def ping():
     """재시작 감지용 — 대시보드가 폴링해서 boot 값이 바뀌면 자동 새로고침. (인증 불필요, 랜덤 id만 노출)"""
     return JSONResponse({"boot": SERVER_BOOT_ID})
+
+
+# 렌탈 exe ↔ 서버 라이선스 응답 서명용 공유 비밀 (exe에도 동일 값 각인 — 가짜 서버로 우회 방지)
+LICENSE_SECRET = os.getenv("LICENSE_SECRET", "aion2-license-v1-7f3a")
+
+
+@app.post("/license")
+async def license_check(request: Request):
+    """렌탈 exe 기간제 검증(2026-07-26). 만료 키는 check_api_key에서 이미 None이므로
+    여기서는 '키 자체는 등록돼 있으나 만료'까지 구분해 알려준다. 응답은 HMAC 서명."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400)
+    key = body.get("api_key", "")
+    nonce = str(body.get("nonce", ""))[:64]   # 리플레이 방지용 클라 난수(서명에 포함)
+    tenant = KEY_TO_TENANT.get(key)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    if not tenant:
+        payload = {"valid": False, "reason": "unknown_key", "expires": "", "now": now, "nonce": nonce}
+    elif tenant_expired(tenant):
+        payload = {"valid": False, "reason": "expired", "expires": (TENANTS[tenant].get("expires") or ""), "now": now, "nonce": nonce}
+    else:
+        payload = {"valid": True, "reason": "", "expires": (TENANTS[tenant].get("expires") or ""), "now": now, "nonce": nonce}
+    base = f"{payload['valid']}|{payload['reason']}|{payload['expires']}|{payload['now']}|{nonce}"
+    payload["sig"] = hmac.new(LICENSE_SECRET.encode(), base.encode(), hashlib.sha256).hexdigest()
+    return JSONResponse(payload)
 
 
 @app.get("/health")
@@ -2430,10 +2482,10 @@ async def remove_pc(pc_id: str, request: Request):
 @app.websocket("/ws/macro/{pc_id}")
 async def macro_websocket(websocket: WebSocket, pc_id: str):
     """매크로 클라이언트 WebSocket — 상태 수신 + 명령 송신"""
-    # API 키 인증 (쿼리 파라미터) → 테넌트 결정
+    # API 키 인증 (쿼리 파라미터) → 테넌트 결정 (만료 테넌트 차단)
     api_key = websocket.query_params.get("key", "")
     tenant = KEY_TO_TENANT.get(api_key)
-    if not tenant:
+    if not tenant or tenant_expired(tenant):
         await websocket.close(code=1008)
         return
     pc_id = (pc_id or "").replace(NS_SEP, "_")   # 에코 일관성(저장 키 소독과 동일)
@@ -3012,20 +3064,26 @@ async def updater_check(request: Request):
     client_exe_ver     = body.get("exe_version", "0.0.0")
     client_img_hashes  = body.get("image_hashes", {})
     client_updater_ver = body.get("updater_version", "0.0.0")
+    client_edition     = body.get("edition", "main")   # 렌탈 채널(2026-07-26): rental이면 rental exe 배포
 
     ver = _load_version_json()
     result: dict = {}
 
-    # exe 업데이트 체크
-    exe_info = ver.get("exe", {})
+    # exe 업데이트 체크 (에디션별 채널)
+    if client_edition == "rental":
+        exe_info = ver.get("rental", {})
+        asset_prefix = "rental"
+    else:
+        exe_info = ver.get("exe", {})
+        asset_prefix = "macro"
     server_exe_ver = exe_info.get("version", "0.0.0")
-    if server_exe_ver != client_exe_ver:
+    if exe_info and server_exe_ver != client_exe_ver:
         result["exe_update"] = {
             "version":      server_exe_ver,
             "sha256":       exe_info.get("sha256"),
             # exe(71MB)는 GitHub Releases(CDN)에서 배포 — raw 429 우회. jsDelivr는 용량초과라 불가.
-            # 규칙: 릴리스 태그 v<버전>, 에셋 이름 macro-<버전>.exe (릴리스 미리 만들어둬야 함)
-            "download_url": f"https://github.com/kevincom-honjong/aion2-macro-releases/releases/download/v{server_exe_ver}/macro-{server_exe_ver}.exe",
+            # 규칙: 릴리스 태그 v<버전>, 에셋 이름 macro-<버전>.exe / rental-<버전>.exe
+            "download_url": f"https://github.com/kevincom-honjong/aion2-macro-releases/releases/download/v{server_exe_ver}/{asset_prefix}-{server_exe_ver}.exe",
         }
 
     # 이미지 업데이트 체크
