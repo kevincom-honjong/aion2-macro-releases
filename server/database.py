@@ -240,18 +240,19 @@ async def insert_command(pc_id: str, command: str, args: dict) -> int:
         return cur.lastrowid
 
 
-async def get_pending_command(pc_id: str) -> dict | None:
-    """pc_id 또는 'all' 명령 중 가장 오래된 pending 항목 반환"""
+async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
+    """pc_id 또는 브로드캐스트(all_key) 명령 중 가장 오래된 pending 항목 반환.
+    all_key: 테넌트 스코프된 'all' 키(예: 't::all') — 리터럴 'all' 고정은 테넌트 우회라 제거(2026-07-26)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
             SELECT id, pc_id, command, args, created_at
             FROM commands
-            WHERE (pc_id=? OR pc_id='all') AND status='pending'
+            WHERE (pc_id=? OR pc_id=?) AND status='pending'
             ORDER BY id ASC LIMIT 1
             """,
-            (pc_id,),
+            (pc_id, all_key),
         ) as cur:
             row = await cur.fetchone()
     if not row:
@@ -289,14 +290,39 @@ async def cancel_command(cmd_id: int) -> bool:
         return cur.rowcount > 0
 
 
-async def get_recent_commands(limit: int = 20) -> list[dict]:
+async def get_recent_commands(limit: int = 20, ns_prefix: "str | None" = None) -> list[dict]:
+    """ns_prefix: None=전체(호환), ""=main(네임스페이스 없는 행만), "t"=해당 테넌트("t::%") 행만.
+    테넌트별 최근 N건을 정확히 주기 위함 — 전역 창에서 필터하면 타 테넌트 폭주 시 내역이 비어 보임(2026-07-26)."""
+    where, params = "", []
+    if ns_prefix == "":
+        where = "WHERE pc_id NOT LIKE '%::%'"
+    elif ns_prefix:
+        where = "WHERE pc_id LIKE ?"
+        params.append(ns_prefix + "::%")
+    params.append(limit)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM commands ORDER BY id DESC LIMIT ?", (limit,)
+            f"SELECT * FROM commands {where} ORDER BY id DESC LIMIT ?", params
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+async def get_command_pc(cmd_id: int) -> "str | None":
+    """명령 id의 pc_id(저장 키) 단건 조회 — 소유 테넌트 판정용(2026-07-26)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT pc_id FROM commands WHERE id=?", (cmd_id,)) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def get_updater_command_pc(cmd_id: int) -> "str | None":
+    """업데이터 명령 id의 pc_id(저장 키) 단건 조회 — 소유 테넌트 판정용(2026-07-26)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT pc_id FROM updater_commands WHERE id=?", (cmd_id,)) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
 
 
 # ── 로그 ─────────────────────────────────────────────────────────────────────
@@ -363,17 +389,18 @@ async def insert_updater_command(pc_id: str, command: str, args: dict) -> int:
         return cur.lastrowid
 
 
-async def get_pending_updater_command(pc_id: str) -> dict | None:
+async def get_pending_updater_command(pc_id: str, all_key: str = "all") -> dict | None:
+    """all_key: 테넌트 스코프된 'all' 키 — 리터럴 고정은 테넌트 우회라 제거(2026-07-26)."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
             SELECT id, pc_id, command, args, created_at
             FROM updater_commands
-            WHERE (pc_id=? OR pc_id='all') AND status='pending'
+            WHERE (pc_id=? OR pc_id=?) AND status='pending'
             ORDER BY id ASC LIMIT 1
             """,
-            (pc_id,),
+            (pc_id, all_key),
         ) as cur:
             row = await cur.fetchone()
     if not row:

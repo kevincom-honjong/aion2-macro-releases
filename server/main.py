@@ -21,7 +21,7 @@ from database import (
     init_db, upsert_status, get_all_statuses, get_status, delete_status,
     delete_pc_all_data, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, ack_command, cancel_command, get_logs,
-    insert_log, get_recent_commands,
+    insert_log, get_recent_commands, get_command_pc, get_updater_command_pc,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     upsert_char_info, get_char_info, get_all_char_info,
@@ -35,6 +35,63 @@ from database import (
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "changeme")
 API_KEY            = os.getenv("API_KEY", "macro_key_change_me")
 SESSION_TTL        = timedelta(days=7)
+
+# ─── 테넌트(2026-07-25): 비밀번호별 독립 대시보드 ────────────────────────────
+# 사용자 설계: "특정 비밀번호로 로그인하면 그 비밀번호 전용 대시보드가 나오게".
+#   - 로그인 비밀번호 → 테넌트 결정(세션에 탑재) / 매크로·업데이터 X-Api-Key → 테넌트 결정
+#   - 내부 저장 키는 "테넌트::PC-ID" 네임스페이스, 출력 시 벗겨서 노출. DB 스키마 무변경.
+#   - "main" = 기존 DASHBOARD_PASSWORD/API_KEY, 접두사 없이 저장 → 기존 함대·데이터 완전 호환.
+# 테넌트 추가: Railway env TENANTS_JSON = {"friend1": {"password": "지인비번", "api_key": "지인매크로키"}}
+def _load_tenants() -> dict:
+    t = {"main": {"password": DASHBOARD_PASSWORD, "api_key": API_KEY}}
+    try:
+        extra = json.loads(os.getenv("TENANTS_JSON", "") or "{}")
+        for name, v in extra.items():
+            name = str(name)
+            if not isinstance(v, dict) or name == "main" or NS_SEP in name:
+                continue
+            t[name] = {"password": str(v.get("password", "")), "api_key": str(v.get("api_key", ""))}
+    except Exception as e:
+        print(f"[TENANTS] TENANTS_JSON 파싱 실패(무시): {e}")
+    return t
+
+
+NS_SEP = "::"
+TENANTS: dict = {}
+PW_TO_TENANT: dict = {}
+KEY_TO_TENANT: dict = {}
+
+
+def _init_tenants():
+    global TENANTS, PW_TO_TENANT, KEY_TO_TENANT
+    TENANTS = _load_tenants()
+    PW_TO_TENANT, KEY_TO_TENANT = {}, {}
+    for name, v in TENANTS.items():
+        if v.get("password") and v["password"] not in PW_TO_TENANT:
+            PW_TO_TENANT[v["password"]] = name
+        if v.get("api_key") and v["api_key"] not in KEY_TO_TENANT:
+            KEY_TO_TENANT[v["api_key"]] = name
+
+
+_init_tenants()
+
+
+def ns(tenant: str, pc_id: str) -> str:
+    """테넌트 네임스페이스 키. main은 접두사 없음(기존 데이터 호환). pc_id 내 구분자는 소독."""
+    pc_id = (pc_id or "").replace(NS_SEP, "_")
+    return pc_id if tenant == "main" else f"{tenant}{NS_SEP}{pc_id}"
+
+
+def split_ns(key: str) -> "tuple[str, str]":
+    """저장 키 → (테넌트, 원래 pc_id). 접두사 없으면 main."""
+    if key and NS_SEP in key:
+        t, p = key.split(NS_SEP, 1)
+        return t, p
+    return "main", (key or "")
+
+
+def ns_of(key: str) -> str:
+    return split_ns(key)[0]
 
 # 프로세스 시작마다 고유 — 대시보드가 /ping으로 폴링해 값이 바뀌면 "서버 재시작"으로 보고 자동 새로고침.
 SERVER_BOOT_ID     = uuid.uuid4().hex
@@ -65,37 +122,48 @@ def _b64u_dec(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def new_session() -> str:
-    exp = str(int((datetime.now(timezone.utc) + SESSION_TTL).timestamp())).encode()
-    sig = hmac.new(SESSION_SECRET, exp, hashlib.sha256).digest()
-    return f"{_b64u(exp)}.{_b64u(sig)}"
+def new_session(tenant: str = "main") -> str:
+    exp = int((datetime.now(timezone.utc) + SESSION_TTL).timestamp())
+    payload = f"{exp}:{tenant}".encode()   # 테넌트를 서명 페이로드에 탑재(위조 불가)
+    sig = hmac.new(SESSION_SECRET, payload, hashlib.sha256).digest()
+    return f"{_b64u(payload)}.{_b64u(sig)}"
 
 
-def valid_session(token: Optional[str]) -> bool:
+def valid_session(token: Optional[str]) -> Optional[str]:
+    """유효하면 테넌트명("main" 등) 반환, 아니면 None. 구버전 토큰(만료ts만)은 main으로 인정."""
     if not token or "." not in token:
-        return False
+        return None
     try:
         p_b64, s_b64 = token.split(".", 1)
         payload = _b64u_dec(p_b64)
         sig = _b64u_dec(s_b64)
     except Exception:
-        return False
+        return None
     expected = hmac.new(SESSION_SECRET, payload, hashlib.sha256).digest()
     if not hmac.compare_digest(sig, expected):
-        return False
+        return None
     try:
-        exp = int(payload.decode())
+        text = payload.decode()
+        if ":" in text:
+            exp_s, tenant = text.split(":", 1)
+        else:
+            exp_s, tenant = text, "main"
+        exp = int(exp_s)
     except Exception:
-        return False
-    return datetime.now(timezone.utc).timestamp() <= exp
+        return None
+    if datetime.now(timezone.utc).timestamp() > exp:
+        return None
+    return tenant if tenant in TENANTS else None
 
 
-def check_session(request: Request) -> bool:
+def check_session(request: Request) -> Optional[str]:
+    """유효 세션이면 테넌트명 반환(truthy), 아니면 None — 기존 `if not check_session(...)` 호환."""
     return valid_session(request.cookies.get("session"))
 
 
-def check_api_key(request: Request) -> bool:
-    return request.headers.get("X-Api-Key") == API_KEY
+def check_api_key(request: Request) -> Optional[str]:
+    """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None."""
+    return KEY_TO_TENANT.get(request.headers.get("X-Api-Key", ""))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,19 +171,22 @@ def check_api_key(request: Request) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
-        self.active: list[WebSocket] = []
+        self.active: list["tuple[WebSocket, str]"] = []   # (대시보드 ws, 테넌트)
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket, tenant: str = "main"):
         await ws.accept()
-        self.active.append(ws)
+        self.active.append((ws, tenant))
 
     def disconnect(self, ws: WebSocket):
-        self.active = [c for c in self.active if c is not ws]
+        self.active = [(c, t) for c, t in self.active if c is not ws]
 
-    async def broadcast(self, data: dict):
+    async def broadcast(self, data: dict, tenant: str = "main"):
+        """해당 테넌트의 대시보드에게만 전송 (테넌트 격리)."""
         msg = json.dumps(data, ensure_ascii=False)
         dead = []
-        for ws in self.active:
+        for ws, t in self.active:
+            if t != tenant:
+                continue
             try:
                 await ws.send_text(msg)
             except Exception:
@@ -171,15 +242,33 @@ def _is_stale(updated_at_str: str | None) -> bool:
     except Exception:
         return True
 
-async def _build_full_state() -> list[dict]:
-    """pc_status + updater_status + bug_count + char_info + slot_filters 병합 목록 반환"""
-    statuses = await get_all_statuses()
-    updater_statuses = await get_all_updater_statuses()
-    all_filters = await get_all_slot_filters()
+def tenant_bugs_dir(tenant: str) -> str:
+    """테넌트별 버그스샷 폴더. main = 기존 루트(호환), 그 외 = 하위 폴더."""
+    return BUGS_DIR if tenant == "main" else os.path.join(BUGS_DIR, tenant)
+
+
+async def _build_full_state(tenant: str = "main") -> list[dict]:
+    """해당 테넌트의 pc_status + updater_status + bug_count + char_info + slot_filters 병합 목록.
+    저장 키는 네임스페이스("t::PC-01")지만 반환 pc_id는 원래 이름으로 벗겨서 냄."""
+    def _mine(rows: list) -> list:
+        out = []
+        for r in rows:
+            t, raw = split_ns(r.get("pc_id") or "")
+            if t == tenant:
+                r = dict(r)
+                r["pc_id"] = raw
+                out.append(r)
+        return out
+
+    statuses = _mine(await get_all_statuses())
+    updater_statuses = _mine(await get_all_updater_statuses())
+    _filters_raw = await get_all_slot_filters()
+    all_filters = {split_ns(k)[1]: v for k, v in _filters_raw.items() if ns_of(k) == tenant}
 
     # 최근 30분 사망 횟수 (pc_id별)
     _death_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    death_counts = await get_death_counts_since(_death_cutoff)
+    _deaths_raw = await get_death_counts_since(_death_cutoff)
+    death_counts = {split_ns(k)[1]: v for k, v in _deaths_raw.items() if ns_of(k) == tenant}
 
     updater_map: dict[str, dict] = {}
     for u in updater_statuses:
@@ -189,8 +278,9 @@ async def _build_full_state() -> list[dict]:
 
     bug_counts: dict[str, int] = {}
     try:
-        if os.path.isdir(BUGS_DIR):
-            for fname in os.listdir(BUGS_DIR):
+        bdir = tenant_bugs_dir(tenant)
+        if os.path.isdir(bdir):
+            for fname in os.listdir(bdir):
                 if fname.endswith(".png"):
                     m = re.match(r"^(.+?)_\d{8}_\d{6}_", fname)
                     if m:
@@ -217,7 +307,7 @@ async def _build_full_state() -> list[dict]:
         pc["slot_filters"] = all_filters.get(pid, {})
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
-            ci = await get_char_info(pid)
+            ci = await get_char_info(ns(tenant, pid))
             if ci:
                 if ci.get("chars"):
                     pc["chars"] = [
@@ -246,18 +336,19 @@ async def _build_full_state() -> list[dict]:
     return statuses
 
 
-async def push_state():
-    statuses = await _build_full_state()
+async def push_state(tenant: str = "main"):
+    statuses = await _build_full_state(tenant)
     ver = _load_version_json()
     latest = {
         "macro": ver.get("exe", {}).get("version", ""),
         "updater": ver.get("updater", {}).get("version", ""),
     }
-    await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest})
+    await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest}, tenant)
 
 
-async def push_log(pc_id: str, message: str, level: str = "info"):
-    await manager.broadcast({"type": "log", "pc_id": pc_id, "level": level, "message": message})
+async def push_log(tenant: str, pc_id: str, message: str, level: str = "info"):
+    """pc_id는 원래 이름(네임스페이스 벗긴 것)으로 호출할 것."""
+    await manager.broadcast({"type": "log", "pc_id": pc_id, "level": level, "message": message}, tenant)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,9 +443,11 @@ async def login_page():
 @app.post("/auth/login")
 async def do_login(request: Request, response: Response):
     body = await request.json()
-    if body.get("password") != DASHBOARD_PASSWORD:
+    # 비밀번호 → 테넌트 결정 (테넌트별 독립 대시보드, 2026-07-25)
+    tenant = PW_TO_TENANT.get(body.get("password") or "")
+    if not tenant:
         raise HTTPException(status_code=401, detail="Wrong password")
-    token = new_session()
+    token = new_session(tenant)
     secure = request.headers.get("x-forwarded-proto", "http") == "https"
     response.set_cookie("session", token, httponly=True, samesite="lax",
                         secure=secure, max_age=604800)
@@ -393,16 +486,18 @@ async def health():
 @app.get("/debug/deaths")
 async def debug_deaths(request: Request):
     """[진단용] death_events 원본 + 현재시각/컷오프/집계. 사망수 안 줄어드는 원인 추적."""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    events = await get_all_death_events()
-    counts = await get_death_counts_since(cutoff)
+    events = [e for e in await get_all_death_events() if ns_of(e.get("pc_id") or "") == tenant]
+    counts = {split_ns(k)[1]: v for k, v in (await get_death_counts_since(cutoff)).items()
+              if ns_of(k) == tenant}
     # pc별 이벤트 타임스탬프 나열
     by_pc: dict[str, list] = {}
     for e in events:
-        by_pc.setdefault(e["pc_id"], []).append(e["created_at"])
+        by_pc.setdefault(split_ns(e["pc_id"])[1], []).append(e["created_at"])
     return JSONResponse({
         "server_now_utc": now.strftime("%Y-%m-%dT%H:%M:%S"),
         "cutoff_30m_utc": cutoff,
@@ -2241,24 +2336,44 @@ async def dashboard(request: Request):
 
 @app.get("/status")
 async def all_statuses(request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    pcs = await _build_full_state()
+    pcs = await _build_full_state(tenant)
     return JSONResponse({"pcs": pcs})
+
+
+def _strip_cmds(cmds: list, tenant: str) -> list:
+    """명령 내역을 테넌트 것만 남기고 pc_id 접두사 제거."""
+    out = []
+    for c in cmds:
+        t, raw = split_ns(c.get("pc_id") or "")
+        if t == tenant:
+            c = dict(c)
+            c["pc_id"] = raw
+            out.append(c)
+    return out
+
+
+async def _push_cmd_history(tenant: str):
+    cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
+    await manager.broadcast({"type": "cmd_history", "commands": cmds}, tenant)
 
 
 @app.get("/logs/{pc_id}")
 async def pc_logs(pc_id: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    logs = await get_logs(pc_id, limit=2000)
+    logs = await get_logs(ns(tenant, pc_id), limit=2000)
     return JSONResponse({"logs": logs})
 
 
 @app.post("/log/{pc_id}")
 async def receive_logs(pc_id: str, request: Request):
     """매크로가 보내는 로그 배치 수신"""
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
     try:
         data = await request.json()
@@ -2269,61 +2384,65 @@ async def receive_logs(pc_id: str, request: Request):
         level   = str(entry.get("level", "info"))[:10]
         message = str(entry.get("message", ""))[:500]
         if message:
-            await insert_log(pc_id, level, message)
+            await insert_log(ns(tenant, pc_id), level, message)
     return JSONResponse({"ok": True, "count": len(logs)})
 
 
 @app.get("/commands/recent")
 async def recent_commands(request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    cmds = await get_recent_commands(20)
+    cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
     return JSONResponse({"commands": cmds})
 
 
 @app.post("/command/{pc_id}")
 async def send_command(pc_id: str, request: Request):
     # 웹 대시보드: session 인증 / 매크로 ack: API key 인증 — 양쪽 모두 허용
-    is_web = check_session(request)
-    is_mac = check_api_key(request)
-    if not is_web and not is_mac:
+    tenant = check_session(request) or check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     body = await request.json()
     command = body.get("command")
     if not command:
         raise HTTPException(status_code=400, detail="command 필드 필요")
     args = body.get("args", {})
-    cmd_id = await insert_command(pc_id, command, args)
+    nspc = ns(tenant, pc_id)
+    cmd_id = await insert_command(nspc, command, args)
     # 매크로 WS 연결되어 있으면 즉시 전달
-    ws_sent = await send_command_to_macro(pc_id, command, args, cmd_id)
+    ws_sent = await send_command_to_macro(nspc, command, args, cmd_id)
     # 브로드캐스트 (명령 내역 갱신용)
-    cmds = await get_recent_commands(20)
-    await manager.broadcast({"type": "cmd_history", "commands": cmds})
+    await _push_cmd_history(tenant)
     return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent})
 
 
 @app.delete("/status/{pc_id}")
 async def remove_pc(pc_id: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    await delete_pc_all_data(pc_id)
-    await push_state()
+    await delete_pc_all_data(ns(tenant, pc_id))
+    await push_state(tenant)
     return JSONResponse({"ok": True})
 
 
 @app.websocket("/ws/macro/{pc_id}")
 async def macro_websocket(websocket: WebSocket, pc_id: str):
     """매크로 클라이언트 WebSocket — 상태 수신 + 명령 송신"""
-    # API 키 인증 (쿼리 파라미터)
+    # API 키 인증 (쿼리 파라미터) → 테넌트 결정
     api_key = websocket.query_params.get("key", "")
-    if api_key != API_KEY:
+    tenant = KEY_TO_TENANT.get(api_key)
+    if not tenant:
         await websocket.close(code=1008)
         return
+    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 에코 일관성(저장 키 소독과 동일)
+    nspc = ns(tenant, pc_id)
     await websocket.accept()
-    macro_ws_connections[pc_id] = websocket
+    macro_ws_connections[nspc] = websocket
     try:
-        # 대기 중인 명령 즉시 전달
-        pending = await get_pending_command(pc_id)
+        # 대기 중인 명령 즉시 전달 (브로드캐스트 'all'도 테넌트 스코프)
+        pending = await get_pending_command(nspc, all_key=ns(tenant, "all"))
         if pending:
             await websocket.send_text(json.dumps({
                 "type": "command", "id": pending["id"],
@@ -2338,19 +2457,19 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             msg_type = msg.get("type", "")
             if msg_type == "status":
                 payload = msg.get("payload", {})
-                payload["pc_id"] = pc_id
-                await upsert_status(pc_id, payload)
+                payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
+                await upsert_status(nspc, payload)
                 errors = payload.get("errors") or []
                 for e in errors[:3]:
-                    await insert_log(pc_id, "warn", str(e))
-                await push_state()
+                    await insert_log(nspc, "warn", str(e))
+                await push_state(tenant)
             elif msg_type == "log":
                 logs = msg.get("logs", [])
                 for entry in logs:
-                    await insert_log(pc_id, entry.get("level", "info"), entry.get("message", ""))
+                    await insert_log(nspc, entry.get("level", "info"), entry.get("message", ""))
             elif msg_type == "ack":
                 cmd_id = msg.get("command_id")
-                if cmd_id:
+                if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
                     await ack_command(cmd_id)
             elif msg_type == "pong":
                 pass
@@ -2359,19 +2478,20 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     except Exception:
         pass
     finally:
-        macro_ws_connections.pop(pc_id, None)
+        macro_ws_connections.pop(nspc, None)
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # session 쿠키로 인증
+    # session 쿠키로 인증 → 테넌트별 연결
     session_token = websocket.cookies.get("session")
-    if not valid_session(session_token):
+    tenant = valid_session(session_token)
+    if not tenant:
         await websocket.close(code=1008)
         return
-    await manager.connect(websocket)
+    await manager.connect(websocket, tenant)
     # 초기 상태 전송 (updater 정보 포함)
-    pcs = await _build_full_state()
+    pcs = await _build_full_state(tenant)
     await websocket.send_text(json.dumps({"type": "state", "pcs": pcs}))
     try:
         while True:
@@ -2386,53 +2506,72 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/report/{pc_id}")
 async def receive_report(pc_id: str, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
-    data["pc_id"] = pc_id
-    await upsert_status(pc_id, data)
+    nspc = ns(tenant, pc_id)
+    data["pc_id"] = nspc
+    await upsert_status(nspc, data)
     # 중요 이벤트는 로그 테이블에 저장
     errors = data.get("errors") or []
     if errors:
         for e in errors[:3]:
-            await insert_log(pc_id, "warn", str(e))
+            await insert_log(nspc, "warn", str(e))
     # WS 브로드캐스트 (updater 정보 포함)
-    await push_state()
+    await push_state(tenant)
     return JSONResponse({"ok": True})
 
 
 @app.get("/command/{pc_id}")
 async def poll_command(pc_id: str, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
-    cmd = await get_pending_command(pc_id)
+    cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
         return JSONResponse({"command": cmd["command"], "args": cmd["args"], "id": cmd["id"]})
     return JSONResponse({"command": None})
 
 
+async def _cmd_belongs_to(cmd_id: int, tenant: str) -> bool:
+    """명령 id의 소유 테넌트 확인(단건 DB 조회) — 타 테넌트 명령 ack/취소 차단.
+    ※최근 N건 창 스캔 방식은 창 밖의 오래된 pending 명령 ack가 404 → 무한 재실행이 되므로 금지."""
+    pc = await get_command_pc(cmd_id)
+    return pc is not None and ns_of(pc) == tenant
+
+
+async def _updater_cmd_belongs_to(cmd_id: int, tenant: str) -> bool:
+    pc = await get_updater_command_pc(cmd_id)
+    return pc is not None and ns_of(pc) == tenant
+
+
 @app.post("/command/{pc_id}/ack/{cmd_id}")
 async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
+    if not await _cmd_belongs_to(cmd_id, tenant):
+        raise HTTPException(status_code=404)
     ok = await ack_command(cmd_id)
     # 내역 브로드캐스트
-    cmds = await get_recent_commands(20)
-    await manager.broadcast({"type": "cmd_history", "commands": cmds})
+    await _push_cmd_history(tenant)
     return JSONResponse({"ok": ok})
 
 
 @app.delete("/commands/{cmd_id}")
 async def cancel_cmd(cmd_id: int, request: Request):
     """pending 명령 취소 (dashboard용)"""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
+    if not await _cmd_belongs_to(cmd_id, tenant):
+        raise HTTPException(status_code=404)
     ok = await cancel_command(cmd_id)
-    cmds = await get_recent_commands(20)
-    await manager.broadcast({"type": "cmd_history", "commands": cmds})
+    await _push_cmd_history(tenant)
     return JSONResponse({"ok": ok})
 
 
@@ -2442,23 +2581,26 @@ async def cancel_cmd(cmd_id: int, request: Request):
 
 @app.post("/updater/status/{pc_id}")
 async def updater_report_status(pc_id: str, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
-    data["pc_id"] = pc_id
-    await upsert_updater_status(pc_id, data)
-    await push_state()
+    nspc = ns(tenant, pc_id)
+    data["pc_id"] = nspc
+    await upsert_updater_status(nspc, data)
+    await push_state(tenant)
     return JSONResponse({"ok": True})
 
 
 @app.get("/updater/command/{pc_id}")
 async def updater_poll_command(pc_id: str, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
-    cmd = await get_pending_updater_command(pc_id)
+    cmd = await get_pending_updater_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
         return JSONResponse({"command": cmd["command"], "args": cmd.get("args", {}), "id": cmd["id"]})
     return JSONResponse({"command": None})
@@ -2466,20 +2608,24 @@ async def updater_poll_command(pc_id: str, request: Request):
 
 @app.post("/updater/command/{pc_id}")
 async def dashboard_send_updater_command(pc_id: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     body = await request.json()
     command = body.get("command")
     if not command:
         raise HTTPException(status_code=400, detail="command 필드 필요")
-    cmd_id = await insert_updater_command(pc_id, command, body.get("args", {}))
+    cmd_id = await insert_updater_command(ns(tenant, pc_id), command, body.get("args", {}))
     return JSONResponse({"ok": True, "id": cmd_id})
 
 
 @app.post("/updater/command/{pc_id}/ack/{cmd_id}")
 async def updater_ack_command(pc_id: str, cmd_id: int, request: Request):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
+    if not await _updater_cmd_belongs_to(cmd_id, tenant):
+        raise HTTPException(status_code=404)
     ok = await ack_updater_command(cmd_id)
     return JSONResponse({"ok": ok})
 
@@ -2488,18 +2634,19 @@ async def updater_ack_command(pc_id: str, cmd_id: int, request: Request):
 # Bug API — 스크린샷 업로드/조회/삭제
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _list_bug_files(pc_id: Optional[str] = None) -> list[dict]:
+def _list_bug_files(tenant: str, pc_id: Optional[str] = None) -> list[dict]:
     result = []
-    if not os.path.isdir(BUGS_DIR):
+    bdir = tenant_bugs_dir(tenant)
+    if not os.path.isdir(bdir):
         return result
-    for fname in sorted(os.listdir(BUGS_DIR), reverse=True):
+    for fname in sorted(os.listdir(bdir), reverse=True):
         if not fname.endswith('.png'):
             continue
         if pc_id:
             m = re.match(r'^(.+?)_\d{8}_\d{6}_', fname)
             if not m or m.group(1) != pc_id:
                 continue
-        path = os.path.join(BUGS_DIR, fname)
+        path = os.path.join(bdir, fname)
         try:
             size = os.path.getsize(path)
         except Exception:
@@ -2510,33 +2657,38 @@ def _list_bug_files(pc_id: Optional[str] = None) -> list[dict]:
 
 @app.post("/bugs/{pc_id}")
 async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...)):
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
-    os.makedirs(BUGS_DIR, exist_ok=True)
+    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 파일명 접두사도 저장 키 소독과 일관
+    bdir = tenant_bugs_dir(tenant)
+    os.makedirs(bdir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     orig = os.path.basename(file.filename or "bug.png")
     # 반드시 {pc_id}_{YYYYMMDD}_{HHMMSS}_{orig} 형태로 저장해야 배지/목록이 작동함
     filename = f"{pc_id}_{ts}_{orig}"
-    dest = os.path.join(BUGS_DIR, filename)
+    dest = os.path.join(bdir, filename)
     content = await file.read()
     with open(dest, 'wb') as f:
         f.write(content)
-    await push_state()
+    await push_state(tenant)
     return JSONResponse({"ok": True, "filename": filename})
 
 
 @app.get("/bugs/download")
 async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    bugs = _list_bug_files(pc_id)
+    bugs = _list_bug_files(tenant, pc_id)
     if not bugs:
         raise HTTPException(status_code=404, detail="다운로드할 버그 이미지 없음")
+    bdir = tenant_bugs_dir(tenant)
     buf = io.BytesIO()
     downloaded_paths = []
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for bug in bugs:
-            path = os.path.join(BUGS_DIR, bug["filename"])
+            path = os.path.join(bdir, bug["filename"])
             if os.path.exists(path):
                 zf.write(path, bug["filename"])
                 downloaded_paths.append(path)
@@ -2548,7 +2700,7 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
         except Exception:
             pass
     # 상태 브로드캐스트 (뱃지 갱신)
-    await push_state()
+    await push_state(tenant)
     zip_name = f"bugs_{pc_id or 'all'}_{int(time.time())}.zip"
     return StreamingResponse(
         buf,
@@ -2559,24 +2711,27 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
 
 @app.get("/bugs")
 async def list_all_bugs(request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    return JSONResponse({"bugs": _list_bug_files()})
+    return JSONResponse({"bugs": _list_bug_files(tenant)})
 
 
 @app.get("/bugs/{pc_id}")
 async def list_pc_bugs(pc_id: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    return JSONResponse({"bugs": _list_bug_files(pc_id)})
+    return JSONResponse({"bugs": _list_bug_files(tenant, pc_id)})
 
 
 @app.get("/bugs/image/{filename:path}")
 async def serve_bug_image(filename: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     filename = os.path.basename(filename)
-    path = os.path.join(BUGS_DIR, filename)
+    path = os.path.join(tenant_bugs_dir(tenant), filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/png")
@@ -2584,14 +2739,15 @@ async def serve_bug_image(filename: str, request: Request):
 
 @app.delete("/bugs/image/{filename:path}")
 async def delete_bug_image(filename: str, request: Request):
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     filename = os.path.basename(filename)
-    path = os.path.join(BUGS_DIR, filename)
+    path = os.path.join(tenant_bugs_dir(tenant), filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     os.remove(path)
-    await push_state()
+    await push_state(tenant)
     return JSONResponse({"ok": True})
 
 
@@ -2602,58 +2758,66 @@ async def delete_bug_image(filename: str, request: Request):
 @app.post("/char_info/{pc_id}")
 async def receive_char_info(pc_id: str, request: Request):
     """매크로가 수집한 캐릭터 세부정보 저장"""
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
+    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    nspc = ns(tenant, pc_id)
     total_kina = data.get("total_kina", 0)
     chars = data.get("characters", [])
     merge = bool(data.get("merge", False))   # 단일 캐릭 수집: slot 기준 병합(나머지 보존)
     # ★수집 시각 = '전체수집 기준'(2026-07-25, 사용자 정의): 단일수집(merge)은 구버전 매크로가
     #   새 시각을 보내와도 무시하고 기존(전체수집) 시각 유지★
     ca = None if merge else (data.get("collected_at") or None)
-    merged = await upsert_char_info(pc_id, total_kina, chars, merge=merge, collected_at=ca)
+    merged = await upsert_char_info(nspc, total_kina, chars, merge=merge, collected_at=ca)
     # 병합 시 최종 total_kina/collected_at을 다시 읽어 브로드캐스트(기존값 유지분 반영)
     final_kina = total_kina
     final_ca = data.get("collected_at", "")
     if merge:
-        info = await get_char_info(pc_id)
+        info = await get_char_info(nspc)
         if info:
             final_kina = info.get("total_kina", total_kina)
             final_ca = info.get("collected_at", final_ca)
     await manager.broadcast({"type": "char_info", "pc_id": pc_id,
                               "total_kina": final_kina, "chars": merged,
-                              "collected_at": final_ca})
+                              "collected_at": final_ca}, tenant)
     return JSONResponse({"ok": True})
 
 
 @app.post("/slot_filter/{pc_id}")
 async def set_slot_filter(pc_id: str, request: Request):
     """대시보드 → 슬롯 활성화/비활성화 저장 + 매크로에 명령 전달"""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
     body = await request.json()
     filters = body.get("filters", {})
     # int 키로 정규화
     filters = {int(k): bool(v) for k, v in filters.items()}
-    await upsert_slot_filters(pc_id, filters)
-    # 매크로에 set_slot_filter 명령 전달
-    cmd_id = await insert_command(pc_id, "set_slot_filter", {"filters": filters})
-    await send_command_to_macro(pc_id, cmd_id, "set_slot_filter", {"filters": filters})
-    await push_state()
+    nspc = ns(tenant, pc_id)
+    await upsert_slot_filters(nspc, filters)
+    # 매크로에 set_slot_filter 명령 전달 (※인자 순서 버그 수정: command, args, cmd_id)
+    cmd_id = await insert_command(nspc, "set_slot_filter", {"filters": filters})
+    await send_command_to_macro(nspc, "set_slot_filter", {"filters": filters}, cmd_id)
+    await push_state(tenant)
     return {"ok": True}
 
 
 @app.get("/char_info/{pc_id}")
 async def query_char_info(pc_id: str, request: Request):
     """대시보드가 캐릭터 세부정보 조회"""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    info = await get_char_info(pc_id)
+    info = await get_char_info(ns(tenant, pc_id))
     if not info:
         return JSONResponse({"pc_id": pc_id, "total_kina": 0, "chars": [], "collected_at": None})
+    info = dict(info)
+    info["pc_id"] = pc_id
     return JSONResponse(info)
 
 
@@ -2664,8 +2828,10 @@ async def query_char_info(pc_id: str, request: Request):
 @app.post("/nightmare/progress/{pc_id}")
 async def save_nightmare_progress(pc_id: str, request: Request):
     """매크로가 악몽 진행 상태 전송"""
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
+    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
     except Exception:
@@ -2673,18 +2839,19 @@ async def save_nightmare_progress(pc_id: str, request: Request):
     slot = data.get("slot", 1)
     tab = data.get("tab", "몽충I")
     bosses = data.get("bosses", {})
-    await upsert_nightmare_progress(pc_id, slot, tab, bosses)
+    await upsert_nightmare_progress(ns(tenant, pc_id), slot, tab, bosses)
     await manager.broadcast({"type": "nightmare_progress", "pc_id": pc_id,
-                              "slot": slot, "tab": tab, "bosses": bosses})
+                              "slot": slot, "tab": tab, "bosses": bosses}, tenant)
     return JSONResponse({"ok": True})
 
 
 @app.get("/nightmare/progress/{pc_id}")
 async def query_nightmare_progress(pc_id: str, request: Request):
     """대시보드가 악몽 진행 상태 조회"""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    progress = await get_nightmare_progress(pc_id)
+    progress = await get_nightmare_progress(ns(tenant, pc_id))
     return JSONResponse({"pc_id": pc_id, "slots": progress})
 
 
@@ -2693,10 +2860,19 @@ async def query_nightmare_progress(pc_id: str, request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 import base64 as _b64
 
+def _screenshot_path(tenant: str, category: str, pc_id: str, slot: int) -> str:
+    """테넌트별 스크린샷 경로. main = 기존 경로(호환), 그 외 = 테넌트 하위 폴더."""
+    category = os.path.basename(category)
+    pc_id = os.path.basename(pc_id)
+    base = SCREENSHOTS_DIR if tenant == "main" else os.path.join(SCREENSHOTS_DIR, tenant)
+    return os.path.join(base, category, f"{pc_id}_s{slot}.png")
+
+
 @app.post("/screenshot/{category}/{pc_id}/{slot}")
 async def upload_screenshot(category: str, pc_id: str, slot: int, request: Request):
     """매크로가 스크린샷 업로드 (arcana, equip 등)"""
-    if not check_api_key(request):
+    tenant = check_api_key(request)
+    if not tenant:
         raise HTTPException(status_code=403)
     try:
         data = await request.json()
@@ -2706,9 +2882,8 @@ async def upload_screenshot(category: str, pc_id: str, slot: int, request: Reque
     if not img_b64:
         raise HTTPException(status_code=400, detail="No image")
     img_bytes = _b64.b64decode(img_b64)
-    cat_dir = os.path.join(SCREENSHOTS_DIR, category)
-    os.makedirs(cat_dir, exist_ok=True)
-    fpath = os.path.join(cat_dir, f"{pc_id}_s{slot}.png")
+    fpath = _screenshot_path(tenant, category, pc_id, slot)
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
     with open(fpath, "wb") as f:
         f.write(img_bytes)
     return JSONResponse({"ok": True, "path": f"/screenshot/{category}/{pc_id}/{slot}"})
@@ -2717,9 +2892,10 @@ async def upload_screenshot(category: str, pc_id: str, slot: int, request: Reque
 @app.get("/screenshot/{category}/{pc_id}/{slot}")
 async def get_screenshot(category: str, pc_id: str, slot: int, request: Request):
     """대시보드가 스크린샷 조회"""
-    if not check_session(request):
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    fpath = os.path.join(SCREENSHOTS_DIR, category, f"{pc_id}_s{slot}.png")
+    fpath = _screenshot_path(tenant, category, pc_id, slot)
     if not os.path.exists(fpath):
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(fpath, media_type="image/png")
@@ -2731,22 +2907,23 @@ async def get_screenshot(category: str, pc_id: str, slot: int, request: Request)
 
 @app.get("/characters")
 async def get_all_characters(request: Request):
-    """전체 PC의 모든 캐릭터 정보를 플랫 테이블로 반환"""
-    if not check_session(request):
+    """해당 테넌트 PC들의 모든 캐릭터 정보를 플랫 테이블로 반환"""
+    tenant = check_session(request)
+    if not tenant:
         raise HTTPException(status_code=401)
-    all_info = await get_all_char_info()
+    all_info = [i for i in await get_all_char_info() if ns_of(i.get("pc_id") or "") == tenant]
     # 악몽 진행 상태도 같이 조회
-    all_nm = await get_all_nightmare_progress()
+    all_nm = [n for n in await get_all_nightmare_progress() if ns_of(n.get("pc_id") or "") == tenant]
     nm_map = {}  # (pc_id, slot) → nightmare summary
     for nm in all_nm:
         bosses = nm.get("bosses", {})
         cleared = sum(1 for b in bosses.values() if b.get("cleared"))
         total = len(bosses) if bosses else 7
         best_stage = max((b.get("stage", 0) for b in bosses.values()), default=0) if bosses else 0
-        nm_map[(nm["pc_id"], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
+        nm_map[(split_ns(nm["pc_id"])[1], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
     rows = []
     for info in all_info:
-        pc_id = info["pc_id"]
+        pc_id = split_ns(info["pc_id"])[1]
         total_kina = info.get("total_kina", 0)
         collected_at = info.get("collected_at", "")
         for ch in info.get("chars", []):
