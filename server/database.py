@@ -410,17 +410,23 @@ async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
 
 # ── 캐릭터 세부정보 ───────────────────────────────────────────────────────────
 
-async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool = False) -> list:
+async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool = False,
+                           collected_at: str | None = None) -> list:
     """캐릭터 정보 저장. merge=True면 기존 chars에 slot 기준으로 병합(단일 캐릭 수집용 —
     한 슬롯만 보내도 나머지 슬롯이 안 지워짐). total_kina=0이면 기존값 유지.
+    collected_at: 매크로가 준 '전체수집 시각'을 그대로 저장(2026-07-25) — 예전엔 저장 때마다
+    _now()로 덮어써 부팅 재전송/단일수집에도 시각이 갱신되는 거짓말이 됐음. None이면 기존값
+    유지(단일수집·시각 미제공 재전송), 기존값도 없으면 _now().
     반환: 최종 저장된 chars 리스트(WS 브로드캐스트용)."""
     async with aiosqlite.connect(DB_PATH) as db:
-        if merge:
-            db.row_factory = aiosqlite.Row
+        db.row_factory = aiosqlite.Row
+        row = None
+        if merge or not collected_at:
             async with db.execute(
-                "SELECT total_kina, chars FROM char_info WHERE pc_id=?", (pc_id,)
+                "SELECT total_kina, chars, collected_at FROM char_info WHERE pc_id=?", (pc_id,)
             ) as cur:
                 row = await cur.fetchone()
+        if merge:
             existing = []
             existing_kina = 0
             if row:
@@ -436,9 +442,11 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
             chars = [by_slot[k] for k in sorted(by_slot, key=lambda x: (x is None, x))]
             if not total_kina:
                 total_kina = existing_kina
+        if not collected_at:
+            collected_at = (row["collected_at"] if row else None) or _now()
         await db.execute(
             "INSERT OR REPLACE INTO char_info(pc_id, total_kina, chars, collected_at) VALUES(?,?,?,?)",
-            (pc_id, total_kina, json.dumps(chars, ensure_ascii=False), _now()),
+            (pc_id, total_kina, json.dumps(chars, ensure_ascii=False), collected_at),
         )
         await db.commit()
     return chars

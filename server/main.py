@@ -2611,16 +2611,21 @@ async def receive_char_info(pc_id: str, request: Request):
     total_kina = data.get("total_kina", 0)
     chars = data.get("characters", [])
     merge = bool(data.get("merge", False))   # 단일 캐릭 수집: slot 기준 병합(나머지 보존)
-    merged = await upsert_char_info(pc_id, total_kina, chars, merge=merge)
-    # 병합 시 최종 total_kina를 다시 읽어 브로드캐스트(0으로 보냈으면 기존값 유지됐으므로)
+    # ★수집 시각 = '전체수집 기준'(2026-07-25, 사용자 정의): 단일수집(merge)은 구버전 매크로가
+    #   새 시각을 보내와도 무시하고 기존(전체수집) 시각 유지★
+    ca = None if merge else (data.get("collected_at") or None)
+    merged = await upsert_char_info(pc_id, total_kina, chars, merge=merge, collected_at=ca)
+    # 병합 시 최종 total_kina/collected_at을 다시 읽어 브로드캐스트(기존값 유지분 반영)
     final_kina = total_kina
+    final_ca = data.get("collected_at", "")
     if merge:
         info = await get_char_info(pc_id)
         if info:
             final_kina = info.get("total_kina", total_kina)
+            final_ca = info.get("collected_at", final_ca)
     await manager.broadcast({"type": "char_info", "pc_id": pc_id,
                               "total_kina": final_kina, "chars": merged,
-                              "collected_at": data.get("collected_at", "")})
+                              "collected_at": final_ca})
     return JSONResponse({"ok": True})
 
 
