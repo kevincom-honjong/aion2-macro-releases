@@ -226,6 +226,9 @@ async def _build_full_state() -> list[dict]:
                     ]
                 if ci.get("total_kina"):
                     pc["_total_kina"] = ci["total_kina"]
+                # 카드 "수집 X분 전" 표시용 (2026-07-25)
+                if ci.get("collected_at"):
+                    pc["_char_collected_at"] = ci["collected_at"]
 
     for pid, u in updater_map.items():
         if pid not in seen:
@@ -1030,7 +1033,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span></span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}</span>
       ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
