@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.303",
+    "version": "1.1.304",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "553548a5ca7342d30a3fc64a487c3ec77fd81e95768a81a427ccc2daeed716b1",
+    "sha256": "45bfca8b0e50e9643b00a91e6c05eab1a89c352abea51773fbad353009906558",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -45,12 +45,13 @@
     "cube3.png": "b44eb5f8669351533cf5ef2dbf8cb400112b526c27f51ce9894969aff701c541",
     "cube4.png": "da432aaa9df1e6009bc590c0bc98f17eec2953c0eef44bfb5b9fa9b52e686a1e",
     "cube5.png": "ba5104e4008e7618f7781b7259929093795761e1faa3deaa25cfe724db147e09",
-    "daily_title.png": "5facfbccc25ed66ccec0969bd065d5b6758b122e84d563b9d891f48897ba4bbd",
+    "daily_effect.png": "3aa771b1dd7d8b24219c86cffa71e5c8a341f41bbfbab0e47e4d5b9c8bc842ec",
+    "daily_title.png": "5919cbf6fa1d96a95e7947126d669d9ac093d27289e21f689cd1ffc88a6701d5",
     "dead_map_title.png": "e0b8d82a0caf1762448e06331b325d1132d4e977eeca77dc4c73428ae2eb8537",
     "death.png": "f2f95710616cb6481258a3c671d2e2685f42135db26c662651b44790a80b143a",
     "dungeon_enter.png": "be1ff58511180b9951e2d2d35801f8bcf084881b74fb3ad516b62e22f80c08ef",
-    "dungeon_exit.png": "737fdb6b736046a80b3a70a2b3875f2d0955ac2e5039312ae8896f0b4fd3422e",
-    "dungeon_retry.png": "17e91aa9cf3aec24b1501c4862f843665da614a34846daf5286cfdd262a59f68",
+    "dungeon_exit.png": "08b0b87ae551c65cad4009e74f67d2092de0d2da821dbbfc5e398a137549856e",
+    "dungeon_retry.png": "5674edf090da047dc7a5c33c543c88cc62daa703dddca146e48051e15fc093ed",
     "easy_store_btn.png": "b623171ee401b8b2b95bb2ca705a027e452e91b6deda0288d1673f592d918181",
     "equip_title.png": "cfd433cc2416196cf4aaf4e81a0b185ce1a6197b8626bb27b4f5dcfa0be0ab04",
     "error.png": "8a727f1dad5345ac2af634d89610eefc570de9f56ecda07b63e65925b8b942dd",
@@ -201,12 +202,12 @@
     "sha256": "9274914450b22c8760a4cdacdb2e9c97a6471214743315881d8cdfc27bb0663b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260722163411",
-  "updated_at": "2026-07-26T02:57:52",
+  "images_version": "20260726194202",
+  "updated_at": "2026-07-26T19:42:02",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.303",
-    "sha256": "d08990b9b93d7fe4bed60e3ff0838294fb140e6f079a6353a5bd1da494a4944c",
+    "version": "1.1.304",
+    "sha256": "d8f82796af205e4b25b1d87b2322ff7d74f4cec356b0386585a1b13dd9fc0ee1",
     "filename": "혼종_렌탈.exe"
   }
 }
