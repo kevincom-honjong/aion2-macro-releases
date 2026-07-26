@@ -867,8 +867,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <select id="awaken-preset" onchange="setAwakenPreset(this.value)" class="chip chip-orange"
             title="각성전 난이도 프리셋 — 저장 즉시 전 PC 다음 입장부터 적용"
             style="appearance:auto;background:rgba(249,115,22,.12);cursor:pointer">
-      <option value="default">난이도: 기본</option>
-      <option value="hard_up">난이도: 어려움→극한</option>
+      <option value="default">난이도: 기본 (20/30/50/60만)</option>
+      <option value="hard_up">난이도: 상향 (15/25/40/55만)</option>
     </select>
     <button onclick="selCmd('abyss')" class="chip chip-blue">어비스</button>
     <button onclick="selCmd('collect_info')" class="chip chip-sky">정보수집</button>
