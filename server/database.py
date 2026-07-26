@@ -41,6 +41,13 @@ async def init_db() -> None:
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_cmd_pc_status ON commands(pc_id, status)"
         )
@@ -313,6 +320,23 @@ async def get_command_pc(cmd_id: int) -> "str | None":
     """명령 id의 pc_id(저장 키) 단건 조회 — 소유 테넌트 판정용(2026-07-26)."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT pc_id FROM commands WHERE id=?", (cmd_id,)) as cur:
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def set_setting(key: str, value: str) -> None:
+    """전역 설정 KV (각성 난이도 프리셋 등, 2026-07-26). key는 호출측에서 테넌트 스코프."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES(?,?,?)",
+            (key, value, _now()),
+        )
+        await db.commit()
+
+
+async def get_setting(key: str) -> "str | None":
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
 

@@ -22,6 +22,7 @@ from database import (
     delete_pc_all_data, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, ack_command, cancel_command, get_logs,
     insert_log, get_recent_commands, get_command_pc, get_updater_command_pc,
+    set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     upsert_char_info, get_char_info, get_all_char_info,
@@ -495,6 +496,31 @@ async def ping():
 LICENSE_SECRET = os.getenv("LICENSE_SECRET", "aion2-license-v1-7f3a")
 
 
+# ─── 전역 설정 KV (각성 난이도 프리셋 등, 2026-07-26) — 테넌트 스코프 ────────
+@app.get("/setting/{key}")
+async def get_setting_ep(key: str, request: Request):
+    """매크로(X-Api-Key)와 대시보드(세션) 양쪽 조회 허용."""
+    tenant = check_api_key(request) or check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    val = await get_setting(ns(tenant, key))
+    return JSONResponse({"key": key, "value": val})
+
+
+@app.post("/setting/{key}")
+async def set_setting_ep(key: str, request: Request):
+    """대시보드(세션)에서 설정 변경."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400)
+    await set_setting(ns(tenant, key), str(body.get("value", ""))[:100])
+    return JSONResponse({"ok": True})
+
+
 @app.post("/license")
 async def license_check(request: Request):
     """렌탈 exe 기간제 검증(2026-07-26). 만료 키는 check_api_key에서 이미 None이므로
@@ -838,6 +864,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="selCmd('daily_dungeon')" class="chip chip-purple">일일던전</button>
     <button onclick="selCmd('nightmare')" class="chip chip-pink">악몽</button>
     <button onclick="selCmd('awakening')" class="chip chip-orange">각성</button>
+    <select id="awaken-preset" onchange="setAwakenPreset(this.value)" class="chip chip-orange"
+            title="각성전 난이도 프리셋 — 저장 즉시 전 PC 다음 입장부터 적용"
+            style="appearance:auto;background:rgba(249,115,22,.12);cursor:pointer">
+      <option value="default">난이도: 기본</option>
+      <option value="hard_up">난이도: 어려움→극한</option>
+    </select>
     <button onclick="selCmd('abyss')" class="chip chip-blue">어비스</button>
     <button onclick="selCmd('collect_info')" class="chip chip-sky">정보수집</button>
   </div>
@@ -1495,6 +1527,25 @@ function getSalePrice() {
   return isNaN(v)?0:v;
 }
 function isSalePriceConfirmed(){ return localStorage.getItem('sale_price_confirmed')==='1'; }
+// ─── 각성전 난이도 프리셋 (2026-07-26) ────────────────────────────────────────
+async function loadAwakenPreset(){
+  try{
+    const r=await fetch('/setting/awakening_preset');
+    if(!r.ok)return;
+    const v=(await r.json()).value||'default';
+    const el=document.getElementById('awaken-preset');
+    if(el)el.value=(v==='hard_up')?'hard_up':'default';
+  }catch(e){}
+}
+async function setAwakenPreset(v){
+  try{
+    const r=await fetch('/setting/awakening_preset',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({value:v})});
+    showToast(r.ok?(v==='hard_up'?'✓ 각성 난이도: 어려움→극한 (다음 입장부터)':'✓ 각성 난이도: 기본(자동)')
+                  :'✗ 프리셋 저장 실패');
+  }catch(e){showToast('✗ 프리셋 저장 실패');}
+}
+
 function loadSalePrice() {
   const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
   if(!el||!btn) return;
@@ -2352,7 +2403,7 @@ function handleCharInfoMsg(msg) {
 (async()=>{
   const res=await fetch('/status');
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
-  renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice();
+  renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   setInterval(renderCards,60000);
   setInterval(loadCharTable,120000);   // 각성티켓/뱃지 폴백 갱신(WS char_info 놓쳐도 2분 내 반영)
   checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
