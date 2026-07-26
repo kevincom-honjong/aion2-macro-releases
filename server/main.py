@@ -762,6 +762,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.6)}
   .tile-purple{--tile:#c084fc;--tile-glow:rgba(192,132,252,.55)}
   .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
+  /* 전광판 그리드: 숫자 긴 타일(오드에너지/거래키나/창고키나)만 넓게, 카운트류는 좁게 */
+  .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
+  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 3fr 3fr}}
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
     white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
@@ -889,8 +892,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <main class="p-4 sm:p-6 space-y-6">
 
-  <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 일일던전 → 거래키나 → 창고키나) -->
-  <div class="grid grid-cols-2 sm:grid-cols-7 gap-3">
+  <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 일일던전 → 거래키나 → 창고키나)
+       — 열 폭은 .stat-grid(숫자 긴 오드에너지/거래키나/창고키나=3fr, 나머지=2fr) -->
+  <div class="stat-grid">
     <div class="stat-tile tile-green">
       <div class="stat-icon">🖥️</div>
       <div class="stat-num text-green-400" id="cnt-online">0</div>
