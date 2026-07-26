@@ -760,6 +760,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .tile-blue  {--tile:#60a5fa;--tile-glow:rgba(96,165,250,.55)}
   .tile-yellow{--tile:#facc15;--tile-glow:rgba(250,204,21,.5)}
   .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.6)}
+  .tile-purple{--tile:#c084fc;--tile-glow:rgba(192,132,252,.55)}
   .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
     white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
@@ -802,6 +803,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     box-shadow:0 0 8px -2px rgba(74,222,128,.6)}
   .done-awaken{color:#c7d2fe;background:rgba(99,102,241,.22);border:1px solid rgba(129,140,248,.6);
     box-shadow:0 0 8px -2px rgba(129,140,248,.65)}
+  .done-dungeon{color:#e9d5ff;background:rgba(168,85,247,.2);border:1px solid rgba(192,132,252,.6);
+    box-shadow:0 0 8px -2px rgba(192,132,252,.65)}
 
   /* ── 섹션 헤더 네온 라인 / 토스트 ── */
   main section h2{position:relative}
@@ -886,8 +889,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <main class="p-4 sm:p-6 space-y-6">
 
-  <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 거래키나 → 창고키나) -->
-  <div class="grid grid-cols-2 sm:grid-cols-6 gap-3">
+  <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 일일던전 → 거래키나 → 창고키나) -->
+  <div class="grid grid-cols-2 sm:grid-cols-7 gap-3">
     <div class="stat-tile tile-green">
       <div class="stat-icon">🖥️</div>
       <div class="stat-num text-green-400" id="cnt-online">0</div>
@@ -907,6 +910,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="stat-icon">⚔️</div>
       <div class="stat-num text-indigo-400" id="cnt-awakening">–</div>
       <div class="stat-label">각성전</div>
+    </div>
+    <div class="stat-tile tile-purple" title="일일던전(계정 티켓)이 남은 계정 수 — 🏰 뱃지 없는 PC">
+      <div class="stat-icon">🏰</div>
+      <div class="stat-num text-purple-400" id="cnt-dungeon-left">–</div>
+      <div class="stat-label">일일던전 남음</div>
     </div>
     <div class="stat-tile tile-gold">
       <div class="stat-icon">🪙</div>
@@ -1165,7 +1173,7 @@ function relTime(iso) {
 
 const CLASS_LABEL = {gungsung:'궁성',spirit:'정령성',kumsung:'검성',chiyousung:'치유성'};
 
-// ─── 완료 뱃지 (사냥=매일 05:00 초기화 / 각성전=매주 수요일 05:00 초기화) ─────────
+// ─── 완료 뱃지 (사냥=매일 05:00 / 각성전·일일던전=매주 수요일 05:00 초기화) ─────────
 // 완료 판정에 '초기화 경계 이후 데이터'만 인정 — PC가 밤새 꺼져 있어도 어제 완료가
 // 오늘 완료로 둔갑하지 않게 시각 게이트.
 function fmtTs(d){const p=n=>String(n).padStart(2,'0');
@@ -1182,6 +1190,12 @@ function isAwakenDone(pc_id){
   // (수요일 05시 초기화 후엔 게임이 3/3으로 돌아가고 다음 정보수집 때 DB 갱신돼 자연 소멸)
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
   return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
+}
+function isDungeonDone(pc){
+  // 일일던전(계정 티켓 14장) 소진 — 매크로가 소진 시각(dungeon_done_at)을 보고.
+  // 각성전과 같은 주간 리셋(수요일 05시) 경계 이후 기록만 인정 → 경계 지나면 자연 소멸.
+  const t=(pc.dungeon_done_at||'').replace('T',' ');
+  return !!t && t>=fmtTs(lastWeeklyReset());
 }
 
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
@@ -1246,10 +1260,11 @@ function buildCard(pc) {
   const activeTag = (activeName && isOnline)
     ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
     : '';
-  // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3
+  // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3 / 🏰보라=일일던전 티켓 소진
   const doneBadges =
     (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹</span>`:'') +
-    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 전 캐릭 0/3 (수요일 새벽 5시 초기화)">⚔</span>`:'');
+    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 전 캐릭 0/3 (수요일 새벽 5시 초기화)">⚔</span>`:'') +
+    (isDungeonDone(pc)?`<span class="done-badge done-dungeon" title="일일던전 완료 — 계정 티켓 소진 (수요일 새벽 5시 초기화)">🏰</span>`:'');
   return `<div id="card-${pc.pc_id}"
     class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none"
     onclick="toggleSelect('${pc.pc_id}',event)"
@@ -1403,10 +1418,12 @@ function parseOddEnergy(str) {
 function refreshSummary(pcs) {
   const c={online:0,offline:0,completed:0,totalKina:0};
   const seenPc = new Set();
+  const dungeonLeft = new Set();   // 일일던전(계정 티켓) 안 끝난 PC — 오프라인 포함(계정 기준)
   pcs.forEach(p=>{
     const s=p.status||'offline';
     const isOnline = (STATUS_CFG[s]||STATUS_CFG.offline).online;
     if(isOnline) c.online++; else c.offline++;
+    if(!isDungeonDone(p)) dungeonLeft.add(p.pc_id);
     const dp = p.daily_progress||[];
     if(dp.length>0 && dp.every(d=>d.completed)) c.completed++;
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
@@ -1426,6 +1443,7 @@ function refreshSummary(pcs) {
   document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
   document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
   document.getElementById('cnt-trade-kina').textContent=tradeSeen ? fmtKinaKor(totalTrade) : '–';
+  document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
   document.getElementById('cnt-completed').textContent=c.completed;
   document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
 }
