@@ -9,7 +9,7 @@ Railway 배포용
   DB_PATH             SQLite 파일 경로 (기본: /tmp/macro_control.db)
   PORT                uvicorn 포트 (Railway 자동 설정)
 """
-import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64
+import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -182,11 +182,37 @@ def check_session(request: Request) -> Optional[str]:
     return tenant
 
 
+_KEY_FAILS: dict = {}          # ip -> {"n": int, "since": float}
+KEY_MAX_FAILS = 30             # 창 안 API키 실패 상한 (매크로는 정상이면 거의 실패하지 않음)
+KEY_WINDOW = 300.0
+
+
 def check_api_key(request: Request) -> Optional[str]:
-    """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None. 만료 테넌트 키는 전면 차단."""
-    tenant = KEY_TO_TENANT.get(request.headers.get("X-Api-Key", ""))
-    if tenant and tenant_expired(tenant):
+    """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None. 만료 테넌트 키는 전면 차단.
+    ★키 추측 시도 완화(2026-07-27): 상수시간 비교 + IP별 실패 상한. 이 키가 뚫리면
+      남의 PC에 원격명령을 넣을 수 있으므로 로그인만큼 중요하다.★"""
+    supplied = request.headers.get("X-Api-Key", "")
+    ip = _client_ip(request)
+    now = time.time()
+    rec = _KEY_FAILS.get(ip)
+    if rec and now - rec["since"] <= KEY_WINDOW and rec["n"] >= KEY_MAX_FAILS:
+        return None            # 실패 폭주 IP는 정답 키여도 창이 끝날 때까지 거부
+    tenant = None
+    for k, tn in KEY_TO_TENANT.items():
+        if hmac.compare_digest(supplied, k):
+            tenant = tn
+    if not tenant or tenant_expired(tenant):
+        if not rec or now - rec["since"] > KEY_WINDOW:
+            rec = {"n": 0, "since": now}
+            _KEY_FAILS[ip] = rec
+        rec["n"] += 1
+        if rec["n"] == KEY_MAX_FAILS:
+            print(f"[SECURITY] API키 실패 누적 → {ip} {int(KEY_WINDOW)}초 차단")
+        if len(_KEY_FAILS) > 5000:
+            for kk in [kk for kk, vv in _KEY_FAILS.items() if now - vv["since"] > KEY_WINDOW][:2000]:
+                _KEY_FAILS.pop(kk, None)
         return None
+    _KEY_FAILS.pop(ip, None)
     return tenant
 
 
@@ -459,6 +485,71 @@ async function login() {
 </body></html>"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 로그인 무차별 대입(brute force) 방어 — 2026-07-27
+# 배경: 프로그램이 외부로 배포되면서 대시보드 주소가 알려짐. 비밀번호가 짧으면
+#       조합 수가 적어 자동화 도구로 수 초 내 전수 시도가 가능하다. 레이트 리밋이 없으면
+#       그 시도를 막을 수단이 전혀 없으므로, IP별 실패 누적 + 점증 잠금으로 차단한다.
+# 구현: Railway 단일 인스턴스라 인메모리로 충분(재시작 시 초기화되지만 공격도 처음부터).
+# ─────────────────────────────────────────────────────────────────────────────
+LOGIN_MAX_FAILS   = 5           # 이 횟수를 넘기면 잠금
+LOGIN_WINDOW      = 300.0       # 실패 누적 관측 창(초)
+LOGIN_LOCK_STEPS  = (60, 300, 900, 3600)   # 잠금 시간 점증(초) — 반복 공격일수록 길게
+GLOBAL_MAX_FAILS  = 60          # 창 안 전체 실패 상한(여러 IP 분산 시도 완화)
+_LOGIN_FAILS: dict = {}         # ip -> {"n": int, "since": float, "until": float, "step": int}
+_LOGIN_GLOBAL = {"n": 0, "since": 0.0}
+
+
+def _client_ip(request: Request) -> str:
+    """프록시(Railway) 뒤 실제 클라이언트 IP"""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _login_locked_for(ip: str) -> float:
+    """남은 잠금 시간(초). 0이면 시도 허용."""
+    now = time.time()
+    rec = _LOGIN_FAILS.get(ip)
+    if rec and rec["until"] > now:
+        return rec["until"] - now
+    # 전체 상한 — 분산 시도(IP를 바꿔가며)에도 속도를 떨어뜨린다
+    g = _LOGIN_GLOBAL
+    if now - g["since"] > LOGIN_WINDOW:
+        g["n"], g["since"] = 0, now
+    if g["n"] >= GLOBAL_MAX_FAILS:
+        return LOGIN_LOCK_STEPS[0]
+    return 0.0
+
+
+def _login_failed(ip: str):
+    now = time.time()
+    rec = _LOGIN_FAILS.get(ip)
+    if not rec or now - rec["since"] > LOGIN_WINDOW:
+        rec = {"n": 0, "since": now, "until": 0.0, "step": 0}
+        _LOGIN_FAILS[ip] = rec
+    rec["n"] += 1
+    g = _LOGIN_GLOBAL
+    if now - g["since"] > LOGIN_WINDOW:
+        g["n"], g["since"] = 0, now
+    g["n"] += 1
+    if rec["n"] >= LOGIN_MAX_FAILS:
+        lock = LOGIN_LOCK_STEPS[min(rec["step"], len(LOGIN_LOCK_STEPS) - 1)]
+        rec["until"] = now + lock
+        rec["step"] += 1
+        rec["n"] = 0
+        rec["since"] = now
+        print(f"[SECURITY] 로그인 실패 누적 → {ip} {lock}초 차단 (누적 잠금 {rec['step']}회)")
+    if len(_LOGIN_FAILS) > 5000:        # 메모리 폭주 방지
+        for k in [k for k, v in _LOGIN_FAILS.items() if v["until"] < now - 3600][:2000]:
+            _LOGIN_FAILS.pop(k, None)
+
+
+def _login_ok(ip: str):
+    _LOGIN_FAILS.pop(ip, None)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     return HTML_LOGIN
@@ -466,13 +557,30 @@ async def login_page():
 
 @app.post("/auth/login")
 async def do_login(request: Request, response: Response):
-    body = await request.json()
+    ip = _client_ip(request)
+    wait = _login_locked_for(ip)
+    if wait > 0:
+        raise HTTPException(status_code=429,
+                            detail=f"로그인 시도가 너무 많습니다. {int(wait) + 1}초 후 다시 시도하세요.")
+    try:
+        body = await request.json()
+    except Exception:
+        _login_failed(ip)
+        raise HTTPException(status_code=400, detail="잘못된 요청")
     # 비밀번호 → 테넌트 결정 (테넌트별 독립 대시보드, 2026-07-25)
-    tenant = PW_TO_TENANT.get(body.get("password") or "")
+    # 타이밍 차이로 비번을 좁히지 못하게 상수시간 비교로 전체 후보를 훑는다
+    supplied = body.get("password") or ""
+    tenant = None
+    for pw, tn in PW_TO_TENANT.items():
+        if hmac.compare_digest(supplied, pw):
+            tenant = tn
     if tenant and tenant_expired(tenant):
         raise HTTPException(status_code=403, detail="이용 기간이 만료되었습니다")
     if not tenant:
+        _login_failed(ip)
+        await asyncio.sleep(0.5)        # 자동화 도구의 초당 시도 수를 떨어뜨림
         raise HTTPException(status_code=401, detail="Wrong password")
+    _login_ok(ip)
     token = new_session(tenant)
     secure = request.headers.get("x-forwarded-proto", "http") == "https"
     response.set_cookie("session", token, httponly=True, samesite="lax",
