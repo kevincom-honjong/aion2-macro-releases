@@ -1318,9 +1318,7 @@ let menuPcId = null;
 // 보고에 실어 보내면 대시보드를 여는 순간 실행되어 세션이 탈취된다(무클릭 저장형 XSS).
 function esc(v){ return String(v==null?'':v).replace(/[&<>"'`=\/]/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'}[c])); }
-function escAttr(v){ return esc(v).replace(/
-|
-/g,''); }
+function escAttr(v){ return esc(v); }   // esc가 따옴표까지 막으므로 속성값에 그대로 안전
 
 const STATUS_CFG = {
   hunting:      {label:'사냥 중',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
