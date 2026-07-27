@@ -187,6 +187,26 @@ KEY_MAX_FAILS = 30             # 창 안 API키 실패 상한 (매크로는 정�
 KEY_WINDOW = 300.0
 
 
+def _key_probe_blocked(ip: str) -> bool:
+    """API키 추측 시도 차단 여부 — 헤더/바디/WS 어디로 오든 같은 카운터를 공유한다."""
+    rec = _KEY_FAILS.get(ip)
+    return bool(rec and time.time() - rec["since"] <= KEY_WINDOW and rec["n"] >= KEY_MAX_FAILS)
+
+
+def _key_probe_failed(ip: str):
+    now = time.time()
+    rec = _KEY_FAILS.get(ip)
+    if not rec or now - rec["since"] > KEY_WINDOW:
+        rec = {"n": 0, "since": now}
+        _KEY_FAILS[ip] = rec
+    rec["n"] += 1
+    if rec["n"] == KEY_MAX_FAILS:
+        print(f"[SECURITY] API키 추측 누적 → {ip} {int(KEY_WINDOW)}초 차단")
+    if len(_KEY_FAILS) > 5000:
+        for kk in [kk for kk, vv in _KEY_FAILS.items() if now - vv["since"] > KEY_WINDOW][:2000]:
+            _KEY_FAILS.pop(kk, None)
+
+
 def check_api_key(request: Request) -> Optional[str]:
     """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None. 만료 테넌트 키는 전면 차단.
     ★키 추측 시도 완화(2026-07-27): 상수시간 비교 + IP별 실패 상한. 이 키가 뚫리면
@@ -639,10 +659,22 @@ async def license_check(request: Request):
         raise HTTPException(status_code=400)
     key = body.get("api_key", "")
     nonce = str(body.get("nonce", ""))[:64]   # 리플레이 방지용 클라 난수(서명에 포함)
-    tenant = KEY_TO_TENANT.get(key)
+    # ★키 판별 오라클 차단(2026-07-27 보안감사 critical): 이 엔드포인트는 무인증이라
+    #   check_api_key의 실패 카운터를 우회해 무제한으로 키 정오를 물어볼 수 있었다.
+    #   → 같은 IP 실패 카운터를 공유하고, 상수시간 비교를 쓰고, 지연을 준다.★
+    ip = _client_ip(request)
+    if _key_probe_blocked(ip):
+        raise HTTPException(status_code=429, detail="too many attempts")
+    tenant = None
+    for _k, _tn in KEY_TO_TENANT.items():
+        if hmac.compare_digest(key, _k):
+            tenant = _tn
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     if not tenant:
-        payload = {"valid": False, "reason": "unknown_key", "expires": "", "now": now, "nonce": nonce}
+        _key_probe_failed(ip)
+        await asyncio.sleep(0.4)
+        # ★reason을 'unknown_key'로 구분해주면 '등록된 키인지'까지 알려주는 셈 → 단일화★
+        payload = {"valid": False, "reason": "invalid", "expires": "", "now": now, "nonce": nonce}
     elif tenant_expired(tenant):
         payload = {"valid": False, "reason": "expired", "expires": (TENANTS[tenant].get("expires") or ""), "now": now, "nonce": nonce}
     else:
@@ -2661,8 +2693,12 @@ async def recent_commands(request: Request):
 
 @app.post("/command/{pc_id}")
 async def send_command(pc_id: str, request: Request):
-    # 웹 대시보드: session 인증 / 매크로 ack: API key 인증 — 양쪽 모두 허용
-    tenant = check_session(request) or check_api_key(request)
+    # ★명령 '주입'은 대시보드 세션 전용(2026-07-27 보안감사 critical).
+    #   기존엔 API 키로도 주입이 가능했는데, API 키는 배포되는 exe·공개 소스에 각인될 수밖에
+    #   없어(구조적) 유출을 전제해야 한다. 실제로 공개 저장소에 평문 노출돼 있었고,
+    #   그 키 하나로 로그인 없이 함대 전체에 시작/정지/판매 명령을 넣을 수 있었다.
+    #   매크로·업데이터는 명령을 '폴링(GET)'하고 'ack'만 하므로 이 변경에 기능 손실이 없다.★
+    tenant = check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
     body = await request.json()
@@ -2693,9 +2729,20 @@ async def remove_pc(pc_id: str, request: Request):
 async def macro_websocket(websocket: WebSocket, pc_id: str):
     """매크로 클라이언트 WebSocket — 상태 수신 + 명령 송신"""
     # API 키 인증 (쿼리 파라미터) → 테넌트 결정 (만료 테넌트 차단)
+    # ★HTTP와 동일한 상수시간 비교 + IP 실패 카운터 공유(2026-07-27): 여기만 딕셔너리 조회라
+    #   무제한 키 추측 채널로 쓸 수 있었다.★
     api_key = websocket.query_params.get("key", "")
-    tenant = KEY_TO_TENANT.get(api_key)
+    _wip = (websocket.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (websocket.client.host if websocket.client else "unknown"))
+    if _key_probe_blocked(_wip):
+        await websocket.close(code=1008)
+        return
+    tenant = None
+    for _k, _tn in KEY_TO_TENANT.items():
+        if hmac.compare_digest(api_key, _k):
+            tenant = _tn
     if not tenant or tenant_expired(tenant):
+        _key_probe_failed(_wip)
         await websocket.close(code=1008)
         return
     pc_id = (pc_id or "").replace(NS_SEP, "_")   # 에코 일관성(저장 키 소독과 동일)

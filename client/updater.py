@@ -35,7 +35,13 @@ UPDATER_VERSION  = "3.0.7"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
-CONTROL_API_KEY  = "aion2_secret_2026"
+# ★키를 소스에 박지 않는다(2026-07-27 보안감사 critical): 이 저장소는 공개라
+#   평문 상수가 그대로 노출됐고, 그 키 하나로 함대 전체에 원격명령 주입이 가능했다.
+#   → 환경변수 또는 C:\auto\info.txt 의 control_api_key 로만 받는다(load_pc_id에서 주입).★
+#   ※주의: 이 상수를 비운 채 updater.exe를 새로 빌드해 배포하려면, 먼저 각 PC의
+#     info.txt에 control_api_key= 를 넣어야 한다(안 넣으면 그 PC는 서버와 통신 불가).
+#     이미 돌고 있는 기존 exe는 영향 없음(빌드 시점에 값이 박혀 있음).
+CONTROL_API_KEY  = os.getenv("AION2_CONTROL_KEY", "")
 
 TIMEOUT_CONNECT  = 15
 TIMEOUT_DOWNLOAD = 180   # 청크 간 최대 대기(초). 75MB 느린망 대비 120→180
