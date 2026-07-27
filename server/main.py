@@ -840,6 +840,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <span class="brand-sub hidden md:inline">HONJONG COMMAND</span>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
+    <a href="/manual" target="_blank" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기">📘 매뉴얼</a>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
@@ -887,6 +888,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button id="sale-price-btn" onclick="toggleSalePrice()" class="chip chip-gray">확정</button>
     <button onclick="sellAllSel()" class="chip chip-yellow">판매</button>
     <button onclick="settleSel()" class="chip chip-amber" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">정산</button>
+  </div>
+
+  <!-- 그룹 5: 정리 -->
+  <div class="cmd-group ml-auto">
+    <span class="cmd-legend">CLEAN</span>
+    <button onclick="clearAllBugs()" class="chip chip-gray" title="모든 PC의 버그 스크린샷을 서버에서 전부 삭제">🧹 스샷 비우기</button>
   </div>
 </div>
 
@@ -1101,6 +1108,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <h2 class="font-bold text-red-400" id="bug-modal-title">버그 스크린샷</h2>
       <div class="flex items-center gap-2">
         <a id="bug-download-link" href="#" class="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 bg-gray-700 rounded transition-colors">⬇ ZIP</a>
+        <button id="bug-clear-btn" class="text-xs text-red-300 hover:text-red-200 px-2 py-1 bg-red-900/50 rounded transition-colors" title="이 PC의 스샷 전부 삭제">🧹 전체삭제</button>
         <button onclick="closeBugsModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
       </div>
     </div>
@@ -1149,6 +1157,7 @@ const STATUS_CFG = {
   idle:         {label:'대기',      bg:'bg-gray-700/20',   border:'border-gray-600',   badge:'bg-gray-500',   text:'text-gray-400',   online:true},
   subquest:     {label:'서브퀘',   bg:'bg-lime-500/20',   border:'border-lime-700',   badge:'bg-lime-500',   text:'text-lime-400',   online:true},
   dungeon:      {label:'던전',    bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-500', text:'text-purple-400', online:true},
+  nightmare:    {label:'악몽',    bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
   awakening:    {label:'각성전',  bg:'bg-indigo-500/20', border:'border-indigo-700', badge:'bg-indigo-500', text:'text-indigo-400', online:true},
   awakening_wait:{label:'각성전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
@@ -1853,6 +1862,7 @@ async function openBugsModal(pc_id) {
   // href 대신 onclick으로 교체 (다운로드 후 모달 갱신)
   const dlBtn = document.getElementById('bug-download-link');
   dlBtn.onclick = (e) => { e.preventDefault(); downloadAndClearBugs(pc_id); };
+  document.getElementById('bug-clear-btn').onclick = () => clearBugsOf(pc_id);
   document.getElementById('bug-modal').classList.remove('hidden');
   const el = document.getElementById('bug-list');
   el.innerHTML = '<div class="text-gray-600 text-sm">로딩 중...</div>';
@@ -1903,6 +1913,25 @@ async function deleteBug(filename) {
   const res = await fetch(`/bugs/image/${encodeURIComponent(filename)}`, {method:'DELETE'});
   if (res.ok) { showToast('🗑 버그 삭제됨'); if (bugModalPc) openBugsModal(bugModalPc); }
   else showToast('삭제 실패');
+}
+
+// 버그스샷 일괄 삭제 (2026-07-27 사용자 요청 — 하나씩 지우기 번거로움)
+async function clearBugsOf(pc_id) {
+  if (!confirm(`${pc_id}의 버그 스크린샷을 전부 삭제할까요?`)) return;
+  const res = await fetch(`/bugs?pc_id=${encodeURIComponent(pc_id)}`, {method:'DELETE'});
+  if (!res.ok) { showToast('삭제 실패'); return; }
+  const d = await res.json();
+  showToast(`🧹 ${pc_id} 스샷 ${d.removed||0}장 삭제`);
+  if (bugModalPc) openBugsModal(bugModalPc);
+}
+
+async function clearAllBugs() {
+  if (!confirm('모든 PC의 버그 스크린샷을 전부 삭제할까요?')) return;
+  const res = await fetch('/bugs', {method:'DELETE'});
+  if (!res.ok) { showToast('삭제 실패'); return; }
+  const d = await res.json();
+  showToast(`🧹 스샷 ${d.removed||0}장 전부 삭제`);
+  if (bugModalPc) openBugsModal(bugModalPc);
 }
 
 // ─── 캐릭터 세부정보 모달 ────────────────────────────────────────────────────
@@ -2860,6 +2889,39 @@ async def serve_bug_image(filename: str, request: Request):
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/manual")
+async def serve_manual(request: Request):
+    """이용 매뉴얼 PDF (2026-07-27 사용자 요청 — 대시보드에서 바로 열기/내려받기).
+    로그인한 사용자만. 파일은 server/manual.pdf로 함께 배포된다."""
+    if not check_session(request):
+        return RedirectResponse("/login", status_code=302)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual.pdf")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="매뉴얼 파일 없음")
+    return FileResponse(path, media_type="application/pdf",
+                        filename="AION2_이용매뉴얼.pdf",
+                        headers={"Content-Disposition": 'inline; filename="AION2_manual.pdf"'})
+
+
+@app.delete("/bugs")
+async def delete_bugs_bulk(request: Request, pc_id: Optional[str] = None):
+    """버그스샷 일괄 삭제. pc_id 주면 그 PC만, 없으면 테넌트 전체(2026-07-27 사용자 요청)."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    bugs = _list_bug_files(tenant, pc_id)
+    bdir = tenant_bugs_dir(tenant)
+    removed = 0
+    for b in bugs:
+        try:
+            os.remove(os.path.join(bdir, os.path.basename(b["filename"])))
+            removed += 1
+        except Exception:
+            pass
+    await push_state(tenant)
+    return JSONResponse({"ok": True, "removed": removed})
 
 
 @app.delete("/bugs/image/{filename:path}")
