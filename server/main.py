@@ -93,9 +93,19 @@ def _init_tenants():
 _init_tenants()
 
 
+_PC_ID_SAFE = re.compile(r"[^A-Za-z0-9가-힣._\- ]")
+
+
+def clean_pc_id(pc_id: str) -> str:
+    """★pc_id 화이트리스트 소독(2026-07-27 보안감사).
+    pc_id는 화면 텍스트뿐 아니라 onclick="fn('${pc_id}')" 속성과 버그스샷 파일명에까지 들어간다.
+    따옴표·꺾쇠·경로문자가 통과하면 XSS와 경로 순회가 동시에 열린다 → 안전 문자만 허용."""
+    return _PC_ID_SAFE.sub("_", (pc_id or ""))[:64]
+
+
 def ns(tenant: str, pc_id: str) -> str:
-    """테넌트 네임스페이스 키. main은 접두사 없음(기존 데이터 호환). pc_id 내 구분자는 소독."""
-    pc_id = (pc_id or "").replace(NS_SEP, "_")
+    """테넌트 네임스페이스 키. main은 접두사 없음(기존 데이터 호환). pc_id는 화이트리스트 소독."""
+    pc_id = clean_pc_id(pc_id).replace(NS_SEP, "_")
     return pc_id if tenant == "main" else f"{tenant}{NS_SEP}{pc_id}"
 
 
@@ -520,27 +530,43 @@ _LOGIN_FAILS: dict = {}         # ip -> {"n": int, "since": float, "until": floa
 _LOGIN_GLOBAL = {"n": 0, "since": 0.0}
 
 
+def _ip_from_xff(xff: str, peer: str) -> str:
+    """★X-Forwarded-For 위조 방어(2026-07-27 보안감사 critical).
+    XFF는 'client, proxy1, proxy2…' 순서로 각 프록시가 '자기가 본 주소'를 뒤에 붙인다.
+    따라서 맨 앞 값은 클라이언트가 마음대로 적어 보낼 수 있다 — 그걸 신뢰하면
+      ① 매 요청 다른 IP를 적어 레이트리밋을 무한 우회하고
+      ② 남의 IP를 적어 그 사람을 잠가버리는 역공격(DoS)까지 된다.
+    신뢰할 수 있는 건 '우리 앞단 프록시가 붙인' 맨 뒤 값이므로 오른쪽부터 채택한다."""
+    parts = [p.strip() for p in (xff or "").split(",") if p.strip()]
+    if parts:
+        return parts[-1]
+    return peer or "unknown"
+
+
 def _client_ip(request: Request) -> str:
-    """프록시(Railway) 뒤 실제 클라이언트 IP"""
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """프록시(Railway) 뒤 실제 클라이언트 IP — 위조 불가한 최우측 항목 사용"""
+    peer = request.client.host if request.client else ""
+    return _ip_from_xff(request.headers.get("x-forwarded-for", ""), peer)
 
 
 def _login_locked_for(ip: str) -> float:
-    """남은 잠금 시간(초). 0이면 시도 허용."""
+    """남은 잠금 시간(초). 0이면 시도 허용. (전역 상한은 '잠금'이 아니라 '지연'으로만 쓴다)"""
     now = time.time()
     rec = _LOGIN_FAILS.get(ip)
     if rec and rec["until"] > now:
         return rec["until"] - now
-    # 전체 상한 — 분산 시도(IP를 바꿔가며)에도 속도를 떨어뜨린다
+    return 0.0
+
+
+def _global_overloaded() -> bool:
+    """★전역 실패 상한은 '차단'이 아니라 '지연'에만 쓴다(2026-07-27 보안감사).
+    차단으로 쓰면 공격자가 일부러 실패를 60회 쌓아 주인님까지 못 들어오게 만드는
+    값싼 서비스 거부 스위치가 된다. 분산 시도 속도만 떨어뜨리는 용도로 격하.★"""
+    now = time.time()
     g = _LOGIN_GLOBAL
     if now - g["since"] > LOGIN_WINDOW:
         g["n"], g["since"] = 0, now
-    if g["n"] >= GLOBAL_MAX_FAILS:
-        return LOGIN_LOCK_STEPS[0]
-    return 0.0
+    return g["n"] >= GLOBAL_MAX_FAILS
 
 
 def _login_failed(ip: str):
@@ -582,6 +608,8 @@ async def do_login(request: Request, response: Response):
     if wait > 0:
         raise HTTPException(status_code=429,
                             detail=f"로그인 시도가 너무 많습니다. {int(wait) + 1}초 후 다시 시도하세요.")
+    if _global_overloaded():
+        await asyncio.sleep(1.5)      # 분산 시도 감속 — 차단이 아니라 지연(정상 로그인은 통과)
     try:
         body = await request.json()
     except Exception:
@@ -1285,6 +1313,15 @@ let selectedPcs = new Set();
 let logModalPc = null;
 let menuPcId = null;
 
+// ★XSS 방어(2026-07-27 보안감사): 매크로가 보낸 값(PC이름/캐릭명/에러/맵/파일명)이
+// innerHTML로 그대로 들어가고 있었다. API키를 가진 자(유출키·렌탈 고객)가 악성 문자열을
+// 보고에 실어 보내면 대시보드를 여는 순간 실행되어 세션이 탈취된다(무클릭 저장형 XSS).
+function esc(v){ return String(v==null?'':v).replace(/[&<>"'`=\/]/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'}[c])); }
+function escAttr(v){ return esc(v).replace(/
+|
+/g,''); }
+
 const STATUS_CFG = {
   hunting:      {label:'사냥 중',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
   selling:      {label:'판매 중',   bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
@@ -1371,9 +1408,9 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
     const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:0" title="${name}${done?' ✓ '+time:isActive?' 진행 중':''}">
+      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+time:isActive?' 진행 중':''}">
       <span class="font-bold text-xs leading-none">${icon}</span>
-      <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap">${short}</span>
+      <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap">${esc(short)}</span>
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
   }).join('');
@@ -1393,7 +1430,7 @@ function buildCard(pc) {
   const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
   const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
-    `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${e}</div>`).join('');
+    `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="ml-1.5 px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -1402,7 +1439,7 @@ function buildCard(pc) {
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${pc.macro_version}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${pc._updater_state}</span>${pc._updater_version?`<span class="${uvcls}">v${pc._updater_version}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
@@ -1411,7 +1448,7 @@ function buildCard(pc) {
     : '';
   const isOnline = (STATUS_CFG[st]||STATUS_CFG.offline).online;
   const activeTag = (activeName && isOnline)
-    ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${activeName}</span>`
+    ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${esc(activeName)}</span>`
     : '';
   // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3 / 🏰보라=일일던전 티켓 소진
   const doneBadges =
@@ -1426,7 +1463,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-2 min-w-0">
         <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 select-none" style="font-size:14px;line-height:1" title="드래그로 순서 변경">⠿</span>
         <div class="min-w-0">
-          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${pc.pc_id||'?'}</span>${doneBadges}${bugBadge}${activeTag}</div>
+          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${esc(pc.pc_id||'?')}</span>${doneBadges}${bugBadge}${activeTag}</div>
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
@@ -1439,7 +1476,7 @@ function buildCard(pc) {
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
       <div class="whitespace-nowrap"><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
-      <div class="col-span-2"><span class="text-gray-400">맵</span> <span class="text-white font-medium">${pc.map_name||'–'}</span></div>
+      <div class="col-span-2"><span class="text-gray-400">맵</span> <span class="text-white font-medium">${esc(pc.map_name||'–')}</span></div>
       <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="text-gray-400">서버</span> <span class="text-white font-medium">${pc.server}</span></div>`:''}
       <div><span class="text-gray-400">최근</span> <span class="text-white font-medium">${relTime(pc.last_active)}</span></div>
@@ -2014,7 +2051,7 @@ async function openBugsModal(pc_id) {
   el.innerHTML = bugs.map(b => `
     <div class="bg-gray-800 rounded-lg p-3 border border-gray-700">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs text-gray-400 font-mono truncate mr-2">${b.filename}</span>
+        <span class="text-xs text-gray-400 font-mono truncate mr-2">${esc(b.filename)}</span>
         <div class="flex items-center gap-2 shrink-0">
           <span class="text-xs text-gray-600">${(b.size/1024).toFixed(1)}KB</span>
           <button onclick="deleteBug('${b.filename}')" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
@@ -2732,8 +2769,8 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     # ★HTTP와 동일한 상수시간 비교 + IP 실패 카운터 공유(2026-07-27): 여기만 딕셔너리 조회라
     #   무제한 키 추측 채널로 쓸 수 있었다.★
     api_key = websocket.query_params.get("key", "")
-    _wip = (websocket.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (websocket.client.host if websocket.client else "unknown"))
+    _wip = _ip_from_xff(websocket.headers.get("x-forwarded-for", ""),
+                        websocket.client.host if websocket.client else "")
     if _key_probe_blocked(_wip):
         await websocket.close(code=1008)
         return
@@ -2745,7 +2782,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         _key_probe_failed(_wip)
         await websocket.close(code=1008)
         return
-    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 에코 일관성(저장 키 소독과 동일)
+    pc_id = clean_pc_id(pc_id)   # 에코 일관성(저장 키 소독과 동일)
     nspc = ns(tenant, pc_id)
     await websocket.accept()
     macro_ws_connections[nspc] = websocket
@@ -2795,7 +2832,10 @@ async def websocket_endpoint(websocket: WebSocket):
     # session 쿠키로 인증 → 테넌트별 연결
     session_token = websocket.cookies.get("session")
     tenant = valid_session(session_token)
-    if not tenant:
+    # ★만료 테넌트 차단(2026-07-27 보안감사): HTTP는 check_session이 만료를 거르는데
+    #   여기만 valid_session(서명·유효기간만 확인)이라, 이용 기간이 끝난 지인이
+    #   WS로는 실시간 데이터를 계속 받아볼 수 있었다.★
+    if not tenant or tenant_expired(tenant):
         await websocket.close(code=1008)
         return
     await manager.connect(websocket, tenant)
@@ -2969,7 +3009,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
-    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 파일명 접두사도 저장 키 소독과 일관
+    pc_id = clean_pc_id(pc_id)   # 파일명 접두사도 저장 키 소독과 일관
     bdir = tenant_bugs_dir(tenant)
     os.makedirs(bdir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -2977,7 +3017,11 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     # 반드시 {pc_id}_{YYYYMMDD}_{HHMMSS}_{orig} 형태로 저장해야 배지/목록이 작동함
     filename = f"{pc_id}_{ts}_{orig}"
     dest = os.path.join(bdir, filename)
+    # ★크기 상한(2026-07-27 보안감사): 무제한이면 통짜로 메모리에 올려 OOM,
+    #   반복 업로드로 /data를 채워 DB까지 마비시킬 수 있다. 스샷은 1280x720 PNG라 8MB면 충분.★
     content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
     with open(dest, 'wb') as f:
         f.write(content)
     await push_state(tenant)
@@ -2989,6 +3033,15 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
     tenant = check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
+    # ★CSRF 방어(2026-07-27 보안감사): 이 GET은 '다운로드 후 서버 파일 삭제'라는 파괴적
+    #   부수효과가 있는데, 쿠키가 SameSite=Lax라 다른 사이트의 링크·이미지 태그로도 실행된다
+    #   (= 링크 한 번에 증거 스샷 전량 소실). 대시보드에서 온 요청만 허용한다.★
+    _ref = request.headers.get("referer", "") or request.headers.get("origin", "")
+    _host = request.headers.get("host", "")
+    if _host and _ref and _host not in _ref:
+        raise HTTPException(status_code=403, detail="cross-site request rejected")
+    if not _ref:      # 링크·이미지 태그 직접 호출(Referer 없음)도 거부
+        raise HTTPException(status_code=403, detail="direct request rejected")
     bugs = _list_bug_files(tenant, pc_id)
     if not bugs:
         raise HTTPException(status_code=404, detail="다운로드할 버그 이미지 없음")
@@ -3110,7 +3163,7 @@ async def receive_char_info(pc_id: str, request: Request):
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
-    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 브로드캐스트 에코도 저장 키 소독과 일관
+    pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
     except Exception:
@@ -3180,7 +3233,7 @@ async def save_nightmare_progress(pc_id: str, request: Request):
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
-    pc_id = (pc_id or "").replace(NS_SEP, "_")   # 브로드캐스트 에코도 저장 키 소독과 일관
+    pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
     except Exception:
