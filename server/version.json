@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.306",
+    "version": "1.1.307",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "1472ef18b8ea7a9c919ab578c44db4a0d51a742c34311225b1324e6455464770",
+    "sha256": "1bd58b3b99ffbad7baf8c69785aa0086ef8971653255ee76380416bbf73dbcb8",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -108,10 +108,13 @@
     "mode.png": "fb69263c7f2548f66e10ce06383555be1a10fc4268b8a0aae6e98eee774193c8",
     "muui_map_title.png": "6079b7d05e5f55e9e01c8e95b860980aab3b8370a489d55721081547a0cc3916",
     "new.png": "78a8f30bddf7ddd24ddb56adfb567983b89bff9e4b6e6b50a5cd130d5c8621a4",
+    "nightmare_boss_check.png": "17b71d5223750157e5ba00893f0afd16ef2e46f08747fd94d544a68a9c9ab56d",
     "nightmare_challenge.png": "c2469b54a015daf082f5b48d184088fc77c7fb97a65ef0995796f7c8807d4145",
     "nightmare_clear.png": "0a1b469db33fa0e7c3b83ed4fec07b8931e6f0dcfa65803e58ab2ff44f7d5ac9",
     "nightmare_exit.png": "000e974cd14e37db63bd534dcbc3a3b2d9cfb0f8927aa760e587c884d3e7e502",
     "nightmare_fail.png": "1d9a6d9aa5b514b59ab3d4cb1276473bc5d31384c1c6b1d41a34bce7d56107ae",
+    "nightmare_locked.png": "dc88c595420195caa64b356074a7a0a1d4d873d63d96e76a476332f34d428fc6",
+    "nightmare_stage_label.png": "0f11ef2e9d2ddb6a2912746167ccf131a2922cc93fdebfc0d8a4cbe8b0ac138d",
     "nightmare_title.png": "80232ae913c6e50ebe49af23adacb8820e2f013d9b4d989e6a74d1de28a7ee10",
     "none.png": "cf59268cb9d4f3c2186f632b8502b0e5ebdba9d908b14fc756fcbc623fea1cb8",
     "odium_btn.png": "be1a2c02d8a88cebb6def11099bdeeca18830e4359fc63f7df39cec603152d19",
@@ -202,12 +205,12 @@
     "sha256": "9274914450b22c8760a4cdacdb2e9c97a6471214743315881d8cdfc27bb0663b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260726194202",
-  "updated_at": "2026-07-27T03:42:47",
+  "images_version": "20260727070050",
+  "updated_at": "2026-07-27T07:00:50",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.306",
-    "sha256": "cdc1d6a462818aae9d18156c3435751f22fd80dec0215a352f007136fceb23fb",
+    "version": "1.1.307",
+    "sha256": "b9c5773aa2e0977d64c088ae2a32ca11c4fd8f933fecdb84669cd64a998285b3",
     "filename": "혼종_렌탈.exe"
   }
 }
