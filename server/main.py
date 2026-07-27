@@ -136,6 +136,15 @@ SCREENSHOTS_DIR    = os.getenv("SCREENSHOTS_DIR", "/data/screenshots")
 os.makedirs(BUGS_DIR, exist_ok=True)
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
+# ─── 음성 알림(TTS) 합성 설정 ────────────────────────────────────────────────
+# 브라우저 내장 음성이 기계음이라 서버에서 신경망 음성을 만들어 내려준다(/tts 참조).
+# 기본 톤은 낮고 느리게 — 사용자가 고른 값. 대시보드 ⚙ 슬라이더로 그때그때 덮어쓴다.
+TTS_DIR   = os.getenv("TTS_DIR", "/data/tts")
+TTS_VOICE = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")   # edge-tts 한국어 여성 신경망
+TTS_RATE  = os.getenv("TTS_RATE", "+25%")    # 빠르게 — 텀이 길면 답답하다는 사용자 지적
+TTS_PITCH = os.getenv("TTS_PITCH", "+18Hz")  # 귀엽되 콧소리 안 나는 선
+os.makedirs(TTS_DIR, exist_ok=True)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Session (stateless HMAC 서명 토큰 — 서버 재시작에도 유지됨, 인메모리 저장 X)
 #   토큰 형식: base64url(만료ts) "." base64url(HMAC-SHA256(secret, 만료ts))
@@ -429,6 +438,16 @@ async def push_state(tenant: str = "main"):
 async def push_log(tenant: str, pc_id: str, message: str, level: str = "info"):
     """pc_id는 원래 이름(네임스페이스 벗긴 것)으로 호출할 것."""
     await manager.broadcast({"type": "log", "pc_id": pc_id, "level": level, "message": message}, tenant)
+
+
+async def push_alert(tenant: str, pc_id: str, kind: str, message: str,
+                     speak: bool = True, say: str = ""):
+    """매크로가 올린 알림을 그 테넌트의 대시보드로 즉시 전달 (배너 + TTS 음성).
+    message=화면에 띄울 자세한 문장, say=소리내어 읽을 짧은 문구.
+    pc_id는 네임스페이스를 벗긴 원래 이름으로 호출할 것."""
+    await manager.broadcast({"type": "alert", "pc_id": pc_id, "kind": kind,
+                             "message": message, "speak": bool(speak),
+                             "say": say}, tenant)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1008,6 +1027,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <span class="brand-sub hidden md:inline">HONJONG COMMAND</span>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
+    <button id="tts-btn" onclick="toggleTts()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors whitespace-nowrap">🔇 음성 꺼짐</button>
+    <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="목소리 고르기">⚙</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
@@ -1304,6 +1325,21 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <!-- 토스트 -->
 <div id="toast" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 border border-gray-700 text-gray-200 text-xs font-semibold px-4 py-2 rounded-full shadow-xl z-50 transition-opacity duration-300"></div>
+<div id="alert-stack" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-auto"></div>
+<div id="voice-panel" class="hidden fixed top-14 right-4 z-50 w-72 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl p-4 text-xs text-gray-300">
+  <div class="flex items-center justify-between mb-3">
+    <b class="text-sm text-gray-100">🎙 목소리 설정</b>
+    <button onclick="toggleVoicePanel()" class="text-gray-500 hover:text-gray-200">✕</button>
+  </div>
+  <label class="block mb-1 text-gray-400">목소리 (⭐ = 가장 자연스러움)</label>
+  <select id="tts-voice" onchange="onVoiceChange()" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-3 text-gray-200"></select>
+  <label class="block mb-1 text-gray-400">속도 <span class="text-gray-600">느리게 ↔ 빠르게</span></label>
+  <input id="tts-rate" type="range" min="-20" max="55" step="5" oninput="onVoiceTune()" class="w-full mb-3">
+  <label class="block mb-1 text-gray-400">톤 <span class="text-gray-600">낮게 ↔ 높게</span></label>
+  <input id="tts-pitch" type="range" min="-30" max="30" step="2" oninput="onVoiceTune()" class="w-full mb-3">
+  <button onclick="previewVoice()" class="w-full py-1.5 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-emerald-50 font-semibold">▶ 미리듣기</button>
+  <p class="mt-3 text-[10px] leading-relaxed text-gray-500">기본은 <b>서버 사람 목소리</b>입니다. 서버가 음성을 못 만들면 브라우저 내장 음성으로 자동 전환되니 알림 자체는 끊기지 않습니다. 슬라이더를 내릴수록 낮고 느려집니다.</p>
+</div>
 
 <script>
 // ─── 상태 ────────────────────────────────────────────────────────────────────
@@ -1910,6 +1946,7 @@ function connectWS() {
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
+    else if(msg.type==='alert'){handleAlert(msg);}
   };
   ws.onclose=(e)=>{
     document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-red-500 transition-colors';
@@ -1992,6 +2029,209 @@ async function requestLogs() {
 }
 
 // ─── 토스트 ──────────────────────────────────────────────────────────────────
+// ─── 음성 알림 (TTS) ─────────────────────────────────────────────────────────
+// 브라우저 내장 speechSynthesis. 서버는 텍스트만 보내고 발화는 전부 여기서 한다.
+// ★자동재생 정책: 사용자 제스처 없이 speak()를 처음 부르면 크롬이 무시한다.
+//   그래서 반드시 '🔊 토글 클릭' 안에서 첫 발화를 태워 잠금을 푼다.★
+let ttsOn = localStorage.getItem('ttsOn')==='1';
+let _ttsVoice = null;                  // 폴백용 브라우저 음성
+let _koVoices = [];
+let _audio = null;                     // 현재 재생 중인 서버 음성
+const _alertSeen = new Map();          // "kind|pc" → 마지막 발화 시각 (중복 억제)
+
+// ratePct/pitchHz 는 서버(edge-tts) 단위. 브라우저 폴백에서는 배수로 환산해 쓴다.
+// 기본값은 낮고 느리게 — 윈도우 기본음성 특유의 기계적인 느낌을 피하는 방향.
+const ttsCfg = Object.assign(
+  { engine: 'server', name: '', ratePct: 25, pitchHz: 18 },
+  JSON.parse(localStorage.getItem('ttsCfg') || '{}')
+);
+function saveTtsCfg(){ localStorage.setItem('ttsCfg', JSON.stringify(ttsCfg)); }
+function _sgn(n){ return (n >= 0 ? '+' : '') + n; }
+
+// 브라우저 음성 품질 점수(폴백 전용). 같은 한국어라도 엔진 차이가 크다.
+function voiceScore(v){
+  const n = (v.name || ''), low = n.toLowerCase();
+  let s = 0;
+  if(/^ko/i.test(v.lang || '')) s += 100;
+  if(low.indexOf('natural') >= 0 || low.indexOf('neural') >= 0) s += 80;
+  if(low.indexOf('google') >= 0) s += 50;
+  if(n.indexOf('SunHi') >= 0) s += 30;
+  if(n.indexOf('InJoon') >= 0) s -= 30;         // 남성
+  if(n.indexOf('Heami') >= 0) s -= 10;          // 윈도우 로컬, 기계적
+  if(!v.localService) s += 10;
+  return s;
+}
+
+function refreshVoices(){
+  if(!window.speechSynthesis) return;
+  const all = speechSynthesis.getVoices() || [];
+  _koVoices = all.filter(v => /^ko/i.test(v.lang || '')).sort((a,b) => voiceScore(b) - voiceScore(a));
+  const pool = _koVoices.length ? _koVoices : all;
+  _ttsVoice = pool.find(v => v.name === ttsCfg.name) || pool[0] || null;
+  renderVoiceOptions();
+}
+if(window.speechSynthesis){
+  refreshVoices();
+  speechSynthesis.onvoiceschanged = refreshVoices;   // 크롬은 음성 목록을 비동기로 채운다
+  // 크롬이 장시간 유휴 후 큐를 멈춰 세우는 버그 회피
+  setInterval(()=>{ try{ if(speechSynthesis.paused) speechSynthesis.resume(); }catch(e){} }, 5000);
+}
+
+// ★1순위는 서버 신경망 음성(사람 목소리). 서버가 못 만들면 브라우저 내장 음성으로
+//   자동 폴백한다 — 목소리는 아쉬워도 알림 자체가 끊기면 안 되기 때문.★
+function speak(text, force){
+  if((!ttsOn && !force) || !text) return;
+  if(ttsCfg.engine !== 'server'){ speakLocal(text); return; }
+  try{
+    if(_audio){ try{ _audio.pause(); }catch(e){} }
+    const url = '/tts?text=' + encodeURIComponent(text)
+              + '&rate=' + encodeURIComponent(_sgn(ttsCfg.ratePct) + '%')
+              + '&pitch=' + encodeURIComponent(_sgn(ttsCfg.pitchHz) + 'Hz');
+    const a = new Audio(url);
+    _audio = a;
+    a.onerror = () => speakLocal(text);
+    a.play().catch(() => speakLocal(text));
+  }catch(e){ speakLocal(text); }
+}
+
+function speakLocal(text){
+  if(!window.speechSynthesis || !text) return;
+  try{
+    const u = new SpeechSynthesisUtterance(text);
+    if(_ttsVoice) u.voice = _ttsVoice;
+    u.lang = 'ko-KR';
+    u.rate  = Math.min(2, Math.max(0.5, 1 + ttsCfg.ratePct / 100));
+    u.pitch = Math.min(2, Math.max(0.1, 1 + ttsCfg.pitchHz / 50));
+    u.volume = 1.0;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+
+// ─── 목소리 고르기 패널 ──────────────────────────────────────────────────────
+function toggleVoicePanel(){
+  const p = document.getElementById('voice-panel');
+  if(!p) return;
+  p.classList.toggle('hidden');
+  if(!p.classList.contains('hidden')){ refreshVoices(); }
+}
+
+function renderVoiceOptions(){
+  const sel = document.getElementById('tts-voice');
+  if(!sel) return;
+  let html = '<option value="server"' + (ttsCfg.engine === 'server' ? ' selected' : '') + '>'
+           + '⭐ 사람 목소리 (서버 · SunHi)</option>';
+  const list = _koVoices.length ? _koVoices : (window.speechSynthesis ? speechSynthesis.getVoices() : []);
+  html += list.map(v =>
+    '<option value="' + escAttr(v.name) + '"'
+    + (ttsCfg.engine !== 'server' && v.name === ttsCfg.name ? ' selected' : '') + '>'
+    + esc(v.name) + ' (브라우저)</option>').join('');
+  sel.innerHTML = html;
+  const r = document.getElementById('tts-rate'), p = document.getElementById('tts-pitch');
+  if(r) r.value = ttsCfg.ratePct;
+  if(p) p.value = ttsCfg.pitchHz;
+}
+
+function onVoiceChange(){
+  const sel = document.getElementById('tts-voice');
+  if(!sel) return;
+  if(sel.value === 'server'){ ttsCfg.engine = 'server'; }
+  else { ttsCfg.engine = 'browser'; ttsCfg.name = sel.value; }
+  saveTtsCfg(); refreshVoices();
+  speak('안녕하세요, 이 목소리로 알려드릴게요', true);
+}
+function onVoiceTune(){
+  const r = document.getElementById('tts-rate'), p = document.getElementById('tts-pitch');
+  if(r) ttsCfg.ratePct = parseInt(r.value, 10);
+  if(p) ttsCfg.pitchHz = parseInt(p.value, 10);
+  saveTtsCfg();
+}
+function previewVoice(){
+  speak('칠번, 캡챠! 캡챠!', true);
+}
+
+// "PC-07" → "칠번". 그냥 넘기면 TTS가 "피 씨 공 칠"처럼 읽고,
+// 숫자로 넘겨도 엔진에 따라 "칠"/"일곱"이 갈려서 한글로 못박는다.
+const _SINO = ['','일','이','삼','사','오','육','칠','팔','구'];
+function koNum(n){
+  if(n < 10) return _SINO[n];
+  if(n < 20) return '십' + (n % 10 ? _SINO[n % 10] : '');
+  return _SINO[Math.floor(n / 10)] + '십' + (n % 10 ? _SINO[n % 10] : '');
+}
+function spokenPcName(pc){
+  const m = /^PC-?0*(\d+)$/i.exec(pc || '');
+  if(!m) return pc || '';
+  const n = parseInt(m[1], 10);
+  return (n > 0 && n < 100 ? koNum(n) : m[1]) + '번';
+}
+
+function renderTtsBtn(){
+  const b = document.getElementById('tts-btn');
+  if(!b) return;
+  b.textContent = ttsOn ? '🔊 음성 켜짐' : '🔇 음성 꺼짐';
+  b.className = 'px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap '
+    + (ttsOn ? 'bg-emerald-700/80 hover:bg-emerald-600 text-emerald-50'
+             : 'bg-gray-700/70 hover:bg-gray-600 text-gray-300');
+  b.title = ttsOn ? '알림이 오면 소리내어 읽습니다 (끄려면 클릭)'
+                  : '켜두면 캡차 실패 같은 알림을 음성으로 읽어줍니다';
+}
+
+// ★첫 재생 지연 대비: 서버가 처음 만드는 문구는 3초 넘게 걸린다(신경망 합성).
+//   알림이 3초 늦게 울리면 의미가 반감되므로, 음성을 켜는 순간 각 PC의 알림 문구를
+//   미리 한 번씩 요청해 서버·브라우저 캐시에 올려둔다. 소리는 나지 않는다.★
+let _prewarmed = false;
+async function prewarmTts(){
+  if(_prewarmed || ttsCfg.engine !== 'server') return;
+  _prewarmed = true;
+  const pcs = Object.keys(state || {}).slice(0, 24);
+  for(const pc of pcs){
+    const say = spokenPcName(pc) + ', 캡챠! 캡챠!';
+    const url = '/tts?text=' + encodeURIComponent(say)
+              + '&rate=' + encodeURIComponent(_sgn(ttsCfg.ratePct) + '%')
+              + '&pitch=' + encodeURIComponent(_sgn(ttsCfg.pitchHz) + 'Hz');
+    try{ await fetch(url, {cache:'force-cache'}); }catch(e){}
+    await new Promise(s => setTimeout(s, 150));   // 합성 서버 과부하 방지
+  }
+}
+
+function toggleTts(){
+  ttsOn = !ttsOn;
+  localStorage.setItem('ttsOn', ttsOn ? '1' : '0');
+  renderTtsBtn();
+  if(ttsOn){ refreshVoices(); speak('음성 알림을 켰습니다'); prewarmTts(); }
+  else { try{ speechSynthesis.cancel(); }catch(e){} showToast('🔇 음성 알림 꺼짐'); }
+}
+
+function handleAlert(msg){
+  const pc = msg.pc_id || '';
+  const key = (msg.kind || '') + '|' + pc;
+  const now = Date.now();
+  if(now - (_alertSeen.get(key) || 0) < 60000) return;   // 같은 알림 1분 내 재발화 억제
+  _alertSeen.set(key, now);
+  showAlertBanner(pc, msg.message || '');
+  // ★읽는 문구(say)와 화면 문구(message)를 분리한다 — 화면은 자세히, 귀에는 짧게.
+  //   긴 문장을 그대로 읽으면 다 듣기 전에 놓친다(사용자: "말이 길면 별로야").★
+  //   ★쉼표로 잇고 통짜로 합성한다. '|'로 쪼개 이어붙이면 조각마다 앞뒤 무음이 붙어
+  //     단어 사이 텀이 길어진다(사용자 지적). 억양은 속도·느낌표로 만든다.★
+  if(msg.speak !== false) speak(spokenPcName(pc) + ', ' + (msg.say || msg.message || ''));
+}
+
+function showAlertBanner(pc, message){
+  const wrap = document.getElementById('alert-stack');
+  if(!wrap) return;
+  const t = new Date().toTimeString().slice(0,8);
+  const el = document.createElement('div');
+  el.className = 'flex items-start gap-2 bg-rose-900/90 border border-rose-500/60 text-rose-50 '
+               + 'text-xs px-3 py-2 rounded-lg shadow-xl cursor-pointer max-w-md';
+  // ★esc() 필수 — 매크로가 보낸 문자열이다 (저장형 XSS 전례)★
+  el.innerHTML = '<span class="text-base leading-none">🔔</span>'
+    + '<span class="flex-1"><b>' + esc(pc) + '</b> · ' + esc(message)
+    + '<span class="block text-[10px] text-rose-200/70 mt-0.5">' + t + ' · 클릭하면 닫힘</span></span>';
+  el.onclick = () => el.remove();
+  wrap.prepend(el);
+  while(wrap.children.length > 5) wrap.lastChild.remove();
+  setTimeout(()=>el.remove(), 120000);
+}
+
 let _toastTimer;
 function showToast(msg) {
   const t=document.getElementById('toast');
@@ -2873,6 +3113,30 @@ async def receive_report(pc_id: str, request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/alert/{pc_id}")
+async def receive_alert(pc_id: str, request: Request):
+    """매크로 → 대시보드 실시간 알림. 캡차 3회 실패처럼 '사람이 지금 봐야 하는' 이벤트용.
+    본문이 브라우저 DOM과 TTS로 그대로 흘러가므로 길이·문자 제한을 서버에서 건다."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    kind = re.sub(r"[^a-z0-9_]", "", str(data.get("kind") or "info").lower())[:32] or "info"
+    message = str(data.get("message") or "").strip()[:200]
+    if not message:
+        raise HTTPException(status_code=400, detail="message 없음")
+    # say = 소리내어 읽을 짧은 문구. 없으면 message를 읽는다.
+    say = str(data.get("say") or "").strip()[:60]
+    speak = bool(data.get("speak", True))
+    nspc = ns(tenant, pc_id)
+    await insert_log(nspc, "warn", f"[알림] {message}")
+    await push_alert(tenant, clean_pc_id(pc_id), kind, message, speak, say)
+    return JSONResponse({"ok": True})
+
+
 @app.get("/command/{pc_id}")
 async def poll_command(pc_id: str, request: Request):
     tenant = check_api_key(request)
@@ -3116,6 +3380,69 @@ async def serve_manual(request: Request):
                             "Pragma": "no-cache",
                             "Expires": "0",
                         })
+
+
+# ★억양 패턴: 한 문장을 한 톤으로 통째로 읽으면 평문 낭독처럼 들린다(사용자 지적).
+#   문구를 '|'로 끊어 보내면 조각마다 아래 만큼 속도·높이를 어긋나게 줘서 억양을 만든다.
+#   값은 사용자가 슬라이더로 정한 기준값에 더해지는 '상대 편차'다.★
+TTS_PATTERN = [(11, 15), (-19, 5), (6, 20)]   # (rate %p, pitch Hz) — 조각 순서대로 순환
+
+
+async def _synth_segments(text: str, rate: str, pitch: str) -> bytes:
+    """'|'로 끊긴 조각들을 각각 다른 톤으로 합성해 이어붙인다.
+    MP3는 프레임 단위라 바이트 이어붙이기만으로 브라우저가 정상 재생한다."""
+    import edge_tts
+    base_r = int(rate.rstrip("%"))
+    base_p = int(pitch[:-2])
+    parts = [p.strip() for p in text.split("|") if p.strip()] or [text]
+    out = b""
+    for i, part in enumerate(parts):
+        dr, dp = TTS_PATTERN[i % len(TTS_PATTERN)] if len(parts) > 1 else (0, 0)
+        r = max(-50, min(50, base_r + dr))
+        p = max(-50, min(50, base_p + dp))
+        comm = edge_tts.Communicate(part, TTS_VOICE,
+                                    rate=f"{r:+d}%", pitch=f"{p:+d}Hz")
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                out += chunk["data"]
+    if not out:
+        raise RuntimeError("빈 오디오")
+    return out
+
+
+@app.get("/tts")
+async def synth_tts(request: Request, text: str = "", rate: str = "", pitch: str = ""):
+    """알림 문구를 마이크로소프트 신경망 음성(SunHi)으로 합성해 MP3로 돌려준다.
+
+    ★왜 서버에서 만드나: 브라우저 내장 speechSynthesis가 쓰는 윈도우 기본 한국어
+      음성(Heami)은 대놓고 기계음이다. 신경망 음성은 브라우저에 없어서 서버가
+      만들어 내려줄 수밖에 없다(2026-07-27 사용자: "너무 기계같잖아").
+      합성 실패 시 대시보드가 알아서 브라우저 음성으로 폴백하므로 알림은 안 끊긴다.
+    같은 (문구·톤) 조합은 디스크에 캐시 → 두 번째부터 즉시 재생."""
+    if not check_session(request):
+        raise HTTPException(status_code=403)
+    text = (text or "").strip()[:200]
+    if not text:
+        raise HTTPException(status_code=400, detail="text 없음")
+    # ★edge-tts에 임의 문자열이 흘러가지 않게 형식을 강제한다(값 자체가 SSML로 들어감)★
+    if not re.fullmatch(r"[+-]\d{1,2}%", rate or ""):
+        rate = TTS_RATE
+    if not re.fullmatch(r"[+-]\d{1,2}Hz", pitch or ""):
+        pitch = TTS_PITCH
+    key = hashlib.sha256(f"{TTS_VOICE}|{rate}|{pitch}|{text}".encode("utf-8")).hexdigest()[:32]
+    path = os.path.join(TTS_DIR, key + ".mp3")
+    if not os.path.exists(path):
+        try:
+            audio = await _synth_segments(text, rate, pitch)
+            tmp = path + ".part"
+            with open(tmp, "wb") as f:
+                f.write(audio)
+            os.replace(tmp, path)          # 부분 파일이 캐시로 굳는 것 방지
+        except Exception as e:
+            print(f"[TTS] 합성 실패: {e}")
+            raise HTTPException(status_code=503, detail="tts 합성 실패")
+    return FileResponse(path, media_type="audio/mpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.delete("/bugs")
