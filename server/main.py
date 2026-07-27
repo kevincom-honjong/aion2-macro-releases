@@ -948,7 +948,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <span class="brand-sub hidden md:inline">HONJONG COMMAND</span>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
-    <a href="/manual" target="_blank" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기">📘 매뉴얼</a>
+    <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
@@ -3008,9 +3008,16 @@ async def serve_manual(request: Request):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manual.pdf")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="매뉴얼 파일 없음")
+    # ★no-store 필수: 매뉴얼을 갱신해도 브라우저가 이전 PDF를 계속 보여준다(실제 발생).
+    #   파일명에도 갱신시각을 붙여 캐시 키가 달라지게 한다.★
+    stamp = time.strftime("%Y%m%d", time.localtime(os.path.getmtime(path)))
     return FileResponse(path, media_type="application/pdf",
-                        filename="AION2_이용매뉴얼.pdf",
-                        headers={"Content-Disposition": 'inline; filename="AION2_manual.pdf"'})
+                        headers={
+                            "Content-Disposition": f'inline; filename="AION2_manual_{stamp}.pdf"',
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                        })
 
 
 @app.delete("/bugs")
