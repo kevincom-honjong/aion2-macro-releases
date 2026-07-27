@@ -1134,7 +1134,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <span class="w-2 h-2 rounded-full bg-green-500 pulse inline-block"></span>
       온라인 <span id="online-count" class="text-gray-600 normal-case">(0)</span>
     </h2>
-    <div id="grid-online" class="gap-3" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">
+    <div id="grid-online" class="gap-3" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr))">
       <div class="text-gray-600 text-sm col-span-full text-center py-10">대기 중... (매크로 연결 없음)</div>
     </div>
   </section>
@@ -1145,7 +1145,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <span class="w-2 h-2 rounded-full bg-gray-600 inline-block"></span>
       오프라인 <span id="offline-count" class="text-gray-600 normal-case">(0)</span>
     </h2>
-    <div id="grid-offline" class="gap-3" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr))"></div>
+    <div id="grid-offline" class="gap-3" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr))"></div>
   </section>
 
   <!-- 전체 캐릭터 현황 테이블 -->
@@ -1497,7 +1497,14 @@ function buildCard(pc) {
       <div class="flex items-center gap-2 min-w-0">
         <span class="drag-handle shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 select-none" style="font-size:14px;line-height:1" title="드래그로 순서 변경">⠿</span>
         <div class="min-w-0">
-          <div class="font-bold text-base flex items-center gap-0 min-w-0 flex-wrap"><span class="truncate">${esc(pc.pc_id||'?')}</span>${doneBadges}${bugBadge}${activeTag}</div>
+          <!-- ★뱃지는 PC명과 같은 줄에 고정(shrink-0). 예전엔 flex-wrap 한 줄에
+               캐릭터명 태그까지 같이 넣어서, 정보수집으로 캐릭명이 붙는 순간
+               🏹⚔🏰 뱃지가 아래로 밀려났다(사용자 지적). 캐릭명은 아랫줄로 분리.★ -->
+          <div class="font-bold text-base flex items-center gap-0 min-w-0">
+            <span class="truncate">${esc(pc.pc_id||'?')}</span>
+            <span class="shrink-0 flex items-center">${doneBadges}${bugBadge}</span>
+          </div>
+          ${activeTag?`<div class="mt-0.5 truncate">${activeTag}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
