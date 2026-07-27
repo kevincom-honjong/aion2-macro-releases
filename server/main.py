@@ -28,6 +28,7 @@ from database import (
     upsert_char_info, get_char_info, get_all_char_info,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
+    tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +45,8 @@ SESSION_TTL        = timedelta(days=7)
 #   - "main" = 기존 DASHBOARD_PASSWORD/API_KEY, 접두사 없이 저장 → 기존 함대·데이터 완전 호환.
 # 테넌트 추가: Railway env TENANTS_JSON = {"friend1": {"password": "지인비번", "api_key": "지인매크로키"}}
 def _load_tenants() -> dict:
-    t = {"main": {"password": DASHBOARD_PASSWORD, "api_key": API_KEY, "expires": ""}}
+    t = {"main": {"password": DASHBOARD_PASSWORD, "api_key": API_KEY, "expires": "",
+                  "chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip()}}
     try:
         extra = json.loads(os.getenv("TENANTS_JSON", "") or "{}")
         for name, v in extra.items():
@@ -54,7 +56,10 @@ def _load_tenants() -> dict:
             t[name] = {"password": str(v.get("password", "")),
                        "api_key": str(v.get("api_key", "")),
                        # 기간제(2026-07-26): "expires": "2026-08-31" (KST 그날 23:59까지 유효, 빈값=무기한)
-                       "expires": str(v.get("expires", ""))}
+                       "expires": str(v.get("expires", "")),
+                       # 텔레그램 단일봇 중계(2026-07-28): 지인마다 봇을 새로 파지 않고
+                       # 봇 1개 + 각자의 chat_id로 분리한다. 빈값이면 그 테넌트는 텔레그램 미사용.
+                       "chat_id": str(v.get("chat_id", "")).strip()}
     except Exception as e:
         print(f"[TENANTS] TENANTS_JSON 파싱 실패(무시): {e}")
     return t
@@ -77,17 +82,24 @@ NS_SEP = "::"
 TENANTS: dict = {}
 PW_TO_TENANT: dict = {}
 KEY_TO_TENANT: dict = {}
+CHAT_TO_TENANT: dict = {}
 
 
 def _init_tenants():
-    global TENANTS, PW_TO_TENANT, KEY_TO_TENANT
+    global TENANTS, PW_TO_TENANT, KEY_TO_TENANT, CHAT_TO_TENANT
     TENANTS = _load_tenants()
-    PW_TO_TENANT, KEY_TO_TENANT = {}, {}
+    PW_TO_TENANT, KEY_TO_TENANT, CHAT_TO_TENANT = {}, {}, {}
     for name, v in TENANTS.items():
         if v.get("password") and v["password"] not in PW_TO_TENANT:
             PW_TO_TENANT[v["password"]] = name
         if v.get("api_key") and v["api_key"] not in KEY_TO_TENANT:
             KEY_TO_TENANT[v["api_key"]] = name
+        if v.get("chat_id") and v["chat_id"] not in CHAT_TO_TENANT:
+            CHAT_TO_TENANT[v["chat_id"]] = name
+
+
+def tenant_chat_id(tenant: str) -> str:
+    return (TENANTS.get(tenant) or {}).get("chat_id") or ""
 
 
 _init_tenants()
@@ -144,6 +156,21 @@ TTS_VOICE = os.getenv("TTS_VOICE", "ko-KR-SunHiNeural")   # edge-tts 한국어 �
 TTS_RATE  = os.getenv("TTS_RATE", "+25%")    # 빠르게 — 텀이 길면 답답하다는 사용자 지적
 TTS_PITCH = os.getenv("TTS_PITCH", "+18Hz")  # 귀엽되 콧소리 안 나는 선
 os.makedirs(TTS_DIR, exist_ok=True)
+
+# ─── 텔레그램 단일 봇 중계(2026-07-28) ──────────────────────────────────────
+# 왜: BotFather는 계정당 봇 20개 제한인데 PC마다 봇을 팠다. 근본 원인은 getUpdates가
+#     '먼저 가져간 쪽만' 메시지를 받는 배타 소비라, 19대가 한 봇을 폴링하면 PC-03이
+#     요청한 코드를 PC-11이 낚아채기 때문. → 서버 한 곳만 폴링하고, 받은 코드를
+#     이미 있는 명령 큐(captcha_code)로 해당 PC에 꽂아준다. 봇은 영원히 1개면 된다.
+# ★토큰은 Railway 환경변수로만 둔다(코드·저장소 금지 — 2026-07-27 보안감사).★
+TELEGRAM_BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TG_REPLY_WINDOW      = int(os.getenv("TELEGRAM_REPLY_WINDOW", "1800"))  # 답장 없이 코드만 왔을 때 추론 유효시간(초)
+TG_CODE_RE           = re.compile(r"^[A-Za-z0-9]{3,16}$")
+TG_API               = "https://api.telegram.org/bot"
+# 폴러 리스: 인스턴스가 둘 이상 떠도 한 놈만 getUpdates를 잡게(중복 소비 시 메시지 유실)
+TG_LEASE_KEY         = "tg_poller_lease"
+TG_LEASE_TTL         = 90     # 초 — 소유자가 이 시간 갱신 없으면 다른 인스턴스가 인수
+TG_OFFSET_KEY        = "tg_offset"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session (stateless HMAC 서명 토큰 — 서버 재시작에도 유지됨, 인메모리 저장 X)
@@ -303,12 +330,203 @@ async def send_command_to_macro(pc_id: str, command: str, args: dict, cmd_id: in
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 텔레그램 단일 봇 중계 — 서버가 유일한 폴러
+#
+#   ① 매크로가 POST /telegram/photo/{pc} (캡차 스샷, expect_reply=1)
+#   ② 서버가 sendPhoto → 돌아온 message_id를 telegram_map에 (message_id → 테넌트::PC) 저장
+#   ③ 사용자가 그 메시지에 '답장'으로 코드 입력
+#   ④ 서버가 reply_to_message.message_id로 PC를 특정 → 명령 큐에 captcha_code 투입
+#   ⑤ 매크로가 기존 WS/폴링으로 수신 → recovery.apply_captcha_code()
+#
+#   ★보내는 쪽까지 서버가 맡아야 ②의 매핑이 성립한다. 매크로가 직접 보내면
+#     서버는 message_id를 모르고, 답장은 어느 PC 것인지 영원히 알 수 없다.★
+# ─────────────────────────────────────────────────────────────────────────────
+def tg_enabled() -> bool:
+    return bool(TELEGRAM_BOT_TOKEN)
+
+
+async def _tg_call(method: str, data: dict | None = None,
+                   files: dict | None = None, timeout: float = 20.0) -> dict | None:
+    """Bot API 호출. 실패는 None (알림 실패로 본 기능이 막히면 안 된다)."""
+    if not tg_enabled():
+        return None
+    import httpx
+    url = f"{TG_API}{TELEGRAM_BOT_TOKEN}/{method}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            r = await cli.post(url, data=data or {}, files=files)
+        if r.status_code != 200:
+            print(f"[TG] {method} HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        js = r.json()
+        if not js.get("ok"):
+            print(f"[TG] {method} not ok: {str(js)[:200]}")
+            return None
+        return js.get("result")
+    except Exception as e:
+        print(f"[TG] {method} 예외: {e.__class__.__name__}: {e}")
+        return None
+
+
+async def tg_send_text(chat_id: str, text: str) -> int | None:
+    res = await _tg_call("sendMessage", {"chat_id": chat_id, "text": text[:3500]})
+    return (res or {}).get("message_id")
+
+
+async def tg_send_photo(chat_id: str, caption: str, photo: bytes, filename: str = "shot.png") -> int | None:
+    res = await _tg_call("sendPhoto", {"chat_id": chat_id, "caption": caption[:900]},
+                         files={"photo": (filename, photo, "image/png")}, timeout=40.0)
+    return (res or {}).get("message_id")
+
+
+async def _tg_route_code(nspc: str, code: str) -> bool:
+    """명령 큐에 captcha_code 투입 + WS 연결돼 있으면 즉시 전달."""
+    tenant = ns_of(nspc)
+    cmd_id = await insert_command(nspc, "captcha_code", {"code": code})
+    await send_command_to_macro(nspc, "captcha_code", {"code": code}, cmd_id)
+    try:
+        await _push_cmd_history(tenant)
+    except Exception:
+        pass
+    return True
+
+
+async def _tg_handle_update(u: dict) -> None:
+    msg = u.get("message") or u.get("edited_message") or {}
+    chat_id = str(((msg.get("chat") or {}).get("id")) or "")
+    text = (msg.get("text") or "").strip()
+    if not chat_id or not text:
+        return
+    # ★모르는 채팅은 통째로 무시 — 봇 주소만 알면 누구나 코드를 꽂을 수 있게 되면 안 된다.
+    #   등록 경로: main은 env TELEGRAM_CHAT_ID, 지인은 TENANTS_JSON의 chat_id.★
+    tenant = CHAT_TO_TENANT.get(chat_id)
+    if not tenant:
+        print(f"[TG] 미등록 chat_id 무시: {chat_id}")
+        return
+    if tenant_expired(tenant):
+        return
+
+    if text.startswith("/"):
+        if text.split("@")[0] in ("/start", "/help"):
+            await tg_send_text(chat_id,
+                               "거탐(캡차) 코드 입력용 봇입니다.\n"
+                               "캡차 사진이 올라오면 그 사진에 '답장'으로 코드만 보내주세요.\n"
+                               "대기 중인 PC가 하나뿐이면 답장 없이 코드만 보내도 됩니다.")
+        return
+
+    # ① 답장이면 그 메시지의 주인 PC로
+    target = None
+    reply_id = ((msg.get("reply_to_message") or {}).get("message_id"))
+    if reply_id:
+        row = await tg_map_get(int(reply_id))
+        # ★테넌트 교차 차단: 남의 PC 메시지 id를 알아내 답장해도 라우팅되면 안 된다.★
+        if row and ns_of(row["pc_id"]) == tenant:
+            target = row["pc_id"]
+
+    code_ok = bool(TG_CODE_RE.match(text))
+    pending = await tg_map_recent(chat_id, TG_REPLY_WINDOW)
+
+    # ② 답장이 아니어도 대기 중인 'PC'가 하나뿐이면 그리로 (1대만 쓰는 지인용 편의)
+    #    ★행 수가 아니라 PC 수로 센다 — 오답 재전송 때 같은 PC의 사진이 여러 장 쌓이는데,
+    #      행 수로 세면 그 흔한 경우에 추론이 죽어버린다.★
+    waiting_pcs = {p["pc_id"] for p in pending}
+    if target is None and code_ok and len(waiting_pcs) == 1:
+        target = next(iter(waiting_pcs))
+
+    if target is None:
+        if not pending:
+            return          # 대기 중인 요청이 없으면 잡담으로 보고 조용히 넘긴다
+        names = ", ".join(sorted({split_ns(p)[1] for p in waiting_pcs}))
+        await tg_send_text(chat_id, f"어느 PC인지 알 수 없습니다. 캡차 사진에 '답장'으로 보내주세요.\n대기 중: {names}")
+        return
+    if not code_ok:
+        await tg_send_text(chat_id, "코드는 영문/숫자 3~16자만 됩니다. 다시 보내주세요.")
+        return
+
+    pc_name = split_ns(target)[1]
+    await _tg_route_code(target, text)
+    await tg_map_delete_pc(target)      # 처리했으니 후보에서 제거 (다음 코드가 오라우팅되지 않게)
+    await tg_send_text(chat_id, f"{pc_name} → 코드 '{text}' 전달했습니다")
+    print(f"[TG] 코드 라우팅: {target} ← {text}")
+
+
+async def _tg_lease_ok() -> bool:
+    """폴러 단독 소유권. Railway가 인스턴스를 둘 띄워도 한 놈만 getUpdates를 잡는다
+    (동시에 잡으면 텔레그램이 한쪽에만 주므로 메시지가 랜덤하게 사라진다)."""
+    now = time.time()
+    raw = await get_setting(TG_LEASE_KEY) or ""
+    owner, _, ts = raw.partition(":")
+    try:
+        age = now - float(ts or 0)
+    except ValueError:
+        age = 1e9
+    if owner and owner != SERVER_BOOT_ID and age < TG_LEASE_TTL:
+        return False
+    await set_setting(TG_LEASE_KEY, f"{SERVER_BOOT_ID}:{now:.0f}")
+    return True
+
+
+async def _tg_poller() -> None:
+    if not tg_enabled():
+        print("[TG] TELEGRAM_BOT_TOKEN 미설정 → 중계 비활성")
+        return
+    me = await _tg_call("getMe", timeout=15.0)
+    print(f"[TG] 중계 시작 — bot=@{(me or {}).get('username', '?')} "
+          f"chats={list(CHAT_TO_TENANT.keys())}")
+    offset: int | None = None
+    try:
+        saved = await get_setting(TG_OFFSET_KEY)
+        offset = int(saved) if saved else None
+    except Exception:
+        offset = None
+    while True:
+        try:
+            if not await _tg_lease_ok():
+                await asyncio.sleep(30)
+                continue
+            if offset is None:
+                # 첫 기동: 밀려 있던 옛 메시지를 재생하지 않도록 커서만 끝으로 옮긴다
+                res = await _tg_call("getUpdates", {"offset": -1, "timeout": 0}, timeout=15.0) or []
+                offset = (res[-1]["update_id"] + 1) if res else 0
+                await set_setting(TG_OFFSET_KEY, str(offset))
+                continue
+            res = await _tg_call("getUpdates",
+                                 {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'},
+                                 timeout=45.0)
+            if res is None:
+                await asyncio.sleep(5)
+                continue
+            for u in res:
+                offset = max(offset, int(u.get("update_id", 0)) + 1)
+                try:
+                    await _tg_handle_update(u)
+                except Exception as e:
+                    print(f"[TG] update 처리 예외: {e.__class__.__name__}: {e}")
+            if res:
+                await set_setting(TG_OFFSET_KEY, str(offset))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[TG] 폴러 예외: {e.__class__.__name__}: {e}")
+            await asyncio.sleep(10)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
+    try:
+        yield
+    finally:
+        if tg_task:
+            tg_task.cancel()
+            try:
+                await tg_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
@@ -3143,6 +3361,67 @@ async def receive_alert(pc_id: str, request: Request):
     await insert_log(nspc, "warn", f"[알림] {message}")
     await push_alert(tenant, clean_pc_id(pc_id), kind, message, speak, say)
     return JSONResponse({"ok": True})
+
+
+# ─── 텔레그램 중계 API (매크로가 호출) ──────────────────────────────────────
+
+@app.get("/telegram/status")
+async def telegram_status(request: Request):
+    """매크로가 부팅/주기적으로 물어본다. enabled면 매크로는 자기 봇 폴링을 끄고
+    코드 수신을 서버 명령 큐에 맡긴다(봇 1개로 통합되는 지점)."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    return JSONResponse({"enabled": bool(tg_enabled() and tenant_chat_id(tenant))})
+
+
+@app.post("/telegram/send/{pc_id}")
+async def telegram_send(pc_id: str, request: Request):
+    """매크로 → 텔레그램 텍스트 중계. 매크로에 봇 토큰이 없어도 알림이 간다."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    chat = tenant_chat_id(tenant)
+    if not (tg_enabled() and chat):
+        return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    text = str(data.get("text") or "").strip()[:1000]
+    if not text:
+        raise HTTPException(status_code=400, detail="text 없음")
+    name = clean_pc_id(pc_id)
+    mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
+    if mid is None:
+        return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
+    if bool(data.get("expect_reply")):
+        await tg_map_put(mid, ns(tenant, pc_id), chat)
+    return JSONResponse({"ok": True, "message_id": mid})
+
+
+@app.post("/telegram/photo/{pc_id}")
+async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(...)):
+    """매크로 → 텔레그램 사진 중계(캡차 스샷). expect_reply면 답장 라우팅 대상으로 등록."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    chat = tenant_chat_id(tenant)
+    if not (tg_enabled() and chat):
+        return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
+    form = await request.form()
+    caption = str(form.get("caption") or "").strip()[:800]
+    expect_reply = str(form.get("expect_reply") or "").lower() in ("1", "true", "yes")
+    raw = await file.read()
+    if not raw or len(raw) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="이미지 크기 오류")
+    name = clean_pc_id(pc_id)
+    mid = await tg_send_photo(chat, f"{name} | {caption}" if name else caption, raw)
+    if mid is None:
+        return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
+    if expect_reply:
+        await tg_map_put(mid, ns(tenant, pc_id), chat)
+    return JSONResponse({"ok": True, "message_id": mid})
 
 
 @app.get("/command/{pc_id}")

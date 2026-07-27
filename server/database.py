@@ -109,6 +109,21 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_death_pc_time ON death_events(pc_id, created_at)"
         )
+        # ★텔레그램 단일봇 중계(2026-07-28): 서버가 보낸 메시지 id → 어느 PC의 요청인지.
+        #   사용자가 그 메시지에 '답장'하면 이 표로 PC를 특정해 명령 큐에 코드를 꽂는다.
+        #   ※메모리 dict로 두면 Railway 재배포 때 통째로 날아가 답장이 미아가 된다 → DB.★
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_map (
+                message_id INTEGER PRIMARY KEY,
+                pc_id      TEXT NOT NULL,
+                chat_id    TEXT NOT NULL,
+                kind       TEXT DEFAULT 'captcha',
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tgmap_chat_time ON telegram_map(chat_id, created_at)"
+        )
         await db.commit()
 
 
@@ -339,6 +354,58 @@ async def get_setting(key: str) -> "str | None":
         async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
+
+
+# ── 텔레그램 답장 매핑 ───────────────────────────────────────────────────────
+
+async def tg_map_put(message_id: int, pc_id: str, chat_id: str, kind: str = "captcha") -> None:
+    """서버가 보낸 텔레그램 메시지 id에 요청 PC를 붙여둔다(답장 라우팅용)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO telegram_map(message_id, pc_id, chat_id, kind, created_at)"
+            " VALUES(?,?,?,?,?)",
+            (int(message_id), pc_id, str(chat_id), kind, _now()),
+        )
+        # 오래된 매핑 정리 — 표가 무한히 자라지 않게(답장은 길어야 몇 시간 안에 온다)
+        await db.execute(
+            "DELETE FROM telegram_map WHERE created_at < ?",
+            ((datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%S"),),
+        )
+        await db.commit()
+
+
+async def tg_map_get(message_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT message_id, pc_id, chat_id, kind, created_at FROM telegram_map WHERE message_id=?",
+            (int(message_id),),
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def tg_map_recent(chat_id: str, within_sec: int, kind: str = "captcha") -> list[dict]:
+    """해당 채팅에서 최근 within_sec 안에 보낸 요청들.
+    ★답장 없이 코드만 보냈을 때 대상 추론용 — 후보가 정확히 1건일 때만 쓴다(호출측 판단).★"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(within_sec))
+              ).strftime("%Y-%m-%dT%H:%M:%S")
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT message_id, pc_id, chat_id, kind, created_at FROM telegram_map"
+            " WHERE chat_id=? AND kind=? AND created_at>=? ORDER BY message_id DESC",
+            (str(chat_id), kind, cutoff),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def tg_map_delete_pc(pc_id: str) -> None:
+    """그 PC의 대기 요청을 모두 소거 — 코드를 받았으면 남은 후보에서 빼야 오라우팅이 없다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM telegram_map WHERE pc_id=?", (pc_id,))
+        await db.commit()
 
 
 async def get_updater_command_pc(cmd_id: int) -> "str | None":
