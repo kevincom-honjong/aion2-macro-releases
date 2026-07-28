@@ -512,10 +512,51 @@ async def _tg_poller() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 디스크 영속 프로브 (2026-07-28 실사고)
+#   증상: 재시작마다 창고키나 합계가 뚝 떨어지고 버그 스샷·로그·악몽진행도가 사라짐.
+#   원인: /data 가 Railway 볼륨이 아니라 컨테이너 임시 디스크였다. DB도 스샷도 휘발.
+#         살아 있는 매크로는 WS 재연결 때 char_info를 다시 올려 되살아나지만,
+#         매크로가 죽은 PC는 되살릴 주체가 없어 그 PC 재산이 합계에서 통째로 빠진다.
+#   ★경로만 보고 '/data니까 볼륨이겠지' 하고 판정하면 안 된다(그렇게 짰다가 틀렸다).
+#     부팅마다 마커를 남기고, 다음 부팅에서 그 마커가 살아있는지로 '실제로' 확인한다.★
+# ─────────────────────────────────────────────────────────────────────────────
+VOLUME_DIR = os.path.dirname(os.getenv("DB_PATH", "") or "/data/macro_control.db") or "/data"
+_VOL_PROBE = os.path.join(VOLUME_DIR, ".persist_probe.json")
+VOLUME_PERSISTED: Optional[bool] = None      # None = 아직 판정 전
+VOLUME_PREV: dict = {}
+
+
+def _probe_volume() -> None:
+    global VOLUME_PERSISTED, VOLUME_PREV
+    prev = {}
+    try:
+        with open(_VOL_PROBE, encoding="utf-8") as f:
+            prev = json.load(f) or {}
+    except Exception:
+        prev = {}
+    VOLUME_PREV = prev
+    VOLUME_PERSISTED = bool(prev.get("boot") and prev["boot"] != SERVER_BOOT_ID)
+    try:
+        os.makedirs(VOLUME_DIR, exist_ok=True)
+        with open(_VOL_PROBE, "w", encoding="utf-8") as f:
+            json.dump({"boot": SERVER_BOOT_ID,
+                       "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}, f)
+    except Exception as e:
+        print(f"[VOL] 프로브 기록 실패: {e}")
+    if VOLUME_PERSISTED:
+        print(f"[VOL] {VOLUME_DIR} 영속 확인 (이전 boot={prev.get('boot','?')[:8]} @ {prev.get('at')})")
+    else:
+        print(f"[VOL] ★{VOLUME_DIR} 가 재시작마다 초기화된다★ — Railway 볼륨을 {VOLUME_DIR}에 "
+              f"마운트해야 DB·버그스샷·OCR 학습크롭이 살아남는다 "
+              f"(첫 부팅이면 다음 재시작 때 확정된다)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _probe_volume()
     await init_db()
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     try:
@@ -981,9 +1022,9 @@ async def health():
         _dbp = _DBP
     except Exception:
         pass
-    _persist = None
+    _bugs = 0
     try:
-        _persist = os.path.isdir(os.path.dirname(_dbp)) and _dbp.startswith(("/data", os.path.dirname(BUGS_DIR)))
+        _bugs = len([f for f in os.listdir(BUGS_DIR) if f.endswith(".png")])
     except Exception:
         pass
     return JSONResponse({
@@ -992,7 +1033,12 @@ async def health():
         "rss_max_mb": rss_mb,
         "db_path": _dbp,
         "db_size_kb": (round(os.path.getsize(_dbp) / 1024, 1) if os.path.exists(_dbp) else 0),
-        "db_on_volume": _persist,   # False면 재시작마다 초기화 → DB_PATH를 /data 밑으로 옮길 것
+        "bug_files": _bugs,
+        # ★경로 추측이 아니라 실측: 지난 부팅의 마커가 살아남았는지로 판정(_probe_volume)★
+        #   false면 재시작마다 DB·스샷이 전부 사라진다 → Railway 볼륨을 마운트해야 한다.
+        "disk_persisted": VOLUME_PERSISTED,
+        "prev_boot": (VOLUME_PREV.get("boot") or "")[:8] or None,
+        "prev_boot_at": VOLUME_PREV.get("at"),
     })
 
 
