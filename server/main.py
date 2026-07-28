@@ -632,14 +632,26 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             # setup_complete=False (pc_id 미설정 or token 없음)이면 카드 표시 안 함
             if not u.get("setup_complete", True):
                 continue
-            statuses.append({
+            row = {
                 "pc_id":            pid,
                 "status":           "offline",
                 "_updater_state":   u.get("macro_state", "unknown"),
                 "_updater_version": u.get("updater_version", ""),
                 "_bug_count":       bug_counts.get(pid, 0),
                 "deaths_30m":       death_counts.get(pid, 0),
-            })
+            }
+            # ★여기도 char_info를 붙인다(2026-07-28): 매크로가 죽어 pc_status 행이 없는 PC는
+            #   이 분기로 오는데, 예전엔 char_info를 안 붙여 '창고키나 합계'에서 통째로 빠졌다.
+            #   전광판 합계는 마지막으로 알던 값을 계속 세야 한다 — 꺼졌다고 재산이 준 게 아니다.★
+            ci = await get_char_info(ns(tenant, pid))
+            if ci:
+                if ci.get("chars"):
+                    row["chars"] = [c.get("name") or c.get("char_name") or "" for c in ci["chars"]]
+                if ci.get("total_kina"):
+                    row["_total_kina"] = ci["total_kina"]
+                if ci.get("collected_at"):
+                    row["_char_collected_at"] = ci["collected_at"]
+            statuses.append(row)
     return statuses
 
 
@@ -959,10 +971,28 @@ async def health():
         rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)  # Linux: KB→MB
     except Exception:
         pass
+    # ★DB 영속 여부(2026-07-28 실사고): 재시작마다 pc_status/char_info가 통째로 날아가
+    #   '창고키나 합계'가 뚝 떨어졌다. 살아 있는 매크로는 WS 재연결 때 char_info.json을
+    #   다시 올려 복구되지만, 매크로가 죽은 PC는 복구 주체가 없어 영영 빠진다.
+    #   원인은 DB_PATH가 볼륨(/data) 밖을 가리키는 것 — 여기서 바로 보이게 노출한다.
+    _dbp = os.getenv("DB_PATH") or "(기본값)"
+    try:
+        from database import DB_PATH as _DBP
+        _dbp = _DBP
+    except Exception:
+        pass
+    _persist = None
+    try:
+        _persist = os.path.isdir(os.path.dirname(_dbp)) and _dbp.startswith(("/data", os.path.dirname(BUGS_DIR)))
+    except Exception:
+        pass
     return JSONResponse({
         "boot": SERVER_BOOT_ID[:8],
         "uptime_s": int(time.time() - SERVER_BOOT_TS),
         "rss_max_mb": rss_mb,
+        "db_path": _dbp,
+        "db_size_kb": (round(os.path.getsize(_dbp) / 1024, 1) if os.path.exists(_dbp) else 0),
+        "db_on_volume": _persist,   # False면 재시작마다 초기화 → DB_PATH를 /data 밑으로 옮길 것
     })
 
 
