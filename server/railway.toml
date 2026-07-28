@@ -3,7 +3,13 @@ builder = "nixpacks"
 # ★서버 코드가 바뀔 때만 재배포(2026-07-24): exe/이미지 릴리스 푸시(하루 20커밋)마다
 #   Railway가 서버를 재시작해 대시보드가 1분씩 죽고 휘발성 로그/버그스샷도 날아가던 것 차단.
 #   패턴은 repo 루트 기준.★
-watchPatterns = ["server/**"]
+# ★★구멍 하나 남아 있었다(2026-07-28 실측): Actions가 매 릴리스마다
+#   `cp version.json server/version.json` 해서 커밋한다(.github/workflows/update_version.yml).
+#   그게 server/** 에 걸려 **매크로를 배포할 때마다 서버가 통째로 재배포**됐다.
+#   /data가 볼륨이 아니라 그때마다 DB·버그스샷·OCR 학습크롭이 전멸.
+#   → version.json만 감시에서 뺀다. 서버 코드가 아니라 데이터라 재시작할 이유가 없고,
+#     _load_version_json()이 5분 캐시로 파일을 다시 읽으므로 반영도 자동이다.★★
+watchPatterns = ["server/**", "!server/version.json"]
 
 [deploy]
 startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"

@@ -4062,12 +4062,36 @@ _GH_CDN = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-releases@mai
 _version_cache = {"data": {}, "ts": 0}
 
 def _load_version_json() -> dict:
-    """version.json 로드 — GitHub raw에서 가져옴 (5분 캐시)"""
+    """version.json 로드 (5분 캐시).
+
+    ★순서를 뒤집었다: GitHub raw 우선, 로컬 파일은 폴백(2026-07-28).★
+    로컬 파일은 **이미지에 구워진 사본**이라 재배포해야만 갱신된다. 그래서 예전엔
+    릴리스마다 server/version.json 커밋으로 서버를 재배포시켜 최신을 반영했는데,
+    그 재배포가 /data(DB·버그스샷·OCR 학습크롭)를 통째로 날리고 있었다.
+    → 감시 패턴에서 version.json을 빼고(railway.toml), 최신값은 raw에서 읽는다.
+      raw가 죽어도 구워진 사본으로 서빙은 계속된다(조금 낡을 뿐 함대는 안 멈춤).
+    """
     import time as _time
     now = _time.time()
     if _version_cache["data"] and now - _version_cache["ts"] < 300:
         return _version_cache["data"]
-    # 1차: 로컬 파일
+    # 1차: GitHub raw (항상 최신 — 재배포 없이 반영되는 유일한 경로)
+    # ★httpx를 쓴다: requests는 requirements.txt에 없다. 예전엔 로컬 파일이 1순위라
+    #   이 경로가 한 번도 안 돌아서 아무도 몰랐는데, 순서를 뒤집는 순간 ImportError로
+    #   영영 낡은 버전을 서빙할 뻔했다(2026-07-28).★
+    try:
+        import httpx as _hx
+        r = _hx.get("https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/server/version.json",
+                    timeout=6.0, follow_redirects=True)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("exe", {}).get("version"):
+                _version_cache["data"] = data
+                _version_cache["ts"] = now
+                return data
+    except Exception as e:
+        print(f"[version] raw 조회 실패 → 로컬 사본 사용: {e.__class__.__name__}: {e}")
+    # 2차: 이미지에 구워진 로컬 사본 (raw 장애 시 함대가 멈추지 않게)
     for vpath in [
         os.path.join(os.path.dirname(__file__), "version.json"),
         "/app/version.json",
@@ -4081,18 +4105,6 @@ def _load_version_json() -> dict:
                     return data
         except Exception:
             pass
-    # 2차: GitHub raw
-    try:
-        import requests as _req
-        r = _req.get("https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/server/version.json",
-                     timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            _version_cache["data"] = data
-            _version_cache["ts"] = now
-            return data
-    except Exception:
-        pass
     return _version_cache.get("data", {})
 
 @app.post("/check")
