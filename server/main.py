@@ -3899,8 +3899,12 @@ async def set_slot_filter(pc_id: str, request: Request):
 
 @app.get("/char_info/{pc_id}")
 async def query_char_info(pc_id: str, request: Request):
-    """대시보드가 캐릭터 세부정보 조회"""
-    tenant = check_session(request)
+    """캐릭터 세부정보 조회 — 대시보드(세션) + ★매크로(API키)★.
+    ★2026-07-29: 매크로의 '저레벨 캐릭 스킵'이 이 GET을 쓰는데 세션 전용이라 401 →
+      항상 로컬 char_info.json 폴백으로 낡은/오염 값을 읽었다(PC-06/07/09 실사고:
+      오염값 10000/10000을 저레벨로 오판해 사냥 없이 완료 도장). 읽기는 자기 테넌트
+      데이터뿐이라 API키 허용이 안전하다 — 명령 주입(POST /command)과는 다르다.★"""
+    tenant = check_session(request) or check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=401)
     info = await get_char_info(ns(tenant, pc_id))
