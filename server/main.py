@@ -3629,6 +3629,42 @@ def _list_bug_files(tenant: str, pc_id: Optional[str] = None) -> list[dict]:
     return result
 
 
+# ── 버그스샷 자동 정리 ──────────────────────────────────────────────────────
+# 정리 장치가 없어서 무한정 쌓였다(2026-07-30 실측 1032장 → 하루 만에 다시 835장).
+# 디스크만 먹는 게 아니라 목록 API·대시보드 뱃지가 전부 느려진다.
+# ★학습 크롭(ocrlearn_*)은 따로 더 넉넉히 잡는다★ — 그건 '모아야 뱅크가 채워지는'
+#   자산이라 사고 증거와 같은 잣대로 지우면 안 된다.
+BUG_KEEP_PER_PC = 40        # PC당 일반 스샷(사고 증거) 보관 수
+BUG_KEEP_LEARN  = 120       # PC당 학습 크롭(ocrlearn_/ocrdiff_) 보관 수
+
+
+def _prune_bugs(bdir: str, pc_id: str):
+    """그 PC 것만 오래된 순으로 지운다. 업로드 때마다 도니까 그 PC 폴더만 훑는다.
+
+    ★파일명이 {pc_id}_{YYYYMMDD}_{HHMMSS}_... 라 이름 정렬 = 시간 정렬이다★
+      (mtime을 쓰면 파일 복사·볼륨 이전 때 전부 같은 시각이 되어 순서가 무너진다.)
+    실패해도 업로드는 성공시킨다 — 정리하다 증거를 못 받는 게 더 나쁘다.
+    """
+    try:
+        pref = pc_id + "_"
+        learn, other = [], []
+        for f in os.listdir(bdir):
+            if not f.startswith(pref) or not f.endswith(".png"):
+                continue
+            (learn if ("ocrlearn_" in f or "ocrdiff_" in f) else other).append(f)
+        for group, keep in ((learn, BUG_KEEP_LEARN), (other, BUG_KEEP_PER_PC)):
+            if len(group) <= keep:
+                continue
+            group.sort()                       # 이름순 = 오래된 것부터
+            for f in group[:len(group) - keep]:
+                try:
+                    os.remove(os.path.join(bdir, f))
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[bugs] prune 실패(무시): {e.__class__.__name__}: {e}")
+
+
 @app.post("/bugs/{pc_id}")
 async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...)):
     tenant = check_api_key(request)
@@ -3649,6 +3685,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
         raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
     with open(dest, 'wb') as f:
         f.write(content)
+    _prune_bugs(bdir, pc_id)
     await push_state(tenant)
     return JSONResponse({"ok": True, "filename": filename})
 
