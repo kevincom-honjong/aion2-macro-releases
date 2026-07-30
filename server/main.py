@@ -1367,7 +1367,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <!-- 그룹 4: 거래 -->
   <div class="cmd-group">
     <span class="cmd-legend">TRADE</span>
-    <span class="price-wrap"><span class="price-k">₭</span><input id="sale-price" type="number" min="0" placeholder="거래소가" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지"></span>
+    <!-- 가격은 프리셋만(2026-07-30) — 매크로가 이 6종의 이미지 템플릿으로 입력을 검증한다.
+         자유 입력을 열면 템플릿이 없는 가격이 들어와 검증이 OCR로 떨어진다. -->
+    <span class="price-wrap"><span class="price-k">₭</span><select id="sale-price" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지">
+      <option value="">가격 선택</option>
+      <option value="159999">159,999</option>
+      <option value="169999">169,999</option>
+      <option value="179999">179,999</option>
+      <option value="189999">189,999</option>
+      <option value="199999">199,999</option>
+      <option value="209999">209,999</option>
+    </select></span>
     <button id="sale-price-btn" onclick="toggleSalePrice()" class="chip chip-gray">확정</button>
     <button onclick="sellAllSel()" class="chip chip-yellow">판매</button>
     <button onclick="settleSel()" class="chip chip-amber" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">정산</button>
@@ -2093,21 +2103,21 @@ function loadSalePrice() {
   const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
   if(!el||!btn) return;
   const v=localStorage.getItem('sale_price');
-  if(v) el.value=v;
-  if(isSalePriceConfirmed()){ el.readOnly=true; el.classList.add('opacity-60'); btn.textContent='수정'; }
-  else { el.readOnly=false; el.classList.remove('opacity-60'); btn.textContent='확정'; }
+  if(v) el.value=v;                       // 프리셋에 없는 옛 저장값이면 select가 빈 값으로 남는다(재확정 유도)
+  if(isSalePriceConfirmed()&&el.value){ el.disabled=true; el.classList.add('opacity-60'); btn.textContent='수정'; }
+  else { el.disabled=false; el.classList.remove('opacity-60'); btn.textContent='확정'; }
 }
 function toggleSalePrice() {
   const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
   if(isSalePriceConfirmed()){
     localStorage.setItem('sale_price_confirmed','0');
-    el.readOnly=false; el.classList.remove('opacity-60'); btn.textContent='확정'; el.focus();
+    el.disabled=false; el.classList.remove('opacity-60'); btn.textContent='확정'; el.focus();
   } else {
     const p=parseInt(el.value||'0',10);
-    if(!p||p<=0){alert('거래소 가격을 입력하세요');return;}
+    if(!p||p<=0){alert('거래소 가격을 선택하세요');return;}
     localStorage.setItem('sale_price', String(p));
     localStorage.setItem('sale_price_confirmed','1');
-    el.readOnly=true; el.classList.add('opacity-60'); btn.textContent='수정';
+    el.disabled=true; el.classList.add('opacity-60'); btn.textContent='수정';
     showToast(`거래소 가격 확정: ${p.toLocaleString()} (유지됨)`);
   }
 }
