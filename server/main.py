@@ -1361,6 +1361,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <option value="hard_up">난이도: 상향 (15/25/40/55만)</option>
     </select>
     <button onclick="selCmd('abyss')" class="chip chip-blue">어비스</button>
+    <button onclick="selCmd('corridor')" class="chip chip-blue" title="어비스 회랑 순회 — 전 캐릭 (하층+중층 우리 진영 아티팩트), 진입=완료, 미완만 재개">회랑</button>
     <button onclick="selCmd('collect_info')" class="chip chip-sky">정보수집</button>
   </div>
 
@@ -1675,6 +1676,7 @@ const STATUS_CFG = {
   awakening:    {label:'각성전',  bg:'bg-indigo-500/20', border:'border-indigo-700', badge:'bg-indigo-500', text:'text-indigo-400', online:true},
   awakening_wait:{label:'각성전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   nightmare_wait:{label:'악몽전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
+  corridor:     {label:'회랑',    bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
   collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
   paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
