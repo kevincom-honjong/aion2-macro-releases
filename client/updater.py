@@ -925,7 +925,11 @@ def main():
                 f.write("server=\n")
                 f.write("total_slots=5\n")
                 f.write("screenshot_key=ctrl+q\n")
-            log(f"[업데이터] info.txt 기본 양식 생성됨 → {INFO_TXT}")
+                # ★캐릭 이름 칸(v1.1.343+): charN=이름 을 적으면 그 슬롯은 이름 OCR을
+                #   건너뛴다(사용자 지시 — 새 양식). 비워두면 예전처럼 Gemini로 읽는다.
+                for _s in range(1, 7):
+                    f.write(f"char{_s}=\n")
+            log(f"[업데이터] info.txt 기본 양식 생성됨(캐릭 이름 칸 포함) → {INFO_TXT}")
             log("[업데이터] ※ info.txt 에서 pc_id / char1~3 을 수정하고 updater를 재시작하세요")
         except Exception as e:
             err(f"[업데이터] info.txt 생성 실패: {e}")
