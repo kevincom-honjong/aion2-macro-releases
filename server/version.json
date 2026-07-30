@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.344",
+    "version": "1.1.345",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "cd9b60d38197f84bfcc2e59aa1c348fd8880f84376f441e2eeba86878060cbf9",
+    "sha256": "7b83e3440faeea1aac75e8f59bb5e07b1d676676e71ce146bf5bb214e742fab4",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -18,6 +18,7 @@
     "F_2.png": "89d5999331a0ecb4a3a8a0070185ec81d7d1cc42f8ba2d94a1cc68e293ef9c55",
     "F_3.png": "63f5bbf1f10ee3dc03e5326bb10a99c0e12612ea28a373c5c821fa4edb7bf5e8",
     "F_4.png": "442c11e477e019550039a2d776e6968b77a48969c1a18aa1a2f101b2f6b25eb2",
+    "abyss_1400.png": "dc66710c7d978fedd944d96e0c224708f02a3b8422d75d234963084a1d8ed970",
     "arcana_title.png": "f921a005325a0605b79ff0df783bc858f051e2fd3524ca8cdc400106ad128873",
     "attendance.png": "7c03914cbf9308c53fb0129781fcdd80d2cca2f24134f3998b491f35196b7622",
     "attendance_close.png": "cde2541b7f726126a62e8bf9aea724a70dd843b57ada9fadc6ad5bab70023294",
@@ -125,6 +126,7 @@
     "nightmare_locked.png": "dc88c595420195caa64b356074a7a0a1d4d873d63d96e76a476332f34d428fc6",
     "nightmare_stage_label.png": "0f11ef2e9d2ddb6a2912746167ccf131a2922cc93fdebfc0d8a4cbe8b0ac138d",
     "nightmare_title.png": "80232ae913c6e50ebe49af23adacb8820e2f013d9b4d989e6a74d1de28a7ee10",
+    "nm_full_1414.png": "6abd91048e4b917ae7e17f2b5c33ecaf1bb8258a8119f27584135288d33fd1c3",
     "none.png": "cf59268cb9d4f3c2186f632b8502b0e5ebdba9d908b14fc756fcbc623fea1cb8",
     "odium_btn.png": "be1a2c02d8a88cebb6def11099bdeeca18830e4359fc63f7df39cec603152d19",
     "password.png": "32d97c260031eedb2ceb5df408eb46d75e831a013d279573d21f263aff14c6d6",
@@ -148,6 +150,7 @@
     "salsung_7.png": "71ea3a4607259da264067900e64b40d6e0cbc1cfe2b1f3241f9d2c5955466f94",
     "salsung_8.png": "f53cbf9e3ae01ae621f525ecf48c9e8fb47a7704696215eba91ac2a4b4640ecc",
     "sanc_full_11.png": "c47fe326b07f5e64ccd1ccdaa52f5ef0c5fc37e25fe0fc80892d1e7b4f6860ad",
+    "sanc_full_11b.png": "e10bfb25f0c3d937efeaa8fc3446cabf2ac2e0cd08fb29fdee57a41cd9fdf446",
     "sanctuary_title.png": "80433da1f9eb326d4bbe0cc9f12b7b7258b9a06dac7d98b2b84b619438c76da2",
     "sanctuary_zero.png": "29974c49efd59075ca9cfb7238ae0daf400adc8d6eef9637bfa0ad1801b3839f",
     "screen_now.png": "0962e950f561ccb8ec7ab6c59f77a1100876f416680f9d4fcf310b22f40c5591",
@@ -216,12 +219,12 @@
     "sha256": "9274914450b22c8760a4cdacdb2e9c97a6471214743315881d8cdfc27bb0663b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260730083939",
-  "updated_at": "2026-07-30T08:39:39",
+  "images_version": "20260730091316",
+  "updated_at": "2026-07-30T09:13:16",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.344",
-    "sha256": "b53cc40e142bf55614013f5c5959e3aef1f9d2e484f160e5171294def06c5a9e",
+    "version": "1.1.345",
+    "sha256": "d0c7346e3a7499a3a87c95f84a3e03788d66b64e4cb7337aa0535163faf06d0b",
     "filename": "혼종_렌탈.exe"
   }
 }
