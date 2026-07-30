@@ -3646,10 +3646,14 @@ def _prune_bugs(bdir: str, pc_id: str):
     실패해도 업로드는 성공시킨다 — 정리하다 증거를 못 받는 게 더 나쁘다.
     """
     try:
-        pref = pc_id + "_"
+        # ★단순 startswith 금지(2026-07-30 리뷰)★ — clean_pc_id가 언더스코어를 허용하므로
+        #   'PC-01'의 접두사 매칭이 'PC-01_sub'의 파일까지 자기 그룹으로 집계한다.
+        #   두 그룹이 섞여 정렬되면 숫자가 문자보다 앞이라 PC-01의 ★최신★ 파일부터
+        #   지워진다(시간 역순 삭제). 목록 API와 같은 기준: pc_id 뒤에 곧장 타임스탬프.
+        pat = re.compile(r"^" + re.escape(pc_id) + r"_\d{8}_\d{6}_")
         learn, other = [], []
         for f in os.listdir(bdir):
-            if not f.startswith(pref) or not f.endswith(".png"):
+            if not pat.match(f) or not f.endswith(".png"):
                 continue
             (learn if ("ocrlearn_" in f or "ocrdiff_" in f) else other).append(f)
         for group, keep in ((learn, BUG_KEEP_LEARN), (other, BUG_KEEP_PER_PC)):
@@ -3675,6 +3679,13 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     os.makedirs(bdir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     orig = os.path.basename(file.filename or "bug.png")
+    # ★.png 강제(2026-07-30 리뷰)★ — 목록·뱃지·prune이 전부 .png만 취급하므로,
+    #   다른 확장자는 '보이지도 지워지지도 않는' 무한 축적 경로가 된다(볼륨 고갈).
+    #   클라이언트는 항상 png를 보내므로 정상 경로엔 영향 없음. 대문자 .PNG는 소문자화.
+    if orig.lower().endswith(".png"):
+        orig = orig[:-4] + ".png"
+    else:
+        raise HTTPException(status_code=400, detail="png만 받습니다")
     # 반드시 {pc_id}_{YYYYMMDD}_{HHMMSS}_{orig} 형태로 저장해야 배지/목록이 작동함
     filename = f"{pc_id}_{ts}_{orig}"
     dest = os.path.join(bdir, filename)
