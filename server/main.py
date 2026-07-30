@@ -1477,7 +1477,6 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('awakening_ticket')">각성 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('sanctuary')">성역 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('mail_count')">우편 ⇅</th>
-              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('potion_count')">물약 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('return_scroll_count')">귀환 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white" onclick="sortCharTable('extract_level')">정기추출 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center">아르카나</th>
@@ -2833,9 +2832,8 @@ function renderCharTable() {
     const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/3` : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
-    const potion = r.potion_count != null ? r.potion_count : '–';
+    // 물약 열 제거(2026-07-30 사용자 지시) — v1.1.343부터 매크로가 판독하지 않는다(항상 0)
     const scroll = r.return_scroll_count != null ? r.return_scroll_count : '–';
-    const potionLow = typeof r.potion_count === 'number' && r.potion_count <= 50;
     const scrollLow = typeof r.return_scroll_count === 'number' && r.return_scroll_count <= 50;
     const ext = r.extract_level || '–';
     const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
@@ -2873,7 +2871,6 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-center">${awFull?rc(aw):aw}</td>
       <td class="px-3 py-1.5">${sancFull?rc(sanc):sanc}</td>
       <td class="px-3 py-1.5 text-center">${mail}</td>
-      <td class="px-3 py-1.5 text-center">${potionLow?rc(potion):potion}</td>
       <td class="px-3 py-1.5 text-center">${scrollLow?rc(scroll):scroll}</td>
       <td class="px-3 py-1.5">${extFull?rc(ext):ext}</td>
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
@@ -2910,7 +2907,7 @@ function renderCharTable() {
     const pcKinaRaw = pcRows[0]?.total_kina;
     const kinaTag = pcKinaRaw ? ` <span class="text-yellow-300 text-xs font-normal ml-1">₭${Number(pcKinaRaw).toLocaleString()}</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="23" class="px-3 py-2 font-bold text-gray-100">
+      <td colspan="22" class="px-3 py-2 font-bold text-gray-100">
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
           <span>${pc}</span>
@@ -2946,7 +2943,6 @@ function renderCharTable() {
       <th class="px-3 py-1 text-center">각성</th>
       <th class="px-3 py-1">성역</th>
       <th class="px-3 py-1 text-center">우편</th>
-      <th class="px-3 py-1 text-center">물약</th>
       <th class="px-3 py-1 text-center">귀환</th>
       <th class="px-3 py-1">정기추출</th>
       <th class="px-3 py-1 text-center">아르카나</th>
