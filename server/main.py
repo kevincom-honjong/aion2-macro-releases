@@ -3124,6 +3124,7 @@ function renderCharTable() {
       <th class="px-3 py-1 text-right">창고키나</th>
       <th class="px-3 py-1 text-center">어비스</th>
       <th class="px-3 py-1 text-right">어비스P</th>
+      <th class="px-3 py-1 text-center">회랑</th>
     </tr>`;
     pcRows.forEach(r => {
       html += renderRow(r, idx).replace('<tr ', `<tr data-pc="${pc}" style="display:none" `);
