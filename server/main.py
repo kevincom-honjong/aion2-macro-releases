@@ -1477,8 +1477,15 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
           class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 w-64 focus:outline-none focus:border-indigo-500"
           oninput="filterCharTable()">
       </div>
+      <!-- ★스프레드 압축(2026-08-01 사용자: "회랑 열이 스크롤해야 보인다 — 좌우 안 넘치게")★
+           23열이라 px-3(칸당 24px)만 552px를 먹는다. 셀 좌우 여백·글자를 CSS로 일괄 축소해
+           1920 화면에 전 열이 들어가게 한다(td/th의 Tailwind px-3을 !important로 덮음). -->
+      <style>
+        #char-table-wrap table td, #char-table-wrap table th{
+          padding-left:.3rem!important;padding-right:.3rem!important;font-size:.72rem}
+      </style>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm text-left whitespace-nowrap">
+        <table class="w-full text-left whitespace-nowrap">
           <thead class="text-xs text-gray-400 uppercase bg-gray-800/80 sticky top-0">
             <tr>
               <th class="px-3 py-2 text-center w-8">✓</th>
