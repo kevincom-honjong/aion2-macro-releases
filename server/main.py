@@ -1290,6 +1290,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     box-shadow:0 0 8px -2px rgba(129,140,248,.65)}
   .done-dungeon{color:#e9d5ff;background:rgba(168,85,247,.2);border:1px solid rgba(192,132,252,.6);
     box-shadow:0 0 8px -2px rgba(192,132,252,.65)}
+  .done-corridor{color:#bae6fd;background:rgba(14,165,233,.2);border:1px solid rgba(56,189,248,.6);
+    box-shadow:0 0 8px -2px rgba(56,189,248,.65)}
 
   /* ── 섹션 헤더 네온 라인 / 토스트 ── */
   main section h2{position:relative}
@@ -1382,7 +1384,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     </select></span>
     <button id="sale-price-btn" onclick="toggleSalePrice()" class="chip chip-gray">확정</button>
     <button onclick="sellAllSel()" class="chip chip-yellow">판매</button>
-    <button onclick="settleSel()" class="chip chip-amber" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">정산</button>
+    <button onclick="settleSel()" class="chip chip-amber" title="전 캐릭 준비 — 정산(계정 1회) → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">준비</button>
   </div>
 
   <!-- 그룹 5: 정리 -->
@@ -1584,7 +1586,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="cm-grid2">
     <button class="cm-btn chip-purple cm-span2" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
     <button class="cm-btn chip-yellow" onclick="sellAllFromMenu()" title="전 캐릭 순회 판매 (상단 거래소가 확정 필요)">$ 판매</button>
-    <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="판매대금 수령 — 계정 단위, 1캐릭만 접속해 걷음">₭ 정산</button>
+    <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="전 캐릭 준비 — 정산 → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">🧰 준비</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
   </div>
@@ -1758,6 +1760,12 @@ function isAwakenDone(pc_id){
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
   return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
 }
+function isCorridorDone(pc_id){
+  // 어비스 회랑 완료 = 매크로가 보고한 '남은 캐릭 수'가 0 (적 진영 제외 기준, 수·토 22시 리셋).
+  // corridorRemaining은 /corridor/progress + WS로 채워진다. 보고가 없으면 뱃지 없음.
+  const v = corridorRemaining[pc_id];
+  return !!v && typeof v.remaining === 'number' && v.remaining === 0;
+}
 function isDungeonDone(pc){
   // 일일던전(계정 티켓 14장) 소진 — 매크로가 소진 시각(dungeon_done_at)을 보고.
   // 각성전과 같은 주간 리셋(수요일 05시) 경계 이후 기록만 인정 → 경계 지나면 자연 소멸.
@@ -1831,7 +1839,8 @@ function buildCard(pc) {
   const doneBadges =
     (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹</span>`:'') +
     (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 전 캐릭 0/3 (수요일 새벽 5시 초기화)">⚔</span>`:'') +
-    (isDungeonDone(pc)?`<span class="done-badge done-dungeon" title="일일던전 완료 — 계정 티켓 소진 (수요일 새벽 5시 초기화)">🏰</span>`:'');
+    (isDungeonDone(pc)?`<span class="done-badge done-dungeon" title="일일던전 완료 — 계정 티켓 소진 (수요일 새벽 5시 초기화)">🏰</span>`:'') +
+    (isCorridorDone(pc.pc_id)?`<span class="done-badge done-corridor" title="어비스 회랑 완료 — 전 캐릭 남은 회랑 0 (수·토 22시 초기화)">🌀</span>`:'');
   return `<div id="card-${pc.pc_id}"
     class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none"
     onclick="toggleSelect('${pc.pc_id}',event)"
@@ -2339,11 +2348,11 @@ async function sellAllFromMenu() {
   loadCmdHistory();
 }
 
-// ─── 정산(settle) — 판매대금 수령. 계정 단위라 1캐릭만 접속해 걷고 종료 (가격 불필요) ───
+// ─── 준비(prepare) — 전 캐릭 순회: 정산(계정1회)→추출→개인/서버창고→인벤정렬→귀환주문서 ───
 async function settleSel() {
   if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
   if(!confirm(`선택 ${selectedPcs.size}대 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
-  await selCmd('settle');
+  await selCmd('prepare');
 }
 
 async function settleFromMenu() {
@@ -2351,8 +2360,8 @@ async function settleFromMenu() {
   const pc=menuPcId;
   if(!confirm(`${pc} 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
   closeCardMenu();
-  const ok=await sendCmd(pc,'settle',{});
-  showToast(ok?`✓ 정산 → ${pc}`:`✗ 정산 전송 실패`);
+  const ok=await sendCmd(pc,'prepare',{});
+  showToast(ok?`✓ 준비 → ${pc}`:`✗ 준비 전송 실패`);
   loadCmdHistory();
 }
 
@@ -2433,6 +2442,7 @@ async function loadCorridorSummary(){
 function handleCorridorMsg(msg){
   corridorRemaining[msg.pc_id]={remaining:(msg.data||{}).remaining,total:(msg.data||{}).total};
   updateCorridorTile();
+  scheduleRender();  // 카드 🌀 회랑 완료 뱃지 즉시 반영
   loadCharTable();   // 스프레드 '회랑' 열 갱신 (악몽 진행도와 같은 패턴)
 }
 loadCorridorSummary();
