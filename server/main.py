@@ -1609,6 +1609,24 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- 실시간 화면 보기 (2026-07-31) — 열려 있는 동안만 프레임이 흐른다 -->
+<div id="liveModal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-4xl flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
+      <h2 class="font-bold text-emerald-400" id="liveTitle">실시간 화면</h2>
+      <div class="flex items-center gap-3">
+        <span class="text-[11px] text-gray-500">🔴 클릭 지점 · 창을 닫으면 전송이 멈춥니다</span>
+        <button onclick="closeLive()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+      </div>
+    </div>
+    <div class="relative bg-black">
+      <img id="liveShot" class="w-full block" style="aspect-ratio:16/9;object-fit:contain" alt="">
+      <canvas id="liveCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+    </div>
+    <div class="px-5 py-2 border-t border-gray-800 text-xs text-gray-400 font-mono truncate" id="liveStep">—</div>
+  </div>
+</div>
+
 <!-- 캐릭터 세부정보 모달 -->
 <div id="info-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex justify-end">
   <div class="bg-gray-900 w-full max-w-md h-full flex flex-col border-l border-gray-800 shadow-2xl">
@@ -2050,6 +2068,94 @@ async function toggleSlotFilter(pc_id, slot, enabled) {
 }
 
 // ─── 명령 전송 ────────────────────────────────────────────────────────────────
+// ═══ 실시간 화면 보기 (2026-07-31) ═══════════════════════════════════════════
+// ★열려 있는 동안만 흐른다★ — 열 때 live_on, 닫을 때 live_off. 그리고 서버는 조회가
+// 15초 끊기면 매크로에게 204로 '그만'을 돌려주므로, 탭을 그냥 닫아도 알아서 멈춘다.
+// (함대 20대가 공인IP 하나를 공유해서, 켠 줄 모르고 계속 흐르는 상태를 만들면 안 된다.)
+let livePc = null, liveTimer = null, liveImg = null, liveFails = 0, liveArmedAt = 0;
+
+async function openLive(pc) {
+  livePc = pc; liveFails = 0; liveArmedAt = Date.now();
+  document.getElementById('liveTitle').textContent = pc + ' — 실시간 화면';
+  document.getElementById('liveStep').textContent = '연결 중…';
+  document.getElementById('liveModal').classList.remove('hidden');
+  await sendCmd(pc, 'live_on');
+  if (liveTimer) clearInterval(liveTimer);
+  liveTimer = setInterval(liveTick, 1000);
+  liveTick();
+}
+
+async function closeLive() {
+  const pc = livePc;
+  livePc = null;
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  document.getElementById('liveModal').classList.add('hidden');
+  document.getElementById('liveShot').src = '';
+  if (pc) await sendCmd(pc, 'live_off');
+}
+
+async function liveTick() {
+  if (!livePc) return;
+  const pc = livePc;
+  // 이미지: 캐시 무력화용 타임스탬프. onerror로 '아직 프레임 없음'을 구분한다.
+  const img = document.getElementById('liveShot');
+  img.onerror = () => {
+    liveFails++;
+    if (liveFails === 3) document.getElementById('liveStep').textContent =
+      '프레임 대기 중… (매크로가 실행 중이어야 합니다)';
+  };
+  img.onload = () => { liveFails = 0; drawLiveOverlay(); };
+  img.src = '/live/' + encodeURIComponent(pc) + '.jpg?t=' + Date.now();
+  try {
+    const r = await fetch('/live/' + encodeURIComponent(pc) + '/meta', {credentials:'include'});
+    const m = await r.json();
+    window.__liveMeta = m;
+    if (m.alive) {
+      document.getElementById('liveStep').textContent =
+        (m.step || '(단계 없음)') + '   ·   ' + m.age + '초 전';
+    }
+    // ★live_on 재무장★ — 서버는 조회가 15초 끊기면 매크로에 204를 줘 스트림을 끝낸다.
+    //   그런데 크롬은 ★백그라운드(비활성) 탭의 setInterval을 1분에 1회로 조인다★.
+    //   다른 탭을 잠깐 보고 돌아오면 그 사이 스트림이 죽어 있고, 대시보드는 live_on을
+    //   다시 보내지 않아 영구 정지였다. 프레임이 늙었거나 계속 안 오면 다시 켜라고 보낸다.
+    //   live.start()는 이미 돌고 있으면 no-op이라 중복 전송은 무해하다.
+    const stale = (!m.alive) || (m.age > 8);
+    if (stale && Date.now() - liveArmedAt > 10000) {
+      liveArmedAt = Date.now();
+      sendCmd(livePc, 'live_on');
+    }
+  } catch(e) {}
+}
+
+// 클릭 좌표를 프레임 위에 겹쳐 그린다.
+// ★이게 진단의 핵심★ — 2026-07-31 회랑이 서버선택창에 맹클릭하던 걸 로그 정지로만
+// 추론해야 했다. 점이 찍혔으면 "엉뚱한 화면 같은 자리를 계속 누른다"가 한눈에 보인다.
+function drawLiveOverlay() {
+  const img = document.getElementById('liveShot');
+  const cv = document.getElementById('liveCanvas');
+  const m = window.__liveMeta || {};
+  if (!img.naturalWidth) return;
+  cv.width = img.clientWidth; cv.height = img.clientHeight;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const sw = m.src_w || 1280, sh = m.src_h || 720;
+  (m.clicks || []).forEach(c => {
+    const [x, y, ago] = c;
+    const px = x / sw * cv.width, py = y / sh * cv.height;
+    const fade = Math.max(0.15, 1 - ago / 6);       // 오래된 클릭일수록 흐리게
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(255,60,60,' + fade + ')'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,60,60,' + fade + ')'; ctx.fill();
+  });
+}
+
+window.addEventListener('beforeunload', () => {
+  // 탭을 닫아도 명령이 나가게 (실패해도 서버 15초 TTL이 받아준다)
+  if (livePc) navigator.sendBeacon('/command/' + encodeURIComponent(livePc),
+    new Blob([JSON.stringify({command:'live_off',args:{}})], {type:'application/json'}));
+});
+
 async function sendCmd(pc_id, command, args={}) {
   const res=await fetch(`/command/${pc_id}`,{
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -2937,6 +3043,7 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
             <button onclick="sellAllCard('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">판매</button>
+            <button onclick="openLive('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-emerald-900/60 hover:bg-emerald-700 text-emerald-300 whitespace-nowrap" title="이 PC의 게임 화면을 실시간으로 봅니다 (열려 있는 동안만 전송)">🖵 화면</button>
           </div>
         </div>
       </td>
@@ -3274,6 +3381,91 @@ async def recent_commands(request: Request):
         raise HTTPException(status_code=401)
     cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
     return JSONResponse({"commands": cmds})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 실시간 화면 보기 (2026-07-31 신설)
+# ══════════════════════════════════════════════════════════════════════════════
+# ★디스크·DB를 쓰지 않는다★ — PC별 ★최신 1프레임★만 메모리에 둔다. 프레임은 1.5초마다
+# 들어오는 휘발성 데이터라 볼륨에 쌓으면 순식간에 고갈되고(버그스샷 prune을 만든 이유),
+# Railway 재배포마다 어차피 사라진다. 지금 보고 있는 것만 보여주면 되는 기능이다.
+#
+# ★"보는 사람 없으면 매크로가 스스로 끈다"★ — 업로드 응답이 204면 매크로가 전송을 멈춘다.
+# 대시보드가 프레임을 마지막으로 가져간 지 LIVE_TTL초가 지나면 아무도 안 본다고 판단한다.
+# 탭을 그냥 닫아도(live_off를 못 보내도) 자동으로 멈추는 안전장치 — 함대 20대가 공인IP
+# 하나를 공유하므로 '켠 줄도 모르고 계속 흐르는' 상태를 절대 만들면 안 된다.
+LIVE_FRAMES: dict = {}          # {"tenant::PC-01": {"jpg": bytes, "meta": dict, "ts": float}}
+# ★'보는 중' 표시는 프레임과 분리해서 둔다★ — 프레임 안에 seen을 두면 첫 프레임이 도착할 때
+# seen이 아직 0이라 서버가 곧바로 204를 돌려주고 매크로가 꺼진다(= 화면이 영영 안 뜬다).
+# 대시보드는 프레임이 없어도 /meta를 1초마다 두드리므로, 여기서 관심을 먼저 등록해 둔다.
+LIVE_WATCH: dict = {}           # {"tenant::PC-01": 마지막 조회 epoch}
+LIVE_TTL = 15.0                 # 이 시간 동안 조회가 없으면 '보는 사람 없음'
+LIVE_MAX_BYTES = 512 * 1024     # 프레임 상한 — 640x360 q40이면 40KB대라 넉넉하다
+
+
+def _live_touch(key: str):
+    """대시보드가 이 PC를 보고 있다고 표시. 오래된 항목은 함께 청소."""
+    now = time.time()
+    LIVE_WATCH[key] = now
+    # 메모리 누수 방지 — 아무도 안 보는 지 오래된 프레임/관심은 버린다(프로세스 메모리 dict).
+    for k in [k for k, v in LIVE_WATCH.items() if now - v > 600]:
+        LIVE_WATCH.pop(k, None)
+        LIVE_FRAMES.pop(k, None)
+
+
+@app.post("/live/{pc_id}")
+async def upload_live_frame(pc_id: str, request: Request):
+    """매크로 → 서버. 본문은 JPEG 원본, 메타는 X-Live-Meta 헤더(JSON).
+    반환 204 = 보는 사람 없으니 그만 보내라."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    pc_id = clean_pc_id(pc_id)
+    body = await request.body()
+    if len(body) > LIVE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="프레임이 너무 큽니다")
+    try:
+        meta = json.loads(request.headers.get("X-Live-Meta") or "{}")
+    except Exception:
+        meta = {}
+    key = ns(tenant, pc_id)
+    now = time.time()
+    LIVE_FRAMES[key] = {"jpg": body, "meta": meta, "ts": now}
+    if now - LIVE_WATCH.get(key, 0.0) > LIVE_TTL:
+        return Response(status_code=204)      # 아무도 안 봄 → 매크로가 스스로 끈다
+    return JSONResponse({"ok": True})
+
+
+@app.get("/live/{pc_id}.jpg")
+async def get_live_frame(pc_id: str, request: Request):
+    """대시보드 → 서버. 최신 프레임 1장. 가져갈 때마다 '보는 중' 시각을 갱신한다."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    key = ns(tenant, clean_pc_id(pc_id))
+    _live_touch(key)
+    f = LIVE_FRAMES.get(key)
+    if not f:
+        raise HTTPException(status_code=404, detail="아직 프레임이 없습니다")
+    return Response(content=f["jpg"], media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/live/{pc_id}/meta")
+async def get_live_meta(pc_id: str, request: Request):
+    """클릭 좌표 + 단계 자막 + 프레임 나이(초)."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    key = ns(tenant, clean_pc_id(pc_id))
+    # ★프레임이 없어도 관심은 등록한다★ — 대시보드를 연 직후엔 아직 프레임이 없는데,
+    #   여기서 등록해 두지 않으면 매크로의 첫 프레임이 곧바로 204를 맞고 꺼진다.
+    _live_touch(key)
+    f = LIVE_FRAMES.get(key)
+    if not f:
+        return JSONResponse({"alive": False})
+    return JSONResponse({"alive": True, "age": round(time.time() - f["ts"], 1),
+                         **(f.get("meta") or {})})
 
 
 @app.post("/command/{pc_id}")
