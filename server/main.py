@@ -1583,7 +1583,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
   <div class="cm-sec">화면 · 원격</div>
   <div class="cm-grid2">
-    <button class="cm-btn chip-emerald" onclick="liveFromMenu()" title="실시간 화면 — 어디서나 됨 (Railway 경유, 640x360)">🖵 화면</button>
+    <button class="cm-btn chip-emerald" onclick="liveFromMenu()" title="실시간 화면 — 어디서나 됨 (Railway 경유, 960x540 · 3fps)">🖵 화면</button>
     <button class="cm-btn chip-teal" id="cm-lan" onclick="lanFromMenu()" title="내부망 직결 — 원본 해상도 + 원격 조작 (같은 내부망에서만)">⚡ 내부망 원격</button>
   </div>
   <div class="cm-sec">UPDATER · 프로세스</div>
@@ -2087,7 +2087,9 @@ async function openLive(pc) {
   document.getElementById('liveModal').classList.remove('hidden');
   await sendCmd(pc, 'live_on');
   if (liveTimer) clearInterval(liveTimer);
-  liveTimer = setInterval(liveTick, 1000);
+  // ★350ms 폴링★ — 매크로가 3fps(0.35초/장)로 올리므로 여기도 같은 박자로 당긴다.
+  //   1000ms로 두면 서버엔 새 프레임이 있는데 화면은 1fps로 보인다(실사용 "존나 느리다").
+  liveTimer = setInterval(liveTick, 350);
   liveTick();
 }
 
