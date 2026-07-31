@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.389",
+    "version": "1.1.390",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "86b164c57b795e7abf29a0b438755a72d6f68ad39c9b5899d789c4ad4d0c98eb",
+    "sha256": "e84a5c95102714c6f1be83f33e8f3b71462305ed1c38c7c575061e3f687bf079",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -56,7 +56,9 @@
     "cor_portal_orb.png": "84ea8b17ad622c9b331e4441291c49cbdde1da88bea0482d32c22357e9d1d633",
     "cor_portal_orb2.png": "54180ee8b3b991759e0a3a8a93c4e17544f2e1cd52771643b81d48e6895a073c",
     "cor_portal_orb3.png": "630f2532a0484752dec82b774e2f17109955a2aa1ab2f5d111b174e65be576b7",
+    "cor_portal_orb4.png": "e9d3a3e038690f537d0755c7df5eded4d15e53c712e6045917e9a6885c130292",
     "cor_revive_basic.png": "d39cd1d99e92f32290f4b0bb44b597aeebfd48f226b956965c9f703a771ac9be",
+    "cor_revive_pvp.png": "18c421d70156faf836b53a58dbdcdd2382b64ca2309d8b2b015da0a44bd611a4",
     "cor_row_lower.png": "422161f1df692c79a934467a784217c3051aa61cc62f94f3f82d119203b81270",
     "cor_row_middle.png": "ee220f9e394cb7382b1484cdcabe6733b9ef9df91353a3f2ea7427ee76423811",
     "cor_spent.png": "7244da0aa1e0b1e71a62c6e80e4779de08fa78bbe855d7329650c6bf5cfdcbe4",
@@ -261,12 +263,12 @@
     "sha256": "9274914450b22c8760a4cdacdb2e9c97a6471214743315881d8cdfc27bb0663b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260731150531",
-  "updated_at": "2026-07-31T17:52:17",
+  "images_version": "20260731180619",
+  "updated_at": "2026-07-31T18:06:19",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.389",
-    "sha256": "ba2ed268acdbf993e2f6a7c1b53309b6c4c2c16ccb0ae766a56d5d2cc3323079",
+    "version": "1.1.390",
+    "sha256": "b445da4c3371143647b26c8669657ea88598ede0b03064db6e168169dc42c41d",
     "filename": "혼종_렌탈.exe"
   }
 }
