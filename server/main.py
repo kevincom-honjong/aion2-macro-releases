@@ -1246,7 +1246,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
   /* 전광판 그리드: 숫자 긴 타일(오드에너지/거래키나/창고키나)만 넓게, 카운트류는 좁게 */
   .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
-  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 3fr 3fr}}
+  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr}}
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
     white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
@@ -1422,6 +1422,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="stat-num text-purple-400" id="cnt-dungeon-left">–</div>
       <div class="stat-label">일일던전 남음</div>
     </div>
+    <div class="stat-tile tile-blue" title="회랑을 아직 다 못 돈 캐릭터 수 (적 진영 제외, 함대 합계 · 수·토 22시 리셋)">
+      <div class="stat-icon">🌀</div>
+      <div class="stat-num text-sky-400" id="cnt-corridor">–</div>
+      <div class="stat-label">회랑 남음</div>
+    </div>
     <div class="stat-tile tile-gold">
       <div class="stat-icon">🪙</div>
       <div class="stat-num text-yellow-400" id="cnt-trade-kina">–</div>
@@ -1498,6 +1503,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('total_kina')">창고키나 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('abyss_time')">어비스 ⇅</th>
               <th class="px-3 py-2 cursor-pointer hover:text-white text-right" onclick="sortCharTable('abyss_point')">어비스P ⇅</th>
+              <th class="px-3 py-2 cursor-pointer hover:text-white text-center" onclick="sortCharTable('corridor_progress')">회랑 ⇅</th>
             </tr>
           </thead>
           <tbody id="char-tbody" class="divide-y divide-gray-800"></tbody>
@@ -2385,6 +2391,7 @@ function connectWS() {
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
+    else if(msg.type==='corridor_progress'){handleCorridorMsg(msg);}
     else if(msg.type==='alert'){handleAlert(msg);}
   };
   ws.onclose=(e)=>{
@@ -2398,6 +2405,30 @@ function connectWS() {
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
 setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);
+
+// ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
+let corridorRemaining={};   // {pc_id: {remaining, total}}
+function updateCorridorTile(){
+  let rem=0,has=false;
+  Object.values(corridorRemaining).forEach(v=>{
+    if(v&&typeof v.remaining==='number'){has=true;rem+=v.remaining;}});
+  const el=document.getElementById('cnt-corridor');
+  if(el)el.textContent=has?String(rem):'–';
+}
+async function loadCorridorSummary(){
+  try{
+    const r=await fetch('/corridor/progress');if(!r.ok)return;
+    const d=await r.json();corridorRemaining={};
+    Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total};});
+    updateCorridorTile();
+  }catch(e){}
+}
+function handleCorridorMsg(msg){
+  corridorRemaining[msg.pc_id]={remaining:(msg.data||{}).remaining,total:(msg.data||{}).total};
+  updateCorridorTile();
+  loadCharTable();   // 스프레드 '회랑' 열 갱신 (악몽 진행도와 같은 패턴)
+}
+loadCorridorSummary();
 
 // ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
 let serverBoot=null;
@@ -3018,6 +3049,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
       <td class="px-3 py-1.5 text-center text-fuchsia-300">${r.abyss_time || '–'}</td>
       <td class="px-3 py-1.5 text-right text-fuchsia-200">${r.abyss_point ? Number(r.abyss_point).toLocaleString() : '–'}</td>
+      <td class="px-3 py-1.5 text-center ${r.corridor_full ? 'text-green-400 font-medium' : 'text-sky-300'}">${r.corridor_progress || '–'}</td>
     </tr>`;
   }
 
@@ -4265,6 +4297,48 @@ async def get_screenshot(category: str, pc_id: str, slot: int, request: Request)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 회랑 진행 상태 (2026-08-01) — 스프레드 '회랑' 열 + 전광판 '회랑 남음' 타일
+# ─────────────────────────────────────────────────────────────────────────────
+# ★메모리 저장★ — DB 스키마 무변경. 재배포로 날아가도 매크로가 슬롯 마감·런 종료마다
+#   '전체 스냅샷'을 다시 보내므로 다음 전송 한 방에 복원된다(라이브 프레임과 같은 철학).
+CORRIDOR_PROG: dict = {}    # {"tenant::PC-01": {our, slots, remaining, total, ts}}
+
+
+@app.post("/corridor/progress/{pc_id}")
+async def save_corridor_progress(pc_id: str, request: Request):
+    """매크로 → 서버. 회랑 진행 전체 스냅샷."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    pc_id = clean_pc_id(pc_id)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    data["ts"] = time.time()
+    CORRIDOR_PROG[ns(tenant, pc_id)] = data
+    await manager.broadcast({"type": "corridor_progress", "pc_id": pc_id,
+                             "data": {"remaining": data.get("remaining"),
+                                      "total": data.get("total")}}, tenant)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/corridor/progress")
+async def all_corridor_progress(request: Request):
+    """대시보드 → 서버. 전광판 '회랑 남음' 집계용."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    out = {}
+    for k, v in CORRIDOR_PROG.items():
+        t, raw = split_ns(k)
+        if t == tenant:
+            out[raw] = {"remaining": v.get("remaining"), "total": v.get("total"),
+                        "ts": v.get("ts")}
+    return JSONResponse({"pcs": out})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 전체 캐릭터 테이블 API
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4284,6 +4358,24 @@ async def get_all_characters(request: Request):
         total = len(bosses) if bosses else 7
         best_stage = max((b.get("stage", 0) for b in bosses.values()), default=0) if bosses else 0
         nm_map[(split_ns(nm["pc_id"])[1], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
+    # 회랑 진행(2026-08-01) — 메모리 스냅샷을 (pc,slot) 문자열로 병합 (사용자: "하2/2·중1/1" 형식)
+    cor_map, cor_full = {}, {}
+    for k, v in CORRIDOR_PROG.items():
+        t, raw = split_ns(k)
+        if t != tenant:
+            continue
+        our = v.get("our") or {}
+        ol, om = our.get("lower"), our.get("middle")
+        for s_str, e in (v.get("slots") or {}).items():
+            try:
+                s = int(s_str)
+            except Exception:
+                continue
+            dl, dm = e.get("lower", 0), e.get("middle", 0)
+            cor_map[(raw, s)] = (f"하{dl}/{ol if ol is not None else '?'}"
+                                 f"·중{dm}/{om if om is not None else '?'}")
+            cor_full[(raw, s)] = (ol is not None and dl >= ol
+                                  and om is not None and dm >= om)
     rows = []
     for info in all_info:
         pc_id = split_ns(info["pc_id"])[1]
@@ -4316,6 +4408,8 @@ async def get_all_characters(request: Request):
                 "total_kina": total_kina,
                 "collected_at": collected_at,
                 "nightmare_progress": nm_map.get((pc_id, slot), ""),
+                "corridor_progress": cor_map.get((pc_id, slot), ""),
+                "corridor_full": cor_full.get((pc_id, slot), False),
             })
     return JSONResponse({"characters": rows})
 
