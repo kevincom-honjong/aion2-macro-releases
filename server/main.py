@@ -1182,6 +1182,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .chip-red{--c:248,113,113}   .chip-cyan{--c:34,211,238}   .chip-purple{--c:192,132,252}
   .chip-pink{--c:244,114,182}  .chip-orange{--c:251,146,60} .chip-blue{--c:96,165,250}
   .chip-sky{--c:56,189,248}    .chip-yellow{--c:250,204,21} .chip-amber{--c:251,191,36}
+  .chip-emerald{--c:52,211,153} .chip-teal{--c:45,212,191}
   .sel-badge{font-size:11px;font-weight:800;color:#c7d2fe;padding:3px 11px;border-radius:999px;white-space:nowrap;
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
@@ -1579,6 +1580,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-indigo" onclick="openLogFromMenu()">📋 로그</button>
     <button class="cm-btn chip-sky"    onclick="openInfoFromMenu()">📊 정보</button>
     <button class="cm-btn chip-pink"   onclick="screenshotFromMenu()">📸 스샷</button>
+  </div>
+  <div class="cm-sec">화면 · 원격</div>
+  <div class="cm-grid2">
+    <button class="cm-btn chip-emerald" onclick="liveFromMenu()" title="실시간 화면 — 어디서나 됨 (Railway 경유, 640x360)">🖵 화면</button>
+    <button class="cm-btn chip-teal" id="cm-lan" onclick="lanFromMenu()" title="내부망 직결 — 원본 해상도 + 원격 조작 (같은 내부망에서만)">⚡ 내부망 원격</button>
   </div>
   <div class="cm-sec">UPDATER · 프로세스</div>
   <div class="cm-grid4">
@@ -2294,6 +2300,18 @@ function cardCmdSwitch() {
 }
 
 function openLogFromMenu(){const id=menuPcId; closeCardMenu(); openLogModal(id);}
+function liveFromMenu(){const id=menuPcId; closeCardMenu(); openLive(id);}
+function lanFromMenu(){
+  const id=menuPcId, u=((state[id]||{}).lan_url)||'';
+  closeCardMenu();
+  // ★내부망 서버가 안 열린 PC★ — 아직 구버전이거나 info.txt에 lan_prefix가 없거나
+  //   내부망 랜선이 안 꽂힌 경우다. 조용히 아무 일도 안 하면 원인을 알 수 없으니 알려준다.
+  if(!/^http:\/\/[\d.]+:\d+\/\?k=/.test(u)){
+    showToast('내부망 주소 없음 — 매크로 v1.1.358+ 이고 info.txt에 lan_prefix= 가 있어야 합니다');
+    return;
+  }
+  window.open(u,'_blank');
+}
 
 async function sellAllFromMenu() {
   if(!menuPcId) return;
