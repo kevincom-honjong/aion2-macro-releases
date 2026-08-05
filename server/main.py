@@ -4569,6 +4569,19 @@ async def updater_check(request: Request):
                 f"{_GH_RAW}/exe/updater.exe"),
         }
 
+    # ★내부망 시드(2026-08-06, updater 3.0.8+)★ — 설정 lan_seed(예: http://172.30.1.70:8766)가
+    #   있으면 응답에 실어, 업데이터가 exe를 내부망에서 먼저 받게 한다(같은 SHA256 검증,
+    #   실패 시 GitHub 폴백). ★렌탈(edition=rental)은 다른 내부망이므로 제외★.
+    #   끄는 법 = 설정 값 비우기 → 다음 /check부터 전 함대 GitHub 복귀. 구버전 업데이터(≤3.0.7)는
+    #   이 필드를 몰라서 무시한다(하위호환).
+    if client_edition != "rental":
+        try:
+            _seed = await get_setting(ns("main", "lan_seed"))
+            if _seed:
+                result["lan_seed"] = _seed
+        except Exception:
+            pass
+
     return JSONResponse(result)
 
 

@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.7"
+UPDATER_VERSION  = "3.0.8"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -194,6 +194,36 @@ def _download_once(url: str, tmp_path: str, dest_path: str, expected_sha256):
     shutil.move(tmp_path, dest_path)
     os.utime(dest_path, None)
     return True, written
+
+
+def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
+    """★내부망 시드 1회 시도(v3.0.8)★ — 실패하면 빨리 GitHub로 폴백하는 게 목적이라 재시도 없음.
+    SHA256은 서버 /check가 준 값으로 검증하므로 시드가 엉뚱한/변조된 파일을 줘도 여기서 기각된다."""
+    tmp_path = dest_path + ".seed.tmp"
+    try:
+        r = requests.get(url, stream=True, timeout=(3, 180))
+        r.raise_for_status()
+        _d = os.path.dirname(dest_path)
+        if _d:                       # 상대 경로면 dirname='' — makedirs('')는 WinError 3
+            os.makedirs(_d, exist_ok=True)
+        written = 0
+        with open(tmp_path, 'wb') as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+                    written += len(chunk)
+        if expected_sha256 and sha256_file(tmp_path) != expected_sha256:
+            err("[다운로드] 시드 해시 불일치 → 폐기, GitHub 폴백")
+            _safe_remove(tmp_path)
+            return False
+        shutil.move(tmp_path, dest_path)
+        os.utime(dest_path, None)
+        log(f"[다운로드] ✓ 내부망 시드 수신: {os.path.basename(dest_path)} ({written // 1024}KB)")
+        return True
+    except Exception as e:
+        log(f"[다운로드] 시드 실패({e}) → GitHub 폴백")
+        _safe_remove(tmp_path)
+        return False
 
 
 def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool:
@@ -505,7 +535,18 @@ def check_and_update() -> bool:
                 shutil.copy2(MACRO_EXE, MACRO_EXE_BACKUP)
             except Exception as e:
                 err(f"[업데이트] 백업 실패: {e}")
-        ok = download_file(exe_info["download_url"], MACRO_EXE, exe_info.get("sha256"))
+        # ★내부망 시드 우선(v3.0.8)★ — 서버가 lan_seed를 주면(렌탈 제외) 그 주소에서 먼저 받는다.
+        #   해시 검증 동일 + 어떤 실패든 GitHub 폴백이라 최악의 경우 = 기존과 동일.
+        ok = False
+        seed = str(result.get("lan_seed") or "").rstrip("/")   # 타입 방어(리뷰): 비문자열이 와도 안전
+        # ★sha256이 없으면 시드 경로를 아예 안 탄다(리뷰 보강)★ — 시드는 평문 HTTP+LAN이라
+        #   해시 검증이 유일한 무결성 보장. 검증 불가면 HTTPS(GitHub)로만 받는다.
+        if seed and exe_info.get("sha256"):
+            asset = exe_info["download_url"].rsplit("/", 1)[-1]
+            log(f"[업데이트] 내부망 시드 시도: {seed}/{asset}")
+            ok = _download_from_seed(f"{seed}/{asset}", MACRO_EXE, exe_info.get("sha256"))
+        if not ok:
+            ok = download_file(exe_info["download_url"], MACRO_EXE, exe_info.get("sha256"))
         if ok:
             local["exe_version"] = new_ver
             any_update = True
