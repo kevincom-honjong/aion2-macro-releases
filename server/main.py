@@ -2351,14 +2351,14 @@ async function sellAllFromMenu() {
 // ─── 준비(prepare) — 전 캐릭 순회: 정산(계정1회)→추출→개인/서버창고→인벤정렬→귀환주문서 ───
 async function settleSel() {
   if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
+  if(!confirm(`선택 ${selectedPcs.size}대 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;
   await selCmd('prepare');
 }
 
 async function settleFromMenu() {
   if(!menuPcId) return;
   const pc=menuPcId;
-  if(!confirm(`${pc} 정산 실행\n(계정 단위 — 1캐릭만 접속해 판매대금 수령, ~2분)`))return;
+  if(!confirm(`${pc} 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;
   closeCardMenu();
   const ok=await sendCmd(pc,'prepare',{});
   showToast(ok?`✓ 준비 → ${pc}`:`✗ 준비 전송 실패`);
@@ -2437,8 +2437,12 @@ async function loadCorridorSummary(){
     const d=await r.json();corridorRemaining={};
     Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total};});
     updateCorridorTile();
+    scheduleRender();   // 🌀 뱃지도 갱신 (만료로 사라진 PC 반영)
   }catch(e){}
 }
+// ★5분 주기 재조회★ — 수·토 22시 리셋 경계가 지나면 서버가 옛 스냅샷을 만료 처리하는데,
+// 페이지를 안 새로고침해도 뱃지·타일이 5분 안에 따라오게 한다 (2026-08-05 "뱃지 안 사라짐" 사고)
+setInterval(loadCorridorSummary,300000);
 function handleCorridorMsg(msg){
   corridorRemaining[msg.pc_id]={remaining:(msg.data||{}).remaining,total:(msg.data||{}).total};
   updateCorridorTile();
@@ -4322,6 +4326,21 @@ async def get_screenshot(category: str, pc_id: str, slot: int, request: Request)
 CORRIDOR_PROG: dict = {}    # {"tenant::PC-01": {our, slots, remaining, total, ts}}
 
 
+def _corridor_cutoff() -> float:
+    """가장 최근 수/토 22:00 KST의 epoch. ★이 경계보다 오래된 스냅샷 = 리셋 전 옛 판★ —
+    수요일 22시가 지나도 🌀 뱃지·'회랑 남음'이 옛 값(완료)으로 남아 있던 사고(2026-08-05).
+    회랑 장부(corridor.py _reset_key)와 같은 경계 계산."""
+    import datetime as _dt
+    kst = _dt.timezone(_dt.timedelta(hours=9))
+    now = _dt.datetime.now(kst)
+    d = now
+    for _ in range(8):
+        if d.weekday() in (2, 5) and (d.date() < now.date() or now.hour >= 22):
+            return d.replace(hour=22, minute=0, second=0, microsecond=0).timestamp()
+        d -= _dt.timedelta(days=1)
+    return 0.0
+
+
 @app.post("/corridor/progress/{pc_id}")
 async def save_corridor_progress(pc_id: str, request: Request):
     """매크로 → 서버. 회랑 진행 전체 스냅샷."""
@@ -4348,9 +4367,10 @@ async def all_corridor_progress(request: Request):
     if not tenant:
         raise HTTPException(status_code=401)
     out = {}
+    cutoff = _corridor_cutoff()
     for k, v in CORRIDOR_PROG.items():
         t, raw = split_ns(k)
-        if t == tenant:
+        if t == tenant and (v.get("ts") or 0) >= cutoff:   # 리셋 경계 지난 스냅샷 제외
             out[raw] = {"remaining": v.get("remaining"), "total": v.get("total"),
                         "ts": v.get("ts")}
     return JSONResponse({"pcs": out})
@@ -4378,9 +4398,10 @@ async def get_all_characters(request: Request):
         nm_map[(split_ns(nm["pc_id"])[1], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
     # 회랑 진행(2026-08-01) — 메모리 스냅샷을 (pc,slot) 문자열로 병합 (사용자: "하2/2·중1/1" 형식)
     cor_map, cor_full = {}, {}
+    _cor_cut = _corridor_cutoff()
     for k, v in CORRIDOR_PROG.items():
         t, raw = split_ns(k)
-        if t != tenant:
+        if t != tenant or (v.get("ts") or 0) < _cor_cut:   # 리셋 경계 지난 스냅샷 제외
             continue
         our = v.get("our") or {}
         ol, om = our.get("lower"), our.get("middle")
