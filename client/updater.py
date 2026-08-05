@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.8"
+UPDATER_VERSION  = "3.0.9"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -346,12 +346,34 @@ def _focus_game_window():
         log(f"[포커스] 게임 창 활성화 실패 (무시): {e}")
 
 
+def _macro_running_anywhere() -> bool:
+    """★시스템 전체에서 매크로 프로세스 존재 검사(v3.0.9, 사고 38-b)★ — macro_proc 핸들은
+    '내가 띄운 자식'만 기억한다. 매크로의 자가치유가 업데이터를 재기동하면 새 업데이터는
+    핸들이 비어 있어 이미 떠 있는 매크로를 몰라보고 하나 더 띄웠다(이중 실행 실사고)."""
+    base = os.path.basename(MACRO_EXE).lower()
+    try:
+        import psutil
+        for p in psutil.process_iter(['name']):
+            try:
+                if (p.info['name'] or "").lower() == base:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
 def start_macro() -> bool:
     global macro_proc
     with _state_lock:
         if macro_proc is not None and macro_proc.poll() is None:
             log("[매크로] 이미 실행 중")
             return True
+    if _macro_running_anywhere():
+        log("[매크로] 이미 실행 중 (외부 기동 감지) → 중복 기동 생략")
+        _set_state("running")     # 크래시감지는 macro_proc이 None이라 개입 안 함 — 표시만 유지
+        return True
     if not os.path.exists(MACRO_EXE):
         err(f"[매크로] EXE 없음: {MACRO_EXE}")
         return False
