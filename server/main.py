@@ -1875,6 +1875,7 @@ function buildCard(pc) {
       <div><span class="text-gray-400">최근</span> <span class="text-white font-medium">${relTime(pc.last_active)}</span></div>
       <div><span class="text-gray-400">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-white font-medium'}">${pc.deaths_30m||0}회</span></div>
     </div>
+    ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
