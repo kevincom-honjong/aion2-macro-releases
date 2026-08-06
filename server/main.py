@@ -3925,6 +3925,15 @@ async def telegram_send(pc_id: str, request: Request):
                 cand = _tn
         if not (cand and tenant_blocked(cand)):
             raise HTTPException(status_code=403)
+        # ★정지 안내만 통과시킨다(2026-08-07 리뷰)★ — 예산을 다른 알림(회랑 진행·복구 경고 등)이
+        #   먼저 써버리면 정작 '이용이 중지되었습니다'가 429로 잘려 이용자는 이유도 모른 채 멈춘다.
+        #   _block()의 안내는 "⛔"로 시작한다.
+        try:
+            _peek = await request.json()
+        except Exception:
+            _peek = {}
+        if not str(_peek.get("text") or "").lstrip().startswith("⛔"):
+            raise HTTPException(status_code=403, detail="차단 상태에서는 정지 안내만 전송됩니다")
         # ★남용 상한(2026-08-06 감사): 이 예외는 '정지 안내 몇 줄'을 위한 것이다.
         #   상한이 없으면 킬된 지인이 소유자 봇을 무제한 중계기로 계속 쓴다.★
         _rec = _KILL_TG.get(cand)
