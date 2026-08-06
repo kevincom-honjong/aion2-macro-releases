@@ -1381,6 +1381,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="목소리 고르기">⚙</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
+    <button id="rental-btn" onclick="openRentalModal()" class="hidden px-3 py-1 rounded-lg text-xs font-semibold bg-rose-900/70 hover:bg-rose-700 text-rose-100 transition-colors whitespace-nowrap" title="대여 계정 관리 — 이용 중지/재개 (킬스위치)">🛑 렌탈</button>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
@@ -1699,6 +1700,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <canvas id="liveCanvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
     </div>
     <div class="px-5 py-2 border-t border-gray-800 text-xs text-gray-400 font-mono truncate" id="liveStep">—</div>
+  </div>
+</div>
+
+<!-- 렌탈 관리(킬스위치) — main 계정에서만 버튼이 보인다 (2026-08-06) -->
+<div id="rental-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-lg flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
+      <h2 class="font-bold text-rose-400">🛑 렌탈 계정 관리</h2>
+      <button onclick="closeRentalModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
+    </div>
+    <div class="px-5 py-3 text-xs text-gray-400 border-b border-gray-800">
+      <b class="text-gray-300">이용 중지</b>를 켜면 그 계정은 <b>즉시</b> 대시보드 로그인이 막히고,
+      대여 프로그램은 <b>10분 안에 자동 정지</b>됩니다. 끄면 재설치 없이 자동으로 다시 이용됩니다.
+      <span class="text-gray-500">(내 함대 20대는 영향 없음)</span>
+    </div>
+    <div id="rental-list" class="px-5 py-3 space-y-2 max-h-[50vh] overflow-y-auto text-sm">불러오는 중…</div>
   </div>
 </div>
 
@@ -2505,6 +2522,67 @@ function handleCorridorMsg(msg){
   loadCharTable();   // 스프레드 '회랑' 열 갱신 (악몽 진행도와 같은 패턴)
 }
 loadCorridorSummary();
+
+// ─── 렌탈 계정 관리 (킬스위치) — main 계정 전용 (2026-08-06) ─────────────────
+// 서버가 rental_kill 설정 하나에 '차단 테넌트 목록'을 담는다. 화면은 항상 ★전체 목록★을
+// 다시 보내 부분 갱신으로 인한 유실을 막는다(체크 두 개를 빠르게 눌러도 마지막 상태가 정답).
+let rentalTenants = [];
+async function loadRentalTenants(){
+  try{
+    const r = await fetch('/tenants?t='+Date.now(), {cache:'no-store'});
+    if(!r.ok) return;
+    const d = await r.json();
+    rentalTenants = d.tenants || [];
+    // 렌탈 계정이 하나도 없으면 버튼도 숨긴다 (빈 패널을 열 이유가 없다)
+    const btn = document.getElementById('rental-btn');
+    if(btn && d.is_main && rentalTenants.length) btn.classList.remove('hidden');
+  }catch(e){}
+}
+function openRentalModal(){
+  document.getElementById('rental-modal').classList.remove('hidden');
+  renderRentalList();
+  loadRentalTenants().then(renderRentalList);
+}
+function closeRentalModal(){ document.getElementById('rental-modal').classList.add('hidden'); }
+function renderRentalList(){
+  const box = document.getElementById('rental-list');
+  if(!box) return;
+  if(!rentalTenants.length){ box.innerHTML = '<div class="text-gray-500">등록된 렌탈 계정이 없습니다.</div>'; return; }
+  // ★이름이 아니라 인덱스를 넘긴다★ — 테넌트명에 따옴표가 섞이면 onclick 문자열이 깨진다
+  box.innerHTML = rentalTenants.map((t,i)=>{
+    const killed = !!t.killed;
+    return `<div class="flex items-center justify-between gap-3 bg-gray-800/50 border ${killed?'border-rose-800':'border-gray-700'} rounded-lg px-3 py-2">
+      <div class="min-w-0">
+        <div class="font-semibold text-gray-200 truncate">${esc(t.name)}</div>
+        <div class="text-[11px] ${killed?'text-rose-400':'text-emerald-400'}">${killed?'⛔ 이용 중지됨':'✅ 이용 중'}${t.has_chat?'':' · <span class="text-gray-500">텔레그램 미등록</span>'}</div>
+      </div>
+      <button onclick="toggleRentalKill(${i},${killed?'false':'true'})"
+        class="shrink-0 px-3 py-1 rounded-lg text-xs font-semibold ${killed?'bg-emerald-800/70 hover:bg-emerald-600 text-emerald-100':'bg-rose-800/70 hover:bg-rose-600 text-rose-100'}">
+        ${killed?'이용 재개':'이용 중지'}</button>
+    </div>`;
+  }).join('');
+}
+async function toggleRentalKill(idx, kill){
+  const target = rentalTenants[idx];
+  if(!target) return;
+  const name = target.name;
+  const msg = kill ? `'${name}' 계정의 이용을 중지할까요?\n\n· 대시보드 로그인 즉시 차단\n· 대여 프로그램은 10분 안에 자동 정지`
+                   : `'${name}' 계정의 이용을 재개할까요?\n\n· 10분 안에 자동으로 다시 동작합니다`;
+  if(!confirm(msg)) return;
+  // 목록 전체를 다시 계산해서 보낸다 (서버는 이 한 줄이 곧 차단 명단)
+  const names = rentalTenants.filter(t => (t.name===name) ? kill : t.killed).map(t=>t.name);
+  try{
+    const r = await fetch('/setting/rental_kill', {method:'POST', headers:{'Content-Type':'application/json'},
+                          body: JSON.stringify({value: names.join(',')})});
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok){ showToast('✗ 변경 실패'); return; }
+    if(d.truncated) showToast('⚠ 목록이 너무 길어 잘렸습니다 — 확인 필요');
+    showToast(kill ? `⛔ ${name} 이용 중지` : `✅ ${name} 이용 재개`);
+  }catch(e){ showToast('✗ 변경 실패'); return; }
+  await loadRentalTenants();
+  renderRentalList();
+}
+loadRentalTenants();
 
 // ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
 let serverBoot=null;
@@ -4120,6 +4198,24 @@ async def serve_bug_image(filename: str, request: Request):
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/tenants")
+async def list_tenants(request: Request):
+    """대시보드 '렌탈 관리' 패널용 (2026-08-06). ★main 세션에만 목록을 준다★ —
+    렌탈 세션엔 is_main=false + 빈 목록(다른 지인이 있는지조차 노출 금지).
+    비밀번호·api_key는 절대 싣지 않는다(화면에 필요 없음)."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    if tenant != "main":
+        return JSONResponse({"is_main": False, "tenants": []})
+    rows = []
+    for name in sorted(t for t in TENANTS if t != "main"):
+        info = TENANTS.get(name) or {}
+        rows.append({"name": name, "killed": name in KILLED_TENANTS,
+                     "expires": info.get("expires") or "", "has_chat": bool(info.get("chat_id"))})
+    return JSONResponse({"is_main": True, "tenants": rows})
 
 
 @app.get("/updater.exe")
