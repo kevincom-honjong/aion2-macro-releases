@@ -78,6 +78,26 @@ def tenant_expired(tenant: str) -> bool:
         return False   # 형식 오류 시 잠그지 않음 (오타로 지인 전체 정지 방지)
 
 
+# ─── 렌탈 킬스위치 (2026-08-06) — 기간제 대신 스위치로 즉시 차단 ─────────────
+# 저장: main 테넌트 설정 "rental_kill" (테넌트명 콤마/공백 구분 나열, 빈값=전원 해제).
+# 반영: lifespan 로드 + POST /setting/rental_kill 즉시 갱신. 볼륨 DB라 재배포에도 유지.
+# 온오프(main 세션): POST /setting/rental_kill {"value":"친구A"} / 해제 {"value":""}
+KILLED_TENANTS: set = set()
+
+
+def _parse_killed(raw: str) -> set:
+    """"친구A, 친구B" → {"친구A","친구B"}. ★콤마로만 구분★ — 테넌트명에 공백이 있어도 통짜로
+    취급(리뷰 2026-08-06: split()이 "홍 길동"을 쪼개 영구 킬 불가였음). main은 어떤 입력이
+    와도 킬 불가(자기 잠금 방지). 미등록 이름은 무해(아무와도 일치 안 함) — POST 응답이 에코."""
+    return {t.strip() for t in (raw or "").split(",")
+            if t.strip() and t.strip() != "main"}
+
+
+def tenant_blocked(tenant: str) -> bool:
+    """만료(기간제) 또는 킬스위치 — 세션·API키·WS·로그인 모든 게이트가 이걸 본다."""
+    return tenant_expired(tenant) or (tenant in KILLED_TENANTS)
+
+
 NS_SEP = "::"
 TENANTS: dict = {}
 PW_TO_TENANT: dict = {}
@@ -223,7 +243,7 @@ def check_session(request: Request) -> Optional[str]:
     """유효 세션이면 테넌트명 반환(truthy), 아니면 None — 기존 `if not check_session(...)` 호환.
     기간제 만료 테넌트는 기존 세션도 즉시 무효(2026-07-26)."""
     tenant = valid_session(request.cookies.get("session"))
-    if tenant and tenant_expired(tenant):
+    if tenant and tenant_blocked(tenant):
         return None
     return tenant
 
@@ -267,7 +287,12 @@ def check_api_key(request: Request) -> Optional[str]:
     for k, tn in KEY_TO_TENANT.items():
         if hmac.compare_digest(supplied, k):
             tenant = tn
-    if not tenant or tenant_expired(tenant):
+    if tenant and tenant_blocked(tenant):
+        # ★킬스위치/만료(2026-08-06): 유효한 키의 '차단'은 추측 실패가 아니다 — 여기서
+        #   카운터를 올리면 차단된 PC의 하트비트가 자기 IP를 잠가 /license 확인까지 429가
+        #   되고, 클라가 '중지'를 network로 오분류해 48시간 유예를 탄다(즉시 정지 실패).★
+        return None
+    if not tenant:
         if not rec or now - rec["since"] > KEY_WINDOW:
             rec = {"n": 0, "since": now}
             _KEY_FAILS[ip] = rec
@@ -403,7 +428,7 @@ async def _tg_handle_update(u: dict) -> None:
     if not tenant:
         print(f"[TG] 미등록 chat_id 무시: {chat_id}")
         return
-    if tenant_expired(tenant):
+    if tenant_blocked(tenant):
         return
 
     if text.startswith("/"):
@@ -558,6 +583,13 @@ def _probe_volume() -> None:
 async def lifespan(app: FastAPI):
     _probe_volume()
     await init_db()
+    # 렌탈 킬스위치 복원(2026-08-06) — 볼륨 DB의 설정을 부팅 시 메모리로
+    try:
+        KILLED_TENANTS.update(_parse_killed(await get_setting(ns("main", "rental_kill")) or ""))
+        if KILLED_TENANTS:
+            print(f"[KILL] 렌탈 킬스위치 복원: {sorted(KILLED_TENANTS)}")
+    except Exception as e:
+        print(f"[KILL] rental_kill 로드 실패(무시): {e}")
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     try:
         yield
@@ -912,6 +944,8 @@ async def do_login(request: Request, response: Response):
     for pw, tn in PW_TO_TENANT.items():
         if hmac.compare_digest(supplied, pw):
             tenant = tn
+    if tenant and tenant in KILLED_TENANTS:
+        raise HTTPException(status_code=403, detail="이용이 중지되었습니다. 판매자에게 문의하세요")
     if tenant and tenant_expired(tenant):
         raise HTTPException(status_code=403, detail="이용 기간이 만료되었습니다")
     if not tenant:
@@ -963,7 +997,22 @@ async def set_setting_ep(key: str, request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400)
-    await set_setting(ns(tenant, key), str(body.get("value", ""))[:100])
+    val_raw = str(body.get("value", ""))
+    # rental_kill은 테넌트 나열이라 100자 상한이 이름을 중간에서 잘라 '무경고 킬 누락/오차단'을
+    # 만들 수 있다(리뷰 2026-08-06 major) — 이 키만 1000자. 나머지 설정은 기존 100자 유지.
+    val = val_raw[:1000] if key == "rental_kill" else val_raw[:100]
+    await set_setting(ns(tenant, key), val)
+    # 렌탈 킬스위치(2026-08-06): main 세션의 rental_kill 저장 즉시 메모리 반영.
+    # 지인 테넌트가 같은 키를 저장해도 자기 네임스페이스 설정일 뿐 여기 안 닿는다.
+    if tenant == "main" and key == "rental_kill":
+        KILLED_TENANTS.clear()
+        KILLED_TENANTS.update(_parse_killed(val))
+        # 오타·미등록 이름을 응답에 실어 무음 실패를 막는다(리뷰: ok:true만 주면 킬 실패를 모름)
+        unknown = sorted(t for t in KILLED_TENANTS if t not in TENANTS)
+        print(f"[KILL] 렌탈 킬스위치 갱신: {sorted(KILLED_TENANTS) or '(전원 해제)'}"
+              + (f" / ★미등록 이름(효과 없음): {unknown}★" if unknown else ""))
+        return JSONResponse({"ok": True, "killed": sorted(KILLED_TENANTS),
+                             "unknown": unknown, "truncated": len(val_raw) > len(val)})
     return JSONResponse({"ok": True})
 
 
@@ -993,6 +1042,10 @@ async def license_check(request: Request):
         await asyncio.sleep(0.4)
         # ★reason을 'unknown_key'로 구분해주면 '등록된 키인지'까지 알려주는 셈 → 단일화★
         payload = {"valid": False, "reason": "invalid", "expires": "", "now": now, "nonce": nonce}
+    elif tenant in KILLED_TENANTS:
+        # ★킬스위치(2026-08-06): 기간 만료가 아니라 판매자가 서버에서 내린 즉시 중지.
+        #   클라(license_guard)는 이 reason을 받으면 재시도 없이 바로 정지한다.★
+        payload = {"valid": False, "reason": "killed", "expires": "", "now": now, "nonce": nonce}
     elif tenant_expired(tenant):
         payload = {"valid": False, "reason": "expired", "expires": (TENANTS[tenant].get("expires") or ""), "now": now, "nonce": nonce}
     else:
@@ -3594,8 +3647,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     for _k, _tn in KEY_TO_TENANT.items():
         if hmac.compare_digest(api_key, _k):
             tenant = _tn
-    if not tenant or tenant_expired(tenant):
-        _key_probe_failed(_wip)
+    if not tenant or tenant_blocked(tenant):
+        # 미등록 키만 추측 카운터에 계상 — 킬/만료 테넌트의 재접속 폭주가 자기 IP를 잠가
+        # /license 확인(429→network 오분류)까지 막는 걸 방지 (check_api_key와 동일 원칙)
+        if not tenant:
+            _key_probe_failed(_wip)
         await websocket.close(code=1008)
         return
     pc_id = clean_pc_id(pc_id)   # 에코 일관성(저장 키 소독과 동일)
@@ -3651,7 +3707,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # ★만료 테넌트 차단(2026-07-27 보안감사): HTTP는 check_session이 만료를 거르는데
     #   여기만 valid_session(서명·유효기간만 확인)이라, 이용 기간이 끝난 지인이
     #   WS로는 실시간 데이터를 계속 받아볼 수 있었다.★
-    if not tenant or tenant_expired(tenant):
+    if not tenant or tenant_blocked(tenant):
         await websocket.close(code=1008)
         return
     await manager.connect(websocket, tenant)
@@ -3732,7 +3788,24 @@ async def telegram_send(pc_id: str, request: Request):
     """매크로 → 텔레그램 텍스트 중계. 매크로에 봇 토큰이 없어도 알림이 간다."""
     tenant = check_api_key(request)
     if not tenant:
-        raise HTTPException(status_code=403)
+        # ★차단 테넌트의 '정지 안내' 예외(2026-08-06 리뷰): 킬/만료된 테넌트가 check_api_key에서
+        #   막히면 "이용이 중지되었습니다" 텔레그램이 영영 못 나간다. ★단, 이 폴백이 레이트리밋을
+        #   우회하면 2026-07-27에 막은 키 추측 오라클이 재개방된다(2라운드 critical)★ —
+        #   probe 차단 IP는 여기서도 거부하고, '등록된 키 + 차단된 테넌트'만 통과시킨다.
+        #   미등록 키는 위 check_api_key가 이미 실패로 계상했으므로 그냥 403.
+        #   전송처는 어차피 아래에서 그 테넌트 '자신의' chat_id로만 조회되므로 남용 여지 없음.★
+        ip = _client_ip(request)
+        if _key_probe_blocked(ip):
+            raise HTTPException(status_code=403)
+        supplied = request.headers.get("X-Api-Key", "")
+        cand = None
+        for _k, _tn in KEY_TO_TENANT.items():
+            if hmac.compare_digest(supplied, _k):
+                cand = _tn
+        if cand and tenant_blocked(cand):
+            tenant = cand
+        else:
+            raise HTTPException(status_code=403)
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
         return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
