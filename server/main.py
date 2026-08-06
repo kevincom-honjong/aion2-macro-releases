@@ -1380,6 +1380,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button id="tts-btn" onclick="toggleTts()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors whitespace-nowrap">🔇 음성 꺼짐</button>
     <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="목소리 고르기">⚙</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
+    <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
@@ -4119,6 +4120,49 @@ async def serve_bug_image(filename: str, request: Request):
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/updater.exe")
+async def download_updater(request: Request):
+    """대시보드 업데이터 내려받기 (2026-08-06 사용자 요청: 본판 비번 로그인 → updater.exe,
+    렌탈 비번 로그인 → rental_updater.exe).
+    ★단일 바이너리★ — 내용은 동일하고 에디션은 지인 info.txt의 edition=rental이 결정한다.
+    파일명만 테넌트별로 다르게 준다(매뉴얼이 rental_updater.exe로 안내하므로).
+    Railway 이미지엔 server/만 있어 exe/updater.exe가 없다 → GitHub raw를 프록시 스트리밍."""
+    tenant = check_session(request)
+    if not tenant:
+        return RedirectResponse(url="/login")
+    ver = _load_version_json()
+    url = (ver.get("updater") or {}).get("download_url") or \
+        "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
+    fname = "updater.exe" if tenant == "main" else "rental_updater.exe"
+    import httpx as _hx
+    client = _hx.AsyncClient(timeout=_hx.Timeout(10.0, read=180.0), follow_redirects=True)
+    try:
+        req = client.build_request("GET", url)
+        resp = await client.send(req, stream=True)
+        if resp.status_code != 200:
+            await resp.aclose()
+            await client.aclose()
+            raise HTTPException(status_code=502, detail="업데이터 원본 조회 실패")
+    except HTTPException:
+        raise
+    except Exception:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="업데이터 원본 조회 실패")
+
+    async def _stream():
+        try:
+            async for chunk in resp.aiter_bytes(65536):
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
+    if resp.headers.get("content-length"):
+        headers["Content-Length"] = resp.headers["content-length"]
+    return StreamingResponse(_stream(), media_type="application/octet-stream", headers=headers)
 
 
 @app.get("/manual")
