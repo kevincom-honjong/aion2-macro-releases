@@ -3932,6 +3932,8 @@ async def telegram_send(pc_id: str, request: Request):
             _peek = await request.json()
         except Exception:
             _peek = {}
+        if not isinstance(_peek, dict):      # 본문이 [] / "x" / 123이면 .get에서 500 (리뷰 minor)
+            _peek = {}
         if not str(_peek.get("text") or "").lstrip().startswith("⛔"):
             raise HTTPException(status_code=403, detail="차단 상태에서는 정지 안내만 전송됩니다")
         # ★남용 상한(2026-08-06 감사): 이 예외는 '정지 안내 몇 줄'을 위한 것이다.
