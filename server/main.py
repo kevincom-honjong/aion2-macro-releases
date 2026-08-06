@@ -83,6 +83,8 @@ def tenant_expired(tenant: str) -> bool:
 # 반영: lifespan 로드 + POST /setting/rental_kill 즉시 갱신. 볼륨 DB라 재배포에도 유지.
 # 온오프(main 세션): POST /setting/rental_kill {"value":"친구A"} / 해제 {"value":""}
 KILLED_TENANTS: set = set()
+# 차단 테넌트의 '정지 안내' 텔레그램 예외 사용량 (테넌트 → {n, since}) — 시간당 3건 상한
+_KILL_TG: dict = {}
 
 
 def _parse_killed(raw: str) -> set:
@@ -322,7 +324,19 @@ class ConnectionManager:
         self.active = [(c, t) for c, t in self.active if c is not ws]
 
     async def broadcast(self, data: dict, tenant: str = "main"):
-        """해당 테넌트의 대시보드에게만 전송 (테넌트 격리)."""
+        """해당 테넌트의 대시보드에게만 전송 (테넌트 격리).
+        ★차단(킬/만료) 재검사(2026-08-06 감사 major)★ — 예전엔 핸드셰이크 때 한 번만 봐서,
+        탭을 열어둔 채 킬을 당하면 HTTP는 401인데 WS로는 실시간 데이터가 계속 흘렀다.
+        전송 직전마다 확인하고, 차단이면 그 소켓을 닫는다(다음 재접속은 1008로 막힌다)."""
+        if tenant_blocked(tenant):
+            for ws, t in list(self.active):
+                if t == tenant:
+                    self.disconnect(ws)
+                    try:
+                        await ws.close(code=1008)
+                    except Exception:
+                        pass
+            return
         msg = json.dumps(data, ensure_ascii=False)
         dead = []
         for ws, t in self.active:
@@ -1056,9 +1070,12 @@ async def license_check(request: Request):
 
 
 @app.get("/health")
-async def health():
+async def health(request: Request):
     """[진단] 업타임+메모리 — Railway 자발 재시작(배포 무관 boot 변경) 원인 추적용(2026-07-25).
-    uptime이 짧으면 최근 크래시/재시작, rss가 계속 오르면 메모리 누수→OOM 의심. (민감정보 없음)"""
+    uptime이 짧으면 최근 크래시/재시작, rss가 계속 오르면 메모리 누수→OOM 의심.
+    ★상세(볼륨 경로·DB 크기·버그스샷 수)는 main 세션에만(2026-08-06 감사 minor)★ —
+    무인증 응답은 헬스체크에 필요한 최소치만. Railway healthcheck는 /login을 쓰므로 무관."""
+    _detail = check_session(request) == "main"
     rss_mb = None
     try:
         import resource
@@ -1080,19 +1097,23 @@ async def health():
         _bugs = len([f for f in os.listdir(BUGS_DIR) if f.endswith(".png")])
     except Exception:
         pass
-    return JSONResponse({
+    out = {
         "boot": SERVER_BOOT_ID[:8],
         "uptime_s": int(time.time() - SERVER_BOOT_TS),
-        "rss_max_mb": rss_mb,
-        "db_path": _dbp,
-        "db_size_kb": (round(os.path.getsize(_dbp) / 1024, 1) if os.path.exists(_dbp) else 0),
-        "bug_files": _bugs,
         # ★경로 추측이 아니라 실측: 지난 부팅의 마커가 살아남았는지로 판정(_probe_volume)★
         #   false면 재시작마다 DB·스샷이 전부 사라진다 → Railway 볼륨을 마운트해야 한다.
         "disk_persisted": VOLUME_PERSISTED,
-        "prev_boot": (VOLUME_PREV.get("boot") or "")[:8] or None,
-        "prev_boot_at": VOLUME_PREV.get("at"),
-    })
+    }
+    if _detail:
+        out.update({
+            "rss_max_mb": rss_mb,
+            "db_path": _dbp,
+            "db_size_kb": (round(os.path.getsize(_dbp) / 1024, 1) if os.path.exists(_dbp) else 0),
+            "bug_files": _bugs,
+            "prev_boot": (VOLUME_PREV.get("boot") or "")[:8] or None,
+            "prev_boot_at": VOLUME_PREV.get("at"),
+        })
+    return JSONResponse(out)
 
 
 @app.get("/debug/deaths")
@@ -3638,9 +3659,17 @@ async def upload_live_frame(pc_id: str, request: Request):
         meta = {}
     key = ns(tenant, pc_id)
     now = time.time()
-    LIVE_FRAMES[key] = {"jpg": body, "meta": meta, "ts": now}
+    # ★아무도 안 보는 프레임은 애초에 담지 않는다(2026-08-06 감사 major)★ — 예전엔 무조건 저장한 뒤
+    #   204만 돌려줘서, 대시보드가 한 번도 조회하지 않은 pc_id는 LIVE_WATCH에 없어 청소 대상에도
+    #   못 들어갔다(=영구 잔류). 매번 다른 이름으로 512KB씩 올리면 서버가 OOM으로 죽는다.
     if now - LIVE_WATCH.get(key, 0.0) > LIVE_TTL:
+        LIVE_FRAMES.pop(key, None)
         return Response(status_code=204)      # 아무도 안 봄 → 매크로가 스스로 끈다
+    LIVE_FRAMES[key] = {"jpg": body, "meta": meta, "ts": now}
+    # 2차 안전망: 시청 중이라도 총량 상한(동시 시청은 한두 대지 수십 대가 아니다)
+    if len(LIVE_FRAMES) > 40:
+        for k in sorted(LIVE_FRAMES, key=lambda k: LIVE_FRAMES[k]["ts"])[:len(LIVE_FRAMES) - 40]:
+            LIVE_FRAMES.pop(k, None)
     return JSONResponse({"ok": True})
 
 
@@ -3747,6 +3776,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             }))
         while True:
             raw = await websocket.receive_text()
+            # ★차단 재검사(2026-08-06 감사 major)★ — 핸드셰이크 때 한 번만 보면, 이미 붙어 있던
+            #   렌탈 매크로가 킬 이후에도 상태·로그를 계속 기록하고 명령까지 받아간다(반쪽 차단).
+            if tenant_blocked(tenant):
+                await websocket.close(code=1008)
+                return
             try:
                 msg = json.loads(raw)
             except Exception:
@@ -3858,7 +3892,15 @@ async def telegram_status(request: Request):
     코드 수신을 서버 명령 큐에 맡긴다(봇 1개로 통합되는 지점)."""
     tenant = check_api_key(request)
     if not tenant:
-        raise HTTPException(status_code=403)
+        # ★차단 테넌트도 '중계 가능'만은 알려준다(2026-08-06 리뷰 major)★ — 여기서 403을 주면
+        #   클라가 중계를 5분간 꺼버려(report_module.telegram_relay_enabled) 정작 '이용 중지'
+        #   안내가 영영 못 나간다. 읽기 전용이라 정보 노출도 없다(자기 테넌트의 on/off뿐).
+        supplied = request.headers.get("X-Api-Key", "")
+        for _k, _tn in KEY_TO_TENANT.items():
+            if supplied and hmac.compare_digest(supplied, _k) and tenant_blocked(_tn):
+                tenant = _tn
+        if not tenant:
+            raise HTTPException(status_code=403)
     return JSONResponse({"enabled": bool(tg_enabled() and tenant_chat_id(tenant))})
 
 
@@ -3881,10 +3923,19 @@ async def telegram_send(pc_id: str, request: Request):
         for _k, _tn in KEY_TO_TENANT.items():
             if hmac.compare_digest(supplied, _k):
                 cand = _tn
-        if cand and tenant_blocked(cand):
-            tenant = cand
-        else:
+        if not (cand and tenant_blocked(cand)):
             raise HTTPException(status_code=403)
+        # ★남용 상한(2026-08-06 감사): 이 예외는 '정지 안내 몇 줄'을 위한 것이다.
+        #   상한이 없으면 킬된 지인이 소유자 봇을 무제한 중계기로 계속 쓴다.★
+        _rec = _KILL_TG.get(cand)
+        _nw = time.time()
+        if not _rec or _nw - _rec["since"] > 3600:
+            _rec = {"n": 0, "since": _nw}
+            _KILL_TG[cand] = _rec
+        if _rec["n"] >= 3:
+            raise HTTPException(status_code=429, detail="정지 안내 전송 상한")
+        _rec["n"] += 1
+        tenant = cand
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
         return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
@@ -4310,6 +4361,26 @@ async def _synth_segments(text: str, rate: str, pitch: str) -> bytes:
     return out
 
 
+TTS_MAX_FILES = 400            # 알림 문구는 반복돼서 캐시 적중률이 높다 — 400개면 충분
+
+
+def _prune_tts(limit: int = TTS_MAX_FILES):
+    """TTS 캐시 상한 유지 — 오래된 것부터 버린다(2026-08-06 감사: 정리 루틴이 아예 없어
+    임의 문구를 반복 요청하면 /data 볼륨이 차고, 같은 볼륨의 SQLite까지 마비됐다)."""
+    try:
+        files = [(os.path.getmtime(os.path.join(TTS_DIR, f)), os.path.join(TTS_DIR, f))
+                 for f in os.listdir(TTS_DIR) if f.endswith(".mp3")]
+        if len(files) <= limit:
+            return
+        for _mt, fp in sorted(files)[:len(files) - limit]:
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 @app.get("/tts")
 async def synth_tts(request: Request, text: str = "", rate: str = "", pitch: str = ""):
     """알림 문구를 마이크로소프트 신경망 음성(SunHi)으로 합성해 MP3로 돌려준다.
@@ -4338,6 +4409,7 @@ async def synth_tts(request: Request, text: str = "", rate: str = "", pitch: str
             with open(tmp, "wb") as f:
                 f.write(audio)
             os.replace(tmp, path)          # 부분 파일이 캐시로 굳는 것 방지
+            _prune_tts()                   # ★무한 적재 차단(2026-08-06 감사 major)★
         except Exception as e:
             print(f"[TTS] 합성 실패: {e}")
             raise HTTPException(status_code=503, detail="tts 합성 실패")
@@ -4491,11 +4563,17 @@ async def query_nightmare_progress(pc_id: str, request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 import base64 as _b64
 
+_SS_SAFE = re.compile(r"[^A-Za-z0-9가-힣_-]")
+
+
 def _screenshot_path(tenant: str, category: str, pc_id: str, slot: int) -> str:
-    """테넌트별 스크린샷 경로. main = 기존 경로(호환), 그 외 = 테넌트 하위 폴더."""
-    category = os.path.basename(category)
-    pc_id = os.path.basename(pc_id)
-    base = SCREENSHOTS_DIR if tenant == "main" else os.path.join(SCREENSHOTS_DIR, tenant)
+    """테넌트별 스크린샷 경로. main = 기존 경로(호환), 그 외 = 테넌트 하위 폴더.
+    ★basename은 봉쇄가 아니다(2026-08-06 감사)★ — basename("..") == ".."이라 상위 폴더로
+    새어 나갔다. 화이트리스트로 걸러 경로 구분자·점 자체를 없앤다."""
+    category = _SS_SAFE.sub("", category)[:32] or "misc"
+    pc_id = _SS_SAFE.sub("", pc_id)[:40] or "unknown"
+    slot = max(0, min(int(slot), 99))
+    base = SCREENSHOTS_DIR if tenant == "main" else os.path.join(SCREENSHOTS_DIR, _SS_SAFE.sub("", tenant)[:40] or "t")
     return os.path.join(base, category, f"{pc_id}_s{slot}.png")
 
 
@@ -4512,7 +4590,16 @@ async def upload_screenshot(category: str, pc_id: str, slot: int, request: Reque
     img_b64 = data.get("image", "")
     if not img_b64:
         raise HTTPException(status_code=400, detail="No image")
-    img_bytes = _b64.b64decode(img_b64)
+    # ★크기 상한(2026-08-06 감사 major)★ — 여기만 상한이 없어 공용 볼륨(/data)을 채워
+    #   같은 볼륨의 SQLite까지 마비시킬 수 있었다(버그스샷 8MB·라이브 512KB와 눈높이 맞춤).
+    if len(img_b64) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="이미지가 너무 큽니다")
+    try:
+        img_bytes = _b64.b64decode(img_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="이미지 디코드 실패")
+    if len(img_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="이미지가 너무 큽니다")
     fpath = _screenshot_path(tenant, category, pc_id, slot)
     os.makedirs(os.path.dirname(fpath), exist_ok=True)
     with open(fpath, "wb") as f:
@@ -4736,6 +4823,26 @@ async def updater_check(request: Request):
     client_updater_ver = body.get("updater_version", "0.0.0")
     client_edition     = body.get("edition", "main")   # 렌탈 채널(2026-07-26): rental이면 rental exe 배포
 
+    # ★에디션 자기신고 봉쇄(2026-08-06 감사 critical)★ — info.txt에서 edition=rental 한 줄만 지우면
+    #   킬스위치가 없는 본판 exe를 받아 영구히 통제 밖으로 나갈 수 있었다. 키를 보내오면
+    #   ★키가 곧 채널★이다(렌탈 테넌트 = 무조건 렌탈 채널). 키가 없으면 구버전 업데이터이므로
+    #   기존 동작 유지(하위호환) — 대신 그런 요청엔 내부망 시드를 주지 않는다.
+    #   ※차단(killed/만료) 테넌트도 채널 판정에는 그대로 쓴다: 업데이트를 막는 게 목적이 아니라
+    #     '렌탈 exe를 유지시켜 라이선스 검사를 계속 받게' 하는 게 목적이다.
+    _supplied_key = request.headers.get("X-Api-Key", "")
+    _ip = _client_ip(request)
+    key_tenant = None
+    if _supplied_key and not _key_probe_blocked(_ip):
+        for _k, _tn in KEY_TO_TENANT.items():
+            if hmac.compare_digest(_supplied_key, _k):
+                key_tenant = _tn
+        if not key_tenant:
+            _key_probe_failed(_ip)      # 키 오라클 방지(2026-07-27 조치를 여기에도 적용)
+    if key_tenant and key_tenant != "main":
+        client_edition = "rental"
+    elif key_tenant == "main":
+        client_edition = "main"
+
     ver = _load_version_json()
     result: dict = {}
 
@@ -4747,6 +4854,12 @@ async def updater_check(request: Request):
         exe_info = ver.get("exe", {})
         asset_prefix = "macro"
     server_exe_ver = exe_info.get("version", "0.0.0")
+    # ★키 없는 요청엔 매크로 exe를 주지 않는다(2026-08-06 리뷰 critical)★ — info.txt에서
+    #   edition과 control_api_key 두 줄만 지우면 여전히 '자칭 main'으로 킬스위치 없는 본판을
+    #   받아갈 수 있었다. 업데이터 자가업데이트(updater_update)는 계속 주므로, 구버전(≤3.0.9)은
+    #   ①먼저 3.1.0으로 갈아탄 뒤 ②키를 실어 다시 물어보면 정상적으로 exe를 받는다.
+    if not key_tenant:
+        exe_info = {}
     if exe_info and server_exe_ver != client_exe_ver:
         result["exe_update"] = {
             "version":      server_exe_ver,
@@ -4788,7 +4901,9 @@ async def updater_check(request: Request):
     #   실패 시 GitHub 폴백). ★렌탈(edition=rental)은 다른 내부망이므로 제외★.
     #   끄는 법 = 설정 값 비우기 → 다음 /check부터 전 함대 GitHub 복귀. 구버전 업데이터(≤3.0.7)는
     #   이 필드를 몰라서 무시한다(하위호환).
-    if client_edition != "rental":
+    #   ★키로 main임이 확인된 요청에만 준다(2026-08-06 감사)★ — 예전엔 무인증 요청이 edition=main만
+    #   자칭해도 사설 IP가 나갔다. 구버전 업데이터(키 미동봉)는 시드를 못 받고 GitHub로 받는다(무해).
+    if key_tenant == "main":
         try:
             _seed = await get_setting(ns("main", "lan_seed"))
             if _seed:
