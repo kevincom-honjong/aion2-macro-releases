@@ -604,6 +604,7 @@ async def lifespan(app: FastAPI):
             print(f"[KILL] 렌탈 킬스위치 복원: {sorted(KILLED_TENANTS)}")
     except Exception as e:
         print(f"[KILL] rental_kill 로드 실패(무시): {e}")
+    await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     try:
         yield
@@ -1475,15 +1476,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 일일던전 → 거래키나 → 창고키나)
        — 열 폭은 .stat-grid(숫자 긴 오드에너지/거래키나/창고키나=3fr, 나머지=2fr) -->
   <div class="stat-grid">
+    <!-- ★캐릭터 수 기준(2026-08-07 사용자 요청)★ — PC 대수가 아니라 실제로 돌고 있는/끝낸
+         캐릭터 수를 본다. 대수는 툴팁과 아래 '온라인' 섹션 헤더에 남아 있다. -->
     <div class="stat-tile tile-green">
       <div class="stat-icon">🖥️</div>
-      <div class="stat-num text-green-400" id="cnt-online">0</div>
-      <div class="stat-label">온라인</div>
+      <div class="stat-num text-green-400" id="cnt-online" title="온라인 PC들이 맡고 있는 캐릭터 수">0</div>
+      <div class="stat-label">온라인 캐릭</div>
     </div>
     <div class="stat-tile tile-blue">
       <div class="stat-icon">✅</div>
-      <div class="stat-num text-blue-400" id="cnt-completed">0</div>
-      <div class="stat-label">완료</div>
+      <div class="stat-num text-blue-400" id="cnt-completed" title="오늘 사냥을 끝낸 캐릭터 수 (오프라인 PC 포함, 새벽 5시 초기화)">0</div>
+      <div class="stat-label">완료 캐릭</div>
     </div>
     <div class="stat-tile tile-yellow">
       <div class="stat-icon">⚡</div>
@@ -2092,7 +2095,7 @@ function parseOddEnergy(str) {
 }
 
 function refreshSummary(pcs) {
-  const c={online:0,offline:0,completed:0,totalKina:0};
+  const c={online:0,offline:0,completedPcs:0,onlineChars:0,completedChars:0,totalKina:0};
   const seenPc = new Set();
   const dungeonLeft = new Set();   // 일일던전(계정 티켓) 안 끝난 PC — 오프라인 포함(계정 기준)
   pcs.forEach(p=>{
@@ -2101,7 +2104,12 @@ function refreshSummary(pcs) {
     if(isOnline) c.online++; else c.offline++;
     if(!isDungeonDone(p)) dungeonLeft.add(p.pc_id);
     const dp = p.daily_progress||[];
-    if(dp.length>0 && dp.every(d=>d.completed)) c.completed++;
+    if(dp.length>0 && dp.every(d=>d.completed)) c.completedPcs++;
+    // ★캐릭터 수 집계(2026-08-07)★ — 전광판은 대수가 아니라 캐릭터 수를 보여준다.
+    //   캐릭 수는 daily_progress 길이(=슬롯 수)가 정본, 아직 없으면 chars 목록으로 보완.
+    const nChars = dp.length || ((p.chars && p.chars.length) || 0);
+    if(isOnline) c.onlineChars += nChars;
+    c.completedChars += dp.filter(d=>d.completed).length;
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
       seenPc.add(p.pc_id);
@@ -2115,12 +2123,16 @@ function refreshSummary(pcs) {
     if (r.awakening_ticket != null) { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
     if (r.trade_kina != null) { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
   });
-  document.getElementById('cnt-online').textContent=c.online;
+  const elOn = document.getElementById('cnt-online');
+  elOn.textContent = c.onlineChars;
+  elOn.title = `온라인 PC ${c.online}대가 맡고 있는 캐릭터 ${c.onlineChars}명 (오프라인 ${c.offline}대)`;
   document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
   document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
   document.getElementById('cnt-trade-kina').textContent=tradeSeen ? fmtKinaKor(totalTrade) : '–';
   document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
-  document.getElementById('cnt-completed').textContent=c.completed;
+  const elDone = document.getElementById('cnt-completed');
+  elDone.textContent = c.completedChars;
+  elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
   document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
 }
 
@@ -4633,9 +4645,33 @@ async def get_screenshot(category: str, pc_id: str, slot: int, request: Request)
 # ─────────────────────────────────────────────────────────────────────────────
 # 회랑 진행 상태 (2026-08-01) — 스프레드 '회랑' 열 + 전광판 '회랑 남음' 타일
 # ─────────────────────────────────────────────────────────────────────────────
-# ★메모리 저장★ — DB 스키마 무변경. 재배포로 날아가도 매크로가 슬롯 마감·런 종료마다
-#   '전체 스냅샷'을 다시 보내므로 다음 전송 한 방에 복원된다(라이브 프레임과 같은 철학).
+# ★메모리 + 볼륨 DB 영속(2026-08-07)★ — 원래 메모리 전용이었는데, "다음 회랑 전송 때 복원된다"는
+#   전제가 실사용과 안 맞았다: 회랑은 수·토 리셋 사이에 한 번만 돌기 때문에, 그 사이 서버를
+#   재배포하면 다음 리셋까지 진행표가 빈칸으로 남는다(사용자: "정보수집했는데 회랑정보가 다 날아갔네?"
+#   — 실제 원인은 정보수집이 아니라 그날의 서버 재배포 5회였다).
+#   → 갱신 때마다 설정 KV(볼륨 DB)에 통째로 저장하고 부팅 때 되읽는다. 스키마 변경 없음.
 CORRIDOR_PROG: dict = {}    # {"tenant::PC-01": {our, slots, remaining, total, ts}}
+CORRIDOR_KEY = "corridor_prog_all"
+
+
+async def _corridor_persist():
+    """CORRIDOR_PROG 전체를 KV에 저장(마지막 쓰기가 곧 전체 상태 — 부분 갱신 경합 없음)."""
+    try:
+        await set_setting(CORRIDOR_KEY, json.dumps(CORRIDOR_PROG, ensure_ascii=False)[:200000])
+    except Exception as e:
+        print(f"[corridor] 영속 저장 실패(무시): {e}")
+
+
+async def _corridor_restore():
+    try:
+        raw = await get_setting(CORRIDOR_KEY)
+        if raw:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                CORRIDOR_PROG.update(data)
+                print(f"[corridor] 진행 스냅샷 복원: {len(CORRIDOR_PROG)}대")
+    except Exception as e:
+        print(f"[corridor] 복원 실패(무시): {e}")
 
 
 def _corridor_cutoff() -> float:
@@ -4666,6 +4702,7 @@ async def save_corridor_progress(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
     data["ts"] = time.time()
     CORRIDOR_PROG[ns(tenant, pc_id)] = data
+    await _corridor_persist()          # 재배포에도 살아남게(2026-08-07)
     await manager.broadcast({"type": "corridor_progress", "pc_id": pc_id,
                              "data": {"remaining": data.get("remaining"),
                                       "total": data.get("total")}}, tenant)
