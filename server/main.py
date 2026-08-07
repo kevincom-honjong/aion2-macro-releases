@@ -4902,12 +4902,15 @@ async def updater_check(request: Request):
         exe_info = ver.get("exe", {})
         asset_prefix = "macro"
     server_exe_ver = exe_info.get("version", "0.0.0")
-    # ★키 없는 요청엔 매크로 exe를 주지 않는다(2026-08-06 리뷰 critical)★ — info.txt에서
-    #   edition과 control_api_key 두 줄만 지우면 여전히 '자칭 main'으로 킬스위치 없는 본판을
-    #   받아갈 수 있었다. 업데이터 자가업데이트(updater_update)는 계속 주므로, 구버전(≤3.0.9)은
-    #   ①먼저 3.1.0으로 갈아탄 뒤 ②키를 실어 다시 물어보면 정상적으로 exe를 받는다.
-    if not key_tenant:
+    # ★키 없는 요청엔 '본판'을 주지 않는다(2026-08-06 리뷰 critical)★ — info.txt에서 edition과
+    #   control_api_key 두 줄만 지우면 '자칭 main'으로 킬스위치 없는 본판을 받아갈 수 있었다.
+    # ★단 자칭 rental은 준다(2026-08-07 수정)★ — 렌탈 exe는 그 자체가 라이선스 검사를 하므로
+    #   키 없이 받아가도 실행이 안 된다(license_guard.boot_check가 키 없으면 시작 차단).
+    #   반대로 안 주면 ★첫 설치가 조용히 실패한다★ — 사용자 실사고: "rental_updater 실행하면
+    #   업데이트는 하는데(이미지 250장) 프로그램을 안 받는다". 보안은 그대로, 설치는 살린다.
+    if not key_tenant and client_edition != "rental":
         exe_info = {}
+        result["notice"] = "no_key_no_exe"      # 진단용(구버전 업데이터는 무시)
     if exe_info and server_exe_ver != client_exe_ver:
         result["exe_update"] = {
             "version":      server_exe_ver,
