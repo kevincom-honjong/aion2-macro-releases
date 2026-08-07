@@ -4292,6 +4292,36 @@ async def list_tenants(request: Request):
     return JSONResponse({"is_main": True, "tenants": rows})
 
 
+def _rental_info_txt(tenant: str) -> str:
+    """렌탈 설치용 info.txt — ★키·에디션은 채워서, 본인이 넣을 것만 비워서★ 준다.
+    (주석은 '=' 없이 쓴다 — 업데이터/매크로 파서가 '='가 있는 줄을 전부 항목으로 읽는다.)"""
+    key = (TENANTS.get(tenant) or {}).get("api_key") or ""
+    return (
+        "pc_id=PC-01\r\n"
+        "edition=rental\r\n"
+        f"control_api_key={key}\r\n"
+        "server=\r\n"
+        "password_digits=\r\n"
+        "token=\r\n"
+        "telegram_chat_id=\r\n"
+        "anthropic_api_key=\r\n"
+        "gemini_api_key=\r\n"
+        "twocaptcha_api_key=\r\n"
+        "total_slots=6\r\n"
+        "screenshot_key=ctrl+q\r\n"
+        "char1=\r\nchar2=\r\nchar3=\r\nchar4=\r\nchar5=\r\nchar6=\r\n"
+        "\r\n"
+        "[ 채워야 하는 것 ]\r\n"
+        "pc_id       컴퓨터마다 다르게 (PC-01, PC-02 ...)\r\n"
+        "server      접속하는 게임 서버 이름\r\n"
+        "password_digits  퍼플 웹플레이 재접속 PIN\r\n"
+        "telegram_chat_id  userinfobot이 알려주는 숫자 (판매자에게도 알려주세요)\r\n"
+        "anthropic / gemini / twocaptcha  본인이 발급한 키\r\n"
+        "total_slots 돌릴 캐릭터 수 (매뉴얼 2장 참고)\r\n"
+        "token 은 비워두세요 (알림은 판매자 봇이 대신 보냅니다)\r\n"
+    )
+
+
 @app.get("/updater.exe")
 async def download_updater(request: Request):
     """대시보드 업데이터 내려받기 (2026-08-06 사용자 요청: 본판 비번 로그인 → updater.exe,
@@ -4306,6 +4336,40 @@ async def download_updater(request: Request):
     url = (ver.get("updater") or {}).get("download_url") or \
         "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
     fname = "updater.exe" if tenant == "main" else "rental_updater.exe"
+
+    # ★렌탈은 exe + 채워진 info.txt를 ZIP으로 준다(2026-08-07 사용자 요청)★
+    #   "인포 만들 때 알아서 키를 넣어놔라" — 그런데 업데이터는 main·rental 공용 단일 바이너리라
+    #   자기 안에 지인 키를 가질 수 없다(지인마다 별도 빌드를 하지 않는 한). 반면 이 다운로드는
+    #   ★이미 그 지인 비번으로 로그인한 상태★라 서버는 키를 안다 → 여기서 info.txt를 만들어 함께 준다.
+    #   압축을 C:\auto에 풀면 키·에디션이 이미 들어가 있어 첫 실행부터 렌탈 채널로 붙는다.
+    if tenant != "main":
+        info = _rental_info_txt(tenant)
+        try:
+            import httpx as _hx2, zipfile as _zf, tempfile as _tf
+            with _hx2.Client(timeout=_hx2.Timeout(10.0, read=180.0), follow_redirects=True) as _c:
+                _r = _c.get(url)
+                if _r.status_code != 200:
+                    raise HTTPException(status_code=502, detail="업데이터 원본 조회 실패")
+                exe_bytes = _r.content
+            tmp = _tf.NamedTemporaryFile(delete=False, suffix=".zip")
+            with _zf.ZipFile(tmp, "w", _zf.ZIP_DEFLATED) as z:
+                z.writestr("rental_updater.exe", exe_bytes)
+                z.writestr("info.txt", info)
+            tmp.close()
+            from starlette.background import BackgroundTask as _BT
+
+            def _rm(p=tmp.name):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+            return FileResponse(tmp.name, media_type="application/zip",
+                                filename="rental_setup.zip", background=_BT(_rm))
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[updater.zip] 생성 실패 → exe 단독 제공: {e}")
+            # 실패해도 설치는 되게 — 아래 단독 exe 스트리밍으로 폴백
     import httpx as _hx
     client = _hx.AsyncClient(timeout=_hx.Timeout(10.0, read=180.0), follow_redirects=True)
     try:
