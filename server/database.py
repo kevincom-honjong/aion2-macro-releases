@@ -262,11 +262,27 @@ async def insert_command(pc_id: str, command: str, args: dict) -> int:
         return cur.lastrowid
 
 
+COMMAND_MAX_AGE_SEC = 900          # 15분 — 이보다 오래된 대기 명령은 배달하지 않는다
+
+
 async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
     """pc_id 또는 브로드캐스트(all_key) 명령 중 가장 오래된 pending 항목 반환.
-    all_key: 테넌트 스코프된 'all' 키(예: 't::all') — 리터럴 'all' 고정은 테넌트 우회라 제거(2026-07-26)."""
+    all_key: 테넌트 스코프된 'all' 키(예: 't::all') — 리터럴 'all' 고정은 테넌트 우회라 제거(2026-07-26).
+
+    ★유효기간 15분(2026-08-07)★ — 예전엔 나이 제한이 없어서, 꺼져 있던 PC가 몇 시간 뒤 다시
+    붙는 순간 그때의 '정지/종료' 같은 명령이 뒤늦게 실행됐다(실제로 PC-16의 exit 2건이 몇 시간째
+    큐에 남아 있었다). 매크로가 평상시에도 HTTP로 명령을 확인하게 바뀌면서(반쯤 죽은 WS 대비)
+    이 위험이 전 함대로 넓어져 함께 막는다. 지난 명령은 expired로 표시해 큐에서 걷어낸다."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=COMMAND_MAX_AGE_SEC)
+              ).strftime("%Y-%m-%dT%H:%M:%S")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute(
+            "UPDATE commands SET status='expired', updated_at=? "
+            "WHERE (pc_id=? OR pc_id=?) AND status='pending' AND created_at < ?",
+            (_now(), pc_id, all_key, cutoff),
+        )
+        await db.commit()
         async with db.execute(
             """
             SELECT id, pc_id, command, args, created_at
