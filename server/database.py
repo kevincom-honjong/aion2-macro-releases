@@ -263,6 +263,11 @@ async def insert_command(pc_id: str, command: str, args: dict) -> int:
 
 
 COMMAND_MAX_AGE_SEC = 900          # 15분 — 이보다 오래된 대기 명령은 배달하지 않는다
+# ★만료 면제(2026-08-07 리뷰 major)★ — '지금 실행하라'가 아니라 '이 설정으로 맞춰라'인 명령은
+#   늦게 도착해도 맞다. 특히 set_slot_filter는 매크로가 부팅 시 서버에서 다시 읽어오는 경로가
+#   아예 없어서, 만료시키면 대시보드는 슬롯 3 비활성인데 매크로는 계속 그 캐릭을 도는
+#   ★영구 불일치★가 된다(재동기화 기회 없음).
+COMMAND_NO_EXPIRE = ("set_slot_filter",)
 
 
 async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
@@ -277,10 +282,12 @@ async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
               ).strftime("%Y-%m-%dT%H:%M:%S")
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        _keep = ",".join("?" for _ in COMMAND_NO_EXPIRE)
         await db.execute(
             "UPDATE commands SET status='expired', updated_at=? "
-            "WHERE (pc_id=? OR pc_id=?) AND status='pending' AND created_at < ?",
-            (_now(), pc_id, all_key, cutoff),
+            f"WHERE (pc_id=? OR pc_id=?) AND status='pending' AND created_at < ? "
+            f"AND command NOT IN ({_keep})",
+            (_now(), pc_id, all_key, cutoff, *COMMAND_NO_EXPIRE),
         )
         await db.commit()
         async with db.execute(
