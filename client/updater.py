@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.0.9"
+UPDATER_VERSION  = "3.1.1"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -529,6 +529,11 @@ def check_and_update() -> bool:
                 "updater_version": UPDATER_VERSION,
                 "edition":         EDITION,   # v3.0.7: rental이면 서버가 렌탈 채널 exe 응답
             },
+            # ★v3.1.0: 키를 동봉한다★ — 서버가 '자칭 edition'이 아니라 ★키★로 채널을 정한다.
+            #   (렌탈 이용자가 info.txt에서 edition 줄만 지워 킬스위치 없는 본판 exe를 받아가던
+            #    구멍 차단, 2026-08-06 감사 critical). 내부망 시드도 키로 main이 확인될 때만 온다.
+            #   키가 없으면 빈 헤더 → 서버는 구버전과 동일하게 처리(하위호환).
+            headers=_headers(),
             timeout=(TIMEOUT_CONNECT, 15),
         )
         resp.raise_for_status()
@@ -982,18 +987,40 @@ def main():
     # ── info.txt 없으면 기본 양식 생성 ──────────────────────────────────────
     if not os.path.exists(INFO_TXT):
         try:
+            # ★양식에 '필요한 칸이 전부' 있어야 한다(v3.1.1, 2026-08-07 사용자 지적)★
+            #   예전 양식엔 edition·control_api_key·password_digits·API키 칸이 아예 없었다.
+            #   칸이 없으면 사용자는 뭘 넣어야 하는지 모르고, 키가 없으니 렌탈은 프로그램조차
+            #   못 받는다(서버가 키로 채널을 정한다) — '조용한 실패'의 출발점이었다.
+            #   ※설명 줄에는 '='를 쓰지 않는다 — 파서가 '='가 있는 줄을 전부 항목으로 읽는다.
             with open(INFO_TXT, 'w', encoding='utf-8') as f:
                 f.write("pc_id=PC-??\n")
-                f.write("token=\n")
+                f.write("edition=\n")               # 렌탈이면 rental (비우면 본판)
+                f.write("control_api_key=\n")       # 관제 서버 열쇠 — 없으면 프로그램을 못 받음
                 f.write("server=\n")
+                f.write("password_digits=\n")
+                f.write("token=\n")
+                f.write("telegram_chat_id=\n")
+                f.write("anthropic_api_key=\n")
+                f.write("gemini_api_key=\n")
+                f.write("twocaptcha_api_key=\n")
                 f.write("total_slots=5\n")
                 f.write("screenshot_key=ctrl+q\n")
                 # ★캐릭 이름 칸(v1.1.343+): charN=이름 을 적으면 그 슬롯은 이름 OCR을
                 #   건너뛴다(사용자 지시 — 새 양식). 비워두면 예전처럼 Gemini로 읽는다.
                 for _s in range(1, 7):
                     f.write(f"char{_s}=\n")
-            log(f"[업데이터] info.txt 기본 양식 생성됨(캐릭 이름 칸 포함) → {INFO_TXT}")
-            log("[업데이터] ※ info.txt 에서 pc_id / char1~3 을 수정하고 updater를 재시작하세요")
+                f.write("\n")
+                f.write("[ 채우는 법 ]\n")
+                f.write("pc_id            컴퓨터마다 다르게 (PC-01, PC-02 ...)\n")
+                f.write("edition          대여판이면 rental, 본인 것이면 비워둠\n")
+                f.write("control_api_key  판매자에게 받은 열쇠 (이게 없으면 프로그램을 못 받습니다)\n")
+                f.write("server           접속하는 게임 서버 이름\n")
+                f.write("password_digits  퍼플 웹플레이 재접속 PIN\n")
+                f.write("telegram_chat_id userinfobot이 알려주는 숫자\n")
+                f.write("token            비워두세요 (알림은 서버 봇이 대신 보냅니다)\n")
+                f.write("total_slots      돌릴 캐릭터 수 (매뉴얼 참고)\n")
+            log(f"[업데이터] info.txt 기본 양식 생성됨(키·에디션 칸 포함) → {INFO_TXT}")
+            log("[업데이터] ※ pc_id / control_api_key / edition 을 채우고 updater를 재시작하세요")
         except Exception as e:
             err(f"[업데이터] info.txt 생성 실패: {e}")
 
