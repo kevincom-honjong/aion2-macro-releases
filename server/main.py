@@ -1862,7 +1862,7 @@ const STATUS_CFG = {
   paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
   offline:      {label:'오프라인',  bg:'bg-gray-900/40',   border:'border-gray-800',   badge:'bg-gray-700',   text:'text-gray-600',   online:false},
-  other_account:{label:'다른 계정 접속중', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
+  other_account:{label:'다른 계정', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
@@ -2040,20 +2040,22 @@ function buildCard(pc) {
           <!-- ★뱃지는 PC명과 같은 줄에 고정(shrink-0). 예전엔 flex-wrap 한 줄에
                캐릭터명 태그까지 같이 넣어서, 정보수집으로 캐릭명이 붙는 순간
                🏹⚔🏰 뱃지가 아래로 밀려났다(사용자 지적). 캐릭명은 아랫줄로 분리.★ -->
-          <!-- ★완료 뱃지(🏹⚔🏰)는 PC명 '다음 줄', 🐛 스크린샷 뱃지는 이름 '옆' 유지
-               (2026-08-15 사용자: "뱃지는 다음 칸으로" → "스크린샷은 PC 이름 옆에 있게 해")★ -->
-          <div class="font-bold text-base flex items-center gap-0 min-w-0">
-            <span class="truncate">${esc(pc.pc_id||'?')}</span>
-            ${acctChip(pc.pc_id)}
+          <!-- ★이름 줄 = PC명(절대 안 잘림)+🐛+상태만. 나머지 뱃지류(계정칩·완료뱃지·캐릭명)는
+               '한 줄'로 아랫줄에(2026-08-15 사용자 3연속 정정: "이름이 짤린다" → "스크린샷은
+               이름 옆" → "이름이 또 짤리고 뱃지가 두 줄"). 칩이 이름 줄에 있으면 긴 상태
+               문구와 겹쳐 PC명이 'PC...'로 뭉개졌다.★ -->
+          <div class="font-bold text-base flex items-center gap-0">
+            <span class="shrink-0">${esc(pc.pc_id||'?')}</span>
             <span class="shrink-0 flex items-center">${bugBadge}</span>
           </div>
-          ${(doneBadges||activeTag)?`<div class="mt-0.5 flex items-center gap-1 flex-wrap">${doneBadges}${activeTag}</div>`:''}
+          ${(acctChip(pc.pc_id)||doneBadges||activeTag)?`<div class="mt-0.5 flex items-center gap-1 whitespace-nowrap overflow-hidden min-w-0">${acctChip(pc.pc_id)}${doneBadges}${activeTag}</div>`:''}
         </div>
       </div>
-      <div class="flex items-center gap-1 shrink-0">
-        <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text}">
-          <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse}"></span>
-          ${cfg.label}
+      <!-- 상태 쪽이 양보한다(min-w-0+truncate) — PC명은 shrink-0라 절대 안 잘림 -->
+      <div class="flex items-center gap-1 min-w-0">
+        <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
+          <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
+          <span class="truncate">${cfg.label}</span>
         </span>
       </div>
     </div>
