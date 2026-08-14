@@ -1712,8 +1712,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="전 캐릭 준비 — 정산 → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">🧰 준비</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
-    <button class="cm-btn chip-purple" onclick="setAccountFromMenu()" title="멀티계정: 게임에서 계정을 수동 전환한 뒤 이 버튼으로 선언 — 매크로가 재시작하며 PC-03b 같은 계정 카드로 갈아탑니다. 반드시 '지금 온라인인 카드'에서 누르세요">👥 계정 선언...</button>
-    <button class="cm-btn chip-purple" onclick="switchAccountFromMenu()" title="멀티계정 자동 전환: 매크로가 크롬에서 로그아웃→해당 계정 로그인→게임 진입까지 자동으로 합니다(info.txt 계정N_아이디/비번 필요). 크롬 CDP 기반 배포 후 실동작">🔁 계정 전환(자동)...</button>
+    <!-- ★계정 직행 버튼(2026-08-15 사용자: "계정 선언/전환 이런 건 필요없고 계정 1~4로
+         만들고, 있는 경우에만 활성화")★ — openCardMenu가 열 때마다 활성/비활성 갱신 -->
+    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)">계정 1</button>
+    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)">계정 2</button>
+    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)">계정 3</button>
+    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)">계정 4</button>
     <button class="cm-btn chip-cyan cm-span2" onclick="chromeCdpFromMenu()" title="크롬을 제어 모드(CDP)로 재기동 — ★게임이 1회 끊겼다 자동 재접속됩니다★. 성공하면 이 PC는 자동전환·재연결개선·계정게이트가 실전 가동됩니다 (v1.1.413+)">🌐 크롬 제어모드 전환</button>
   </div>
   <div class="cm-sec">VIEW</div>
@@ -2609,6 +2613,7 @@ function openCardMenu(pc_id, e) {
     `<span class="font-bold text-gray-100">${pc_id}</span>`+
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
+  refreshAcctButtons(pc_id);   // 계정 1~4 버튼 활성/비활성 (있는 계정만, 현재 계정 ✓)
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
   if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
@@ -3717,6 +3722,64 @@ async function setAccountFromMenu() {
 // 선언(setAccount)과 달리 매크로가 크롬에서 로그아웃→해당 계정 로그인→AION2까지 자동으로
 // 한다(info.txt 계정N_아이디/비번 필요). ★크롬 CDP 기반이 깔린 뒤 실동작★ — 그 전엔
 // 매크로가 무해하게 무동작(게임 안 끊김) + 로그로 알린다.
+// ─── 오른클릭 메뉴 계정 직행 (2026-08-15 사용자: "계정 1~4 버튼, 있는 것만 활성화") ───
+// 존재 판정: 그 계정 카드가 이미 있거나, 매크로 보고 acct_total(자격증명 수, 1..N 연속 가정)
+// 범위 안. 현재 접속 계정은 ✓ 표시 + 비활성(자기 자신으로 전환 방지).
+function acctAvail(base){
+  const avail = new Set();
+  let total = 1;
+  Object.values(state).forEach(p=>{
+    const pid = p.pc_id||'';
+    if (baseId(pid) !== base) return;
+    total = Math.max(total, p.acct_total||1);
+    const c = pid.slice(-1);
+    avail.add('bcd'.includes(c) ? ({b:2,c:3,d:4}[c]) : 1);
+  });
+  for (let n=1; n<=Math.min(4,total); n++) avail.add(n);
+  return avail;
+}
+function liveCardOf(base){
+  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
+  return Object.values(state).find(p => baseId(p.pc_id||'')===base && isOn(p)) || null;
+}
+function currentAcctNum(base){
+  const live = liveCardOf(base);
+  if (!live) return 0;
+  const c = (live.pc_id||'').slice(-1);
+  return live.acct_num || ({b:2,c:3,d:4}[c] || 1);
+}
+function refreshAcctButtons(pc_id){
+  const base = baseId(pc_id);
+  const avail = acctAvail(base);
+  const cur = currentAcctNum(base);
+  for (let n=1; n<=4; n++){
+    const b = document.getElementById('cm-acct-'+n);
+    if (!b) continue;
+    const has = avail.has(n);
+    b.disabled = !has || n===cur;
+    b.style.opacity = b.disabled ? '0.35' : '';
+    b.style.cursor = b.disabled ? 'not-allowed' : '';
+    b.textContent = (n===cur ? '✓ 계정 ' : '계정 ') + n;
+    b.title = !has ? 'info.txt에 이 계정의 아이디/비번이 없습니다'
+            : (n===cur ? '현재 접속 중인 계정' : `계정 ${n}로 자동 전환 (로그아웃→로그인→AION2 페이지, 재시작)`);
+  }
+}
+async function switchAccountDirect(n){
+  const id = menuPcId;
+  closeCardMenu();
+  if (!id) return;
+  const base = baseId(id);
+  const lab = {1:'a',2:'b',3:'c',4:'d'}[n];
+  if (!lab) return;
+  // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
+  const live = liveCardOf(base);
+  const target = live ? live.pc_id : id;
+  if (!confirm(`${base} → 계정 ${n} 자동 전환\n(크롬 로그아웃→로그인→AION2 페이지까지, 매크로 재시작됨)`)) return;
+  const ok = await sendCmd(target, 'switch_account', {label: lab});
+  showToast(ok ? `🔁 ${base} 계정 ${n} 전환 시작` : '✗ 전송 실패');
+  loadCmdHistory();
+}
+
 async function switchAccountFromMenu() {
   const id = menuPcId;
   closeCardMenu();
