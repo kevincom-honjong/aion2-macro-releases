@@ -1686,6 +1686,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
     <button class="cm-btn chip-purple" onclick="setAccountFromMenu()" title="멀티계정: 게임에서 계정을 수동 전환한 뒤 이 버튼으로 선언 — 매크로가 재시작하며 PC-03b 같은 계정 카드로 갈아탑니다. 반드시 '지금 온라인인 카드'에서 누르세요">👥 계정 선언...</button>
     <button class="cm-btn chip-purple" onclick="switchAccountFromMenu()" title="멀티계정 자동 전환: 매크로가 크롬에서 로그아웃→해당 계정 로그인→게임 진입까지 자동으로 합니다(info.txt 계정N_아이디/비번 필요). 크롬 CDP 기반 배포 후 실동작">🔁 계정 전환(자동)...</button>
+    <button class="cm-btn chip-cyan cm-span2" onclick="chromeCdpFromMenu()" title="크롬을 제어 모드(CDP)로 재기동 — ★게임이 1회 끊겼다 자동 재접속됩니다★. 성공하면 이 PC는 자동전환·재연결개선·계정게이트가 실전 가동됩니다 (v1.1.413+)">🌐 크롬 제어모드 전환</button>
   </div>
   <div class="cm-sec">VIEW</div>
   <div class="cm-grid3">
@@ -3574,6 +3575,18 @@ async function switchAccountFromMenu() {
   //   한 계정 매크로만 돌므로 온라인 카드가 곧 수신자다.
   const ok = await sendCmd(id, 'switch_account', {label: v});
   showToast(ok ? `🔁 ${id} 계정 '${v}' 자동 전환 시작` : '✗ 전송 실패');
+  loadCmdHistory();
+}
+
+// 크롬 CDP 전환(v1.1.413) — 실측·전환 기반. 게임 1회 끊김을 confirm으로 고지.
+async function chromeCdpFromMenu() {
+  const id = menuPcId;
+  closeCardMenu();
+  if (!id) return;
+  if (!confirm(`${id} — 크롬을 제어 모드(CDP)로 재기동합니다.\n` +
+               `★게임이 1회 끊겼다가 자동 재접속됩니다★\n계속할까요?`)) return;
+  const ok = await sendCmd(id, 'chrome_cdp', {});
+  showToast(ok ? `🌐 ${id} 크롬 제어모드 전환 시작 (재접속까지 1~3분)` : '✗ 전송 실패');
   loadCmdHistory();
 }
 
