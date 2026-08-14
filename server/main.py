@@ -637,6 +637,21 @@ def _is_stale(updated_at_str: str | None) -> bool:
     except Exception:
         return True
 
+def _fresh(ts_str: str | None, secs: int) -> bool:
+    """pc_status 보고가 secs초 이내로 신선한가 (멀티계정 생사 판정 보조, 2026-08-15).
+    ★근거★ idle 매크로는 변경-해시 게이트 때문에 수천 초씩 무보고다(실측 5,500초+).
+    따라서 '아주 최근 보고'는 살아있다는 확실한 증거다(반대는 성립하지 않는다)."""
+    if not ts_str:
+        return False
+    try:
+        ts = datetime.fromisoformat(str(ts_str).replace("Z", ""))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() <= secs
+    except Exception:
+        return False
+
+
 def tenant_bugs_dir(tenant: str) -> str:
     """테넌트별 버그스샷 폴더. main = 기존 루트(호환), 그 외 = 하위 폴더."""
     return BUGS_DIR if tenant == "main" else os.path.join(BUGS_DIR, tenant)
@@ -697,11 +712,13 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             pc["_updater_state"]   = u.get("macro_state", "unknown")
             pc["_updater_version"] = u.get("updater_version", "")
         if is_sub:
-            # ★부계정 생사 = WS 접속 여부★ — pc_status 신선도는 못 쓴다: 보고가
-            #   변경-해시 게이트라 idle이면 몇 시간씩 안 올라온다(실측 5,500초+, 2026-08-14).
-            #   매크로가 살아 있으면 WS가 붙어 있으므로 그걸 본다. (WS 죽고 HTTP 폴백만
-            #   사는 반죽음 상태는 offline으로 보일 수 있음 — 표시용이라 감수, 폴백은 유지됨)
-            if ns(tenant, pid) not in macro_ws_connections:
+            # ★부계정 생사 = WS 접속 OR 아주 최근 보고(2026-08-15 실사고 수정)★
+            #   WS 단독 판정은 WS가 순간 끊긴(재연결 중·HTTP 폴백) 매크로를 오프라인으로
+            #   깔아뭉갰다 — PC-20b가 54초 전까지 사냥 로그를 찍는데 카드가 offline이었고,
+            #   그 바람에 3.7시간 전 상태로 박제된 계정1 카드가 스택 맨 앞을 차지했다
+            #   (사용자: "계정2 돌리고 있는데 왜 계정1이 카드 맨 앞이냐").
+            if (ns(tenant, pid) not in macro_ws_connections
+                    and not _fresh(pc.get("last_active"), 180)):
                 pc["status"] = "offline"
         elif ukey in updater_map:
             # base 카드: 업데이터 30초 타임아웃 → offline (★기존 규칙 그대로 — 단일계정
@@ -759,24 +776,31 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             statuses.append(row)
 
     # ★2차 패스 — 한 PC = 한 매크로(2026-08-15 사용자: "컴퓨터가 같은데... 한 번에 한
-    #   아이디밖에 못 들어가는데")★ 같은 base의 계정 카드 중 '지금 WS로 붙어 있는' 카드가
-    #   정체성의 진실. 나머지 카드는 마지막 보고가 뭐였든(재연결중 등 박제) '다른 계정
-    #   접속중'으로 강등하고, exe는 PC당 하나뿐이라 macro_version도 산 카드 것으로 통일한다
-    #   (계정1 카드만 옛 버전 빨간 표시로 남아 "버전업 안 됐다" 오해 — PC-20 실사고).
-    #   산 카드가 없으면(전원 꺼짐 등) 아무것도 안 바꾼다 = 단일계정 함대 회귀 0.
+    #   아이디밖에 못 들어가는데")★ 같은 base에 계정 카드가 2장 이상이면 ★반드시 하나만★
+    #   현역이다. 나머지는 마지막 보고가 뭐였든(재연결중 등 박제) '다른 계정'으로 강등하고,
+    #   exe는 PC당 하나뿐이라 macro_version도 현역 카드 것으로 통일한다.
+    #   현역 선택: ①WS 접속 카드 ②없으면 ★마지막 보고가 가장 최신인 카드★.
+    #   ②가 필수다(2026-08-15 실사고) — WS만 보면 PC-20b(WS 순간 끊김, 54초 전 보고)가
+    #   현역으로 안 뽑혀 아무도 강등되지 않았고, 3.7시간 전 'reconnecting'으로 굳은 계정1이
+    #   업데이터 생존 덕에 온라인 취급되어 스택 맨 앞을 차지했다.
+    #   카드가 1장뿐인 PC(단일계정 함대 17대)는 건드리지 않는다 = 회귀 0.
     def _base_of(p: str) -> str:
         return p[:-1] if p and p[-1] in ("b", "c", "d") else p
-    live_by_base: dict[str, dict] = {}
+    by_base: dict[str, list] = {}
     for pc in statuses:
-        if pc.get("_ws_live"):
-            live_by_base[_base_of(pc.get("pc_id") or "")] = pc
-    for pc in statuses:
-        pid = pc.get("pc_id") or ""
-        live = live_by_base.get(_base_of(pid))
-        if live is not None and live is not pc:
-            pc["status"] = "other_account"
+        by_base.setdefault(_base_of(pc.get("pc_id") or ""), []).append(pc)
+    for members in by_base.values():
+        if len(members) < 2:
+            continue
+        live = next((m for m in members if m.get("_ws_live")), None)
+        if live is None:
+            live = max(members, key=lambda m: str(m.get("last_active") or ""))
+        for m in members:
+            if m is live:
+                continue
+            m["status"] = "other_account"
             if live.get("macro_version"):
-                pc["macro_version"] = live.get("macro_version")
+                m["macro_version"] = live.get("macro_version")
     return statuses
 
 
