@@ -716,6 +716,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
         pc["_bug_count"] = bug_counts.get(pid, 0)
         pc["deaths_30m"] = death_counts.get(pid, 0)
         pc["slot_filters"] = all_filters.get(pid, {})
+        pc["_ws_live"] = ns(tenant, pid) in macro_ws_connections   # 2차 패스(한 PC=한 매크로)용
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
             ci = await get_char_info(ns(tenant, pid))
@@ -756,6 +757,26 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 if ci.get("collected_at"):
                     row["_char_collected_at"] = ci["collected_at"]
             statuses.append(row)
+
+    # ★2차 패스 — 한 PC = 한 매크로(2026-08-15 사용자: "컴퓨터가 같은데... 한 번에 한
+    #   아이디밖에 못 들어가는데")★ 같은 base의 계정 카드 중 '지금 WS로 붙어 있는' 카드가
+    #   정체성의 진실. 나머지 카드는 마지막 보고가 뭐였든(재연결중 등 박제) '다른 계정
+    #   접속중'으로 강등하고, exe는 PC당 하나뿐이라 macro_version도 산 카드 것으로 통일한다
+    #   (계정1 카드만 옛 버전 빨간 표시로 남아 "버전업 안 됐다" 오해 — PC-20 실사고).
+    #   산 카드가 없으면(전원 꺼짐 등) 아무것도 안 바꾼다 = 단일계정 함대 회귀 0.
+    def _base_of(p: str) -> str:
+        return p[:-1] if p and p[-1] in ("b", "c", "d") else p
+    live_by_base: dict[str, dict] = {}
+    for pc in statuses:
+        if pc.get("_ws_live"):
+            live_by_base[_base_of(pc.get("pc_id") or "")] = pc
+    for pc in statuses:
+        pid = pc.get("pc_id") or ""
+        live = live_by_base.get(_base_of(pid))
+        if live is not None and live is not pc:
+            pc["status"] = "other_account"
+            if live.get("macro_version"):
+                pc["macro_version"] = live.get("macro_version")
     return statuses
 
 
@@ -1841,6 +1862,7 @@ const STATUS_CFG = {
   paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
   offline:      {label:'오프라인',  bg:'bg-gray-900/40',   border:'border-gray-800',   badge:'bg-gray-700',   text:'text-gray-600',   online:false},
+  other_account:{label:'다른 계정 접속중', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
