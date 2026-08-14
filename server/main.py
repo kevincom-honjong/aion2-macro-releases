@@ -3321,7 +3321,7 @@ function renderCharTable() {
     const pcKinaRaw = pcRows[0]?.total_kina;
     const kinaTag = pcKinaRaw ? ` <span class="text-yellow-300 text-xs font-normal ml-1">₭${Number(pcKinaRaw).toLocaleString()}</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
-      <td colspan="22" class="px-3 py-2 font-bold text-gray-100">
+      <td colspan="23" class="px-3 py-2 font-bold text-gray-100"><!-- ★colspan=컬럼 수와 동기★ 회랑 열 추가 때 22 그대로라 마지막 열 위가 빈칸(사용자: "회랑 위에 아무것도 없고 짤려있다") -->
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
           <span>${pc}</span>
@@ -3337,6 +3337,9 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300 whitespace-nowrap">일일던전</button>
             <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
+            <button onclick="sendCmd('${pc}','corridor')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap">회랑</button>
+            <button onclick="sendCmd('${pc}','awakening')" class="px-1.5 py-0.5 text-xs rounded bg-violet-900/60 hover:bg-violet-700 text-violet-300 whitespace-nowrap">각성전</button>
+            <button onclick="sendCmd('${pc}','prepare')" class="px-1.5 py-0.5 text-xs rounded bg-amber-900/60 hover:bg-amber-700 text-amber-300 whitespace-nowrap" title="정산→추출→창고→정렬→귀환주문서">준비</button>
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
             <button onclick="sellAllCard('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">판매</button>
             <button onclick="openLive('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-emerald-900/60 hover:bg-emerald-700 text-emerald-300 whitespace-nowrap" title="이 PC의 게임 화면을 실시간으로 봅니다 (열려 있는 동안만 전송)">🖵 화면</button>
