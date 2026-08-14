@@ -687,15 +687,31 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
     seen: set[str] = set()
     for pc in statuses:
         pid = pc.get("pc_id"); seen.add(pid)
-        if pid in updater_map:
-            u = updater_map[pid]
+        # ★멀티계정(v1.1.412 리뷰 결함 1)★ 업데이터는 PC 단위라 base id(PC-03)로만 보고한다.
+        #   부계정 카드(PC-03b)는 pc_status만 올리고 updater_map엔 'PC-03b'가 영영 없어
+        #   무조건 offline으로 강등됐다. 접미사(b/c/d)를 벗긴 base id로 updater를 조인한다.
+        is_sub = bool(pid and pid[-1] in ("b", "c", "d") and pid[:-1] in seen | set(updater_map))
+        ukey = pid[:-1] if (pid and pid[-1] in ("b", "c", "d") and pid[:-1] in updater_map) else pid
+        if ukey in updater_map:
+            u = updater_map[ukey]
             pc["_updater_state"]   = u.get("macro_state", "unknown")
             pc["_updater_version"] = u.get("updater_version", "")
-            # updater 30초 타임아웃 → offline
+        if is_sub:
+            # ★부계정 생사 = WS 접속 여부★ — pc_status 신선도는 못 쓴다: 보고가
+            #   변경-해시 게이트라 idle이면 몇 시간씩 안 올라온다(실측 5,500초+, 2026-08-14).
+            #   매크로가 살아 있으면 WS가 붙어 있으므로 그걸 본다. (WS 죽고 HTTP 폴백만
+            #   사는 반죽음 상태는 offline으로 보일 수 있음 — 표시용이라 감수, 폴백은 유지됨)
+            if ns(tenant, pid) not in macro_ws_connections:
+                pc["status"] = "offline"
+        elif ukey in updater_map:
+            # base 카드: 업데이터 30초 타임아웃 → offline (★기존 규칙 그대로 — 단일계정
+            #   함대 회귀 0★). 계정 전환으로 버려진 base 카드의 '얼어붙은 사냥중' 문제는
+            #   서버 추측이 아니라 ★매크로가 떠나며 마지막 offline 보고★로 푼다
+            #   (config.switch_account_and_restart — 재리뷰 결함 2).
             if _is_stale(u.get("_updated_at")):
                 pc["status"] = "offline"
         else:
-            # updater 기록 자체가 없으면 offline
+            # base 카드인데 updater 기록 자체가 없으면 offline (기존 규칙)
             pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(pid, 0)
         pc["deaths_30m"] = death_counts.get(pid, 0)
@@ -1668,6 +1684,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="전 캐릭 준비 — 정산 → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">🧰 준비</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
+    <button class="cm-btn chip-purple" onclick="setAccountFromMenu()" title="멀티계정: 게임에서 계정을 수동 전환한 뒤 이 버튼으로 선언 — 매크로가 재시작하며 PC-03b 같은 계정 카드로 갈아탑니다. 반드시 '지금 온라인인 카드'에서 누르세요">👥 계정 선언...</button>
+    <button class="cm-btn chip-purple" onclick="switchAccountFromMenu()" title="멀티계정 자동 전환: 매크로가 크롬에서 로그아웃→해당 계정 로그인→게임 진입까지 자동으로 합니다(info.txt 계정N_아이디/비번 필요). 크롬 CDP 기반 배포 후 실동작">🔁 계정 전환(자동)...</button>
   </div>
   <div class="cm-sec">VIEW</div>
   <div class="cm-grid3">
@@ -1904,6 +1922,18 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
 }
 
 // ─── 카드 렌더링 ──────────────────────────────────────────────────────────────
+// ★멀티계정(v1.1.412): 계정 칩★ — pc_id가 b/c/d로 끝나면 '계정 B' 칩을 붙여 같은 PC의
+//   부계정임을 표시. 카드는 pc_id로 정렬돼 PC-03/PC-03b/PC-03c가 자연히 이웃하므로,
+//   칩으로 "이 카드는 PC-03의 두 번째 계정"이 한눈에 읽힌다. 본계정(숫자로 끝)은 칩 없음.
+function acctChip(pid){
+  if(!pid) return '';
+  const c = pid.slice(-1);
+  if(!'bcd'.includes(c)) return '';
+  const color = {b:'bg-purple-800/70 text-purple-200 border-purple-600',
+                 c:'bg-teal-800/70 text-teal-200 border-teal-600',
+                 d:'bg-amber-800/70 text-amber-200 border-amber-600'}[c];
+  return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${c.toUpperCase()}">계정 ${c.toUpperCase()}</span>`;
+}
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
@@ -1949,6 +1979,7 @@ function buildCard(pc) {
                🏹⚔🏰 뱃지가 아래로 밀려났다(사용자 지적). 캐릭명은 아랫줄로 분리.★ -->
           <div class="font-bold text-base flex items-center gap-0 min-w-0">
             <span class="truncate">${esc(pc.pc_id||'?')}</span>
+            ${acctChip(pc.pc_id)}
             <span class="shrink-0 flex items-center">${doneBadges}${bugBadge}</span>
           </div>
           ${activeTag?`<div class="mt-0.5 truncate">${activeTag}</div>`:''}
@@ -2162,12 +2193,18 @@ function selectAllPcs() {
   updateSelBar();
 }
 
+// ★멀티계정(v1.1.412 리뷰 결함 4/11): 업데이터 명령은 base id로★ — 업데이터는 PC 단위라
+//   base id(PC-03)로만 폴링한다. 부계정 카드(PC-03b)로 보내면 아무도 안 가져가는 고아 명령이
+//   된다. 접미사(b/c/d)를 벗겨 base로 보낸다. (매크로 명령 sendCmd는 그대로 계정별로 간다)
+function baseId(id){ return (id && 'bcd'.includes(id.slice(-1))) ? id.slice(0,-1) : id; }
 async function selUpdaterCmd(command, args={}) {
   if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
-  const n=selectedPcs.size;
+  const sent=new Set();
   for(const id of selectedPcs) {
-    await fetch(`/updater/command/${id}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command,...args})});
+    const b=baseId(id); if(sent.has(b))continue; sent.add(b);   // 같은 PC의 여러 계정 카드 중복 제거
+    await fetch(`/updater/command/${b}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command,...args})});
   }
+  const n=sent.size;
   showToast(`${n}대 업데이터 ${command} (선택 해제됨)`);
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 중복 명령 방지★
 }
@@ -2492,11 +2529,11 @@ async function settleFromMenu() {
 async function screenshotFromMenu() {
   if(!menuPcId) return;
   const id=menuPcId; closeCardMenu();
-  const res = await fetch(`/updater/command/${id}`, {
+  const res = await fetch(`/updater/command/${baseId(id)}`, {   // 업데이터=base id (멀티계정)
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({command:'screenshot'})
   });
-  if(res.ok) showToast(`📸 ${id} 스크린샷 명령 전송`);
+  if(res.ok) showToast(`📸 ${id} 스크린샷 명령 전송` + (baseId(id)!==id?` (PC 단위 — 결과는 ${baseId(id)} 버그폴더)`:''));
   else showToast(`✗ 스크린샷 명령 실패`);
 }
 
@@ -2923,7 +2960,7 @@ document.addEventListener('click',()=>{
 
 // ─── 업데이터 명령 ────────────────────────────────────────────────────────────
 async function sendUpdaterCmd(pc_id, command, args={}) {
-  const res = await fetch(`/updater/command/${pc_id}`, {
+  const res = await fetch(`/updater/command/${baseId(pc_id)}`, {   // 업데이터=base id (멀티계정)
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({command, args})
   });
@@ -2931,7 +2968,7 @@ async function sendUpdaterCmd(pc_id, command, args={}) {
 }
 
 async function bulkUpdaterCmd(command, args={}) {
-  const ids = Object.keys(state);
+  const ids = [...new Set(Object.keys(state).map(baseId))];   // 계정 카드 중복 → base로 접어 1대당 1회
   if (!ids.length) { showToast('연결된 PC 없음'); return; }
   await Promise.all(ids.map(id => sendUpdaterCmd(id, command, args)));
   showToast(`✓ 업데이터 ${command} → 전체 ${ids.length}대`);
@@ -3498,6 +3535,45 @@ async function collectInfoFromMenu() {
   if (!id) return;
   await sendCmd(id, 'collect_info', {});
   showToast(`📡 ${id} 정보수집 시작`);
+  loadCmdHistory();
+}
+// ─── 멀티계정(v1.1.412): 계정 전환 '선언' ───────────────────────────────────
+// 게임 계정 전환은 사람이 수동으로 한다. 전환한 뒤 '지금 온라인인 카드'에서 이 버튼을
+// 누르면 매크로가 account.txt를 바꾸고 재시작 → PC-03b 같은 계정 카드로 다시 접속한다.
+// (기존 카드는 오프라인으로 남는 게 정상 — 어느 계정이 켜져 있는지 그대로 보인다)
+async function setAccountFromMenu() {
+  const id = menuPcId;
+  closeCardMenu();
+  if (!id) return;
+  const v = (prompt(`${id} — 지금 게임에 로그인된 계정 라벨을 입력하세요\n` +
+                    `a = 본계정 / b, c, d = 부계정\n` +
+                    `(매크로가 재시작하며 해당 계정 카드로 갈아탑니다)`) || '').trim().toLowerCase();
+  if (!v) return;
+  if (!['a', 'b', 'c', 'd'].includes(v)) { alert('a/b/c/d 중 하나만 됩니다'); return; }
+  if (!confirm(`${id} → 계정 '${v}' 선언 (매크로 재시작됨)`)) return;
+  const ok = await sendCmd(id, 'set_account', {label: v});
+  showToast(ok ? `👥 ${id} 계정 '${v}' 선언 — 재시작 후 새 카드로 접속` : '✗ 전송 실패');
+  loadCmdHistory();
+}
+
+// ─── 멀티계정(v1.1.412): 계정 '자동 전환' ───────────────────────────────────
+// 선언(setAccount)과 달리 매크로가 크롬에서 로그아웃→해당 계정 로그인→AION2까지 자동으로
+// 한다(info.txt 계정N_아이디/비번 필요). ★크롬 CDP 기반이 깔린 뒤 실동작★ — 그 전엔
+// 매크로가 무해하게 무동작(게임 안 끊김) + 로그로 알린다.
+async function switchAccountFromMenu() {
+  const id = menuPcId;
+  closeCardMenu();
+  if (!id) return;
+  const v = (prompt(`${id} — 자동 전환할 계정 라벨 (a/b/c/d)\n` +
+                    `매크로가 크롬 로그아웃→로그인→게임 진입까지 자동으로 합니다\n` +
+                    `(info.txt에 계정N_아이디/비번이 있어야 동작)`) || '').trim().toLowerCase();
+  if (!v) return;
+  if (!['a','b','c','d'].includes(v)) { alert('a/b/c/d 중 하나만 됩니다'); return; }
+  if (!confirm(`${id} → 계정 '${v}' 자동 전환 (로그인+재시작)`)) return;
+  // ★매크로 명령이라 '지금 켜진 그 카드' pc_id로 보낸다(업데이터 명령만 base). 물리 PC엔
+  //   한 계정 매크로만 돌므로 온라인 카드가 곧 수신자다.
+  const ok = await sendCmd(id, 'switch_account', {label: v});
+  showToast(ok ? `🔁 ${id} 계정 '${v}' 자동 전환 시작` : '✗ 전송 실패');
   loadCmdHistory();
 }
 
