@@ -1179,6 +1179,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .scrollbar-thin::-webkit-scrollbar-thumb{background:linear-gradient(#6366f1,#22d3ee);border-radius:4px}
   /* ── 카드 선택 표시 v2: 상태 글로우(초록 등)와 확실히 구분 ──
      ① 시안 이중 링 + 배경 틴트 ② 우상단 "✔ 선택됨" 뱃지 ③ ★선택 중엔 미선택 카드 디밍★ */
+  /* ── 멀티계정 카드 스택(2026-08-15 사용자: "포커 카드 여러장처럼") ── */
+  .stack-layer{position:absolute;background:#0d1424;border:1px solid #374151;
+    border-radius:0.75rem;cursor:pointer;color:#94a3b8;overflow:hidden;
+    transition:background .15s,border-color .15s}
+  .stack-layer:hover{background:#16203a;border-color:#6366f1;color:#c7d2fe}
   .card-sel{outline:2.5px solid #22d3ee!important;outline-offset:2px;
     box-shadow:0 0 0 6px rgba(34,211,238,.16),0 0 28px rgba(34,211,238,.55)!important;
     background-image:linear-gradient(160deg,rgba(34,211,238,.10),transparent 55%)!important}
@@ -1938,6 +1943,16 @@ function normAcct(input){
   if(!m) { if(v) alert('1~4 중 하나만 됩니다'); return null; }
   return m;
 }
+// 스프레드 그룹 헤더용 계정 태그 — "몇번 계정 · 어떤 아이디"(2026-08-15 사용자 지시).
+// 부계정 카드(접미사) 또는 acct 필드 보고가 있는 카드만 표시. 없으면 기존 화면 불변.
+function acctTagSpread(pcid){
+  const st = state[pcid] || {};
+  const c = (pcid||'').slice(-1);
+  const isSub = 'bcd'.includes(c);
+  if (!isSub && !st.acct_id) return '';
+  const n = isSub ? ({b:2,c:3,d:4}[c]) : (st.acct_num || 1);
+  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}${st.acct_id?` · ${esc(st.acct_id)}`:''}</span>`;
+}
 function acctChip(pid){
   if(!pid) return '';
   const c = pid.slice(-1);
@@ -1990,12 +2005,13 @@ function buildCard(pc) {
           <!-- ★뱃지는 PC명과 같은 줄에 고정(shrink-0). 예전엔 flex-wrap 한 줄에
                캐릭터명 태그까지 같이 넣어서, 정보수집으로 캐릭명이 붙는 순간
                🏹⚔🏰 뱃지가 아래로 밀려났다(사용자 지적). 캐릭명은 아랫줄로 분리.★ -->
+          <!-- ★뱃지는 PC명 '다음 줄'(2026-08-15 사용자: "뱃지 때문에 피시 이름이 짤린다 —
+               뱃지를 다음 칸으로 보내버려")★ 이름 줄엔 PC명+계정칩만. -->
           <div class="font-bold text-base flex items-center gap-0 min-w-0">
             <span class="truncate">${esc(pc.pc_id||'?')}</span>
             ${acctChip(pc.pc_id)}
-            <span class="shrink-0 flex items-center">${doneBadges}${bugBadge}</span>
           </div>
-          ${activeTag?`<div class="mt-0.5 truncate">${activeTag}</div>`:''}
+          ${(doneBadges||bugBadge||activeTag)?`<div class="mt-0.5 flex items-center gap-1 flex-wrap">${doneBadges}${bugBadge}${activeTag}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
@@ -2018,7 +2034,23 @@ function buildCard(pc) {
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
+    ${acctRow(pc)}
   </div>`;
+}
+
+// ★카드 맨 아래 '몇번 계정 · 어떤 아이디 · 서버' 줄(2026-08-15 사용자 지시)★ — 매크로가
+//   상태 payload(acct_num/acct_id/acct_nick/acct_server, v1.1.422+)로 보고한다.
+//   구버전 매크로는 필드가 없어 줄 자체가 안 뜬다(레이아웃 불변 = 함대 무해).
+function acctRow(pc){
+  if (!pc.acct_id && !pc.acct_num) return '';
+  const c = (pc.pc_id||'').slice(-1);
+  const n = pc.acct_num || ({b:2,c:3,d:4}[c] || 1);
+  return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
+      <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
+      <span class="truncate" title="${esc(pc.acct_id||'')}">${esc(pc.acct_id||'')}</span>
+      ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
+      ${pc.acct_server?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(pc.acct_server)}</span>`:''}
+    </div>`;
 }
 
 // ─── 드래그 순서 관리 ─────────────────────────────────────────────────────────
@@ -2099,16 +2131,56 @@ function setupDrag(gridId, orderKey) {
   });
 }
 
+// ─── 멀티계정 카드 스택 (2026-08-15 사용자: "아이디 2개면 카드가 포커게임 카드 여러장처럼
+//     겹쳐 보이게 — 3개면 3개, 4개면 4개") ─────────────────────────────────────
+// base(물리 PC)별로 계정 카드를 묶어 맨 위 1장 + 뒤에 층층이 엿보이는 레이어로 그린다.
+// 맨 위 = 클릭으로 앞세운 카드 > 온라인 카드 > 최근 활동 순. ★전환되면 온라인 카드가 자동으로
+// 맨 위가 되므로 '내용도 그 계정 것으로 바뀜'이 저절로 성립(계정마다 pc_id·데이터 분리).★
+// 장수 = max(실제 계정 카드 수, 매크로가 보고한 자격증명 계정 수 acct_total).
+// 단일 계정 PC는 buildCard 그대로 = 함대 17대 화면 불변.
+let stackFront = {};   // base → 사용자가 클릭으로 앞세운 pc_id
+function stackShow(base, pcid){ stackFront[base] = pcid; renderCards(); }
+function buildStack(s){
+  if (s.n <= 1) return buildCard(s.top);
+  const LH = 18;                       // 뒤 카드가 엿보이는 층 높이(px)
+  const ghosts = s.list.filter(p => p !== s.top);
+  let layers = '';
+  for (let k = s.n - 1; k >= 1; k--) { // k = 깊이(클수록 더 뒤)
+    const g = ghosts[k-1];             // 실카드 없으면(자격증명만 선언) 빈 층
+    const c = g ? (g.pc_id||'').slice(-1) : '';
+    const num = g ? (g.acct_num || ({b:2,c:3,d:4}[c] || 1)) : '';
+    const on = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).online) : false;
+    const lab = g ? `계정 ${num} · ${esc(g.pc_id)}${on?'':' · offline'}` : '계정 (미접속)';
+    layers += `<div class="stack-layer" style="top:${LH*(s.n-1-k)}px;left:${5*k}px;right:${5*k}px;bottom:8px;z-index:${5-k}"
+      ${g?`onclick="stackShow('${s.base}','${g.pc_id}')" title="클릭하면 이 계정 카드를 앞으로"`:''}>
+      <div class="px-3 flex items-center" style="height:${LH-2}px;font-size:10px">${lab}</div></div>`;
+  }
+  return `<div class="relative" style="padding-top:${LH*(s.n-1)}px">${layers}
+    <div class="relative" style="z-index:6">${buildCard(s.top)}</div></div>`;
+}
+
 function renderCards() {
   const pcs = Object.values(state).sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
-  const onlineAll  = pcs.filter(p=>(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
-  const offlineAll = pcs.filter(p=>!(STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online);
-  const online  = sortByOrder(onlineAll,  DRAG_ORDER_KEY_ON);
-  const offline = sortByOrder(offlineAll, DRAG_ORDER_KEY_OFF);
+  const groups = {};
+  pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
+  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
+  const stacks = Object.entries(groups).map(([b, list]) => {
+    let top = list.find(p => p.pc_id === stackFront[b]);
+    if (!top) top = list.find(isOn)
+      || list.slice().sort((x,y)=>String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
+    const n = Math.min(4, Math.max(list.length, ...list.map(p => p.acct_total || 1)));
+    return {base: b, list, top, n, online: list.some(isOn)};
+  });
+  const onlineAll  = stacks.filter(s=>s.online);
+  const offlineAll = stacks.filter(s=>!s.online);
+  const byTop = arr => { const m={}; arr.forEach(s=>m[s.top.pc_id]=s); return m; };
+  const om = byTop(onlineAll), fm = byTop(offlineAll);
+  const online  = sortByOrder(onlineAll.map(s=>s.top),  DRAG_ORDER_KEY_ON ).map(t=>om[t.pc_id]);
+  const offline = sortByOrder(offlineAll.map(s=>s.top), DRAG_ORDER_KEY_OFF).map(t=>fm[t.pc_id]);
   const go  = document.getElementById('grid-online');
   const gof = document.getElementById('grid-offline');
-  go.innerHTML  = online.length  ? online.map(buildCard).join('')  : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
-  gof.innerHTML = offline.length ? offline.map(buildCard).join('') : '';
+  go.innerHTML  = online.length  ? online.map(buildStack).join('')  : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
+  gof.innerHTML = offline.length ? offline.map(buildStack).join('') : '';
   document.getElementById('online-count').textContent  = `(${online.length})`;
   document.getElementById('offline-count').textContent = `(${offline.length})`;
   document.getElementById('offline-section').classList.toggle('hidden', offline.length===0);
@@ -3361,6 +3433,7 @@ function renderCharTable() {
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
           <span>${pc}</span>
+          ${acctTagSpread(pc)}
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
           ${serverTag}${kinaTag}${redBadge}
           <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
