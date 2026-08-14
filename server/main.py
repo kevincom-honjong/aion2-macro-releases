@@ -2178,6 +2178,7 @@ function setupDrag(gridId, orderKey) {
 // 장수 = max(실제 계정 카드 수, 매크로가 보고한 자격증명 계정 수 acct_total).
 // 단일 계정 PC는 buildCard 그대로 = 함대 17대 화면 불변.
 let stackFront = {};   // base → 사용자가 클릭으로 앞세운 pc_id
+let stackLastOn = {};  // base → 마지막으로 관측된 온라인 pc_id (전환 감지 → 고정 자동 해제)
 function stackShow(base, pcid){ stackFront[base] = pcid; renderCards(); }
 function buildStack(s){
   if (s.n <= 1) return buildCard(s.top);
@@ -2204,6 +2205,11 @@ function renderCards() {
   pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
   const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
   const stacks = Object.entries(groups).map(([b, list]) => {
+    // ★계정이 실제로 바뀌면(온라인 카드가 달라지면) 수동 고정(stackFront)을 자동 해제★ —
+    //   "전환하면 알아서 그 카드로 바뀌는 거지?"(2026-08-15 사용자)가 수동 고정보다 우선.
+    //   고정은 같은 세션 안에서 뒷계정 데이터를 잠깐 볼 때만 유지된다.
+    const onNow = (list.find(isOn) || {}).pc_id || '';
+    if (stackLastOn[b] !== onNow) { delete stackFront[b]; stackLastOn[b] = onNow; }
     let top = list.find(p => p.pc_id === stackFront[b]);
     if (!top) top = list.find(isOn)
       || list.slice().sort((x,y)=>String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
