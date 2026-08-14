@@ -1973,12 +1973,29 @@ function normAcct(input){
 // 부계정 카드(접미사) 또는 acct 필드 보고가 있는 카드만 표시. 없으면 기존 화면 불변.
 function acctTagSpread(pcid){
   const st = state[pcid] || {};
-  const c = (pcid||'').slice(-1);
-  const isSub = 'bcd'.includes(c);
+  const isSub = 'bcd'.includes((pcid||'').slice(-1));
   // 본계정도 멀티계정 PC면 '계정 1' 표시 (2026-08-15 사용자: "계정1은 안 나온다")
   if (!isSub && !st.acct_id && !isMultiAcct(pcid)) return '';
-  const n = isSub ? ({b:2,c:3,d:4}[c]) : (st.acct_num || 1);
-  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}${st.acct_id?` · ${esc(st.acct_id)}`:''}</span>`;
+  const n = acctNumOf(pcid);
+  // 자기 카드에 없으면 전 계정 지도에서 — 접속 안 한 계정도 아이디가 나온다
+  const id = st.acct_id || groupAcctMaps(baseId(pcid)).ids[n] || '';
+  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}${id?` · ${esc(id)}`:''}</span>`;
+}
+// ★전 계정 지도(v1.1.424)★ — 살아있는 매크로가 info.txt의 전 계정 아이디/서버를 통째로
+// 보고(acct_ids/acct_servers, 키="1".."4")하므로, 접속한 적 없는 계정 카드도 표기 가능
+// (사용자: "계정1에 아이디가 안 나오네 / 계정2 서버를 못 읽는 것 같네").
+function groupAcctMaps(base){
+  const ids = {}, servers = {};
+  Object.values(state).forEach(p=>{
+    if (baseId(p.pc_id||'') !== base) return;
+    Object.assign(ids, p.acct_ids||{});
+    Object.assign(servers, p.acct_servers||{});
+  });
+  return {ids, servers};
+}
+function acctNumOf(pcid){
+  const c = (pcid||'').slice(-1);
+  return 'bcd'.includes(c) ? ({b:2,c:3,d:4}[c]) : ((state[pcid]||{}).acct_num || 1);
 }
 // 이 PC가 멀티계정인가 — 형제 계정 카드가 있거나(접미사 카드 존재) 매크로가 acct_total>1 보고.
 function isMultiAcct(pid){
@@ -2049,7 +2066,9 @@ function buildCard(pc) {
                이름 옆" → "이름이 또 짤리고 뱃지가 두 줄"). 칩이 이름 줄에 있으면 긴 상태
                문구와 겹쳐 PC명이 'PC...'로 뭉개졌다.★ -->
           <div class="font-bold text-base flex items-center gap-0">
-            <span class="shrink-0">${esc(pc.pc_id||'?')}</span>
+            <!-- ★접미사(PC-20b) 노출 금지(v1.1.424 사용자: "20b 필요없어 그냥 20 하면 되고")
+                 — 계정은 아랫줄 [계정 N] 칩이 말한다. 단일 계정 PC는 원래 접미사 없음.★ -->
+            <span class="shrink-0">${esc(baseId(pc.pc_id||'')||'?')}</span>
             <span class="shrink-0 flex items-center">${bugBadge}</span>
           </div>
           ${(acctChip(pc.pc_id)||doneBadges||activeTag)?`<div class="mt-0.5 flex items-center gap-1 whitespace-nowrap overflow-hidden min-w-0">${acctChip(pc.pc_id)}${doneBadges}${activeTag}</div>`:''}
@@ -2086,13 +2105,16 @@ function buildCard(pc) {
 function acctRow(pc){
   // 멀티계정 PC면 acct 필드(v1.1.422+ 매크로)가 아직 없어도 '몇번 계정'만이라도 표시
   if (!pc.acct_id && !pc.acct_num && !isMultiAcct(pc.pc_id)) return '';
-  const c = (pc.pc_id||'').slice(-1);
-  const n = pc.acct_num || ({b:2,c:3,d:4}[c] || 1);
+  const n = acctNumOf(pc.pc_id);
+  // 자기 카드에 값이 없으면 전 계정 지도에서(v1.1.424) — 접속 안 한 계정도 채워진다
+  const maps = groupAcctMaps(baseId(pc.pc_id));
+  const id = pc.acct_id || maps.ids[n] || '';
+  const srv = maps.servers[n] || pc.acct_server || '';
   return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
       <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
-      <span class="truncate" title="${esc(pc.acct_id||'')}">${esc(pc.acct_id||'')}</span>
+      <span class="truncate" title="${esc(id)}">${esc(id)}</span>
       ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
-      ${pc.acct_server?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(pc.acct_server)}</span>`:''}
+      ${srv?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(srv)}</span>`:''}
     </div>`;
 }
 
@@ -2191,10 +2213,11 @@ function buildStack(s){
   let layers = '';
   for (let k = s.n - 1; k >= 1; k--) { // k = 깊이(클수록 더 뒤)
     const g = ghosts[k-1];             // 실카드 없으면(자격증명만 선언) 빈 층
-    const c = g ? (g.pc_id||'').slice(-1) : '';
-    const num = g ? (g.acct_num || ({b:2,c:3,d:4}[c] || 1)) : '';
+    const num = g ? acctNumOf(g.pc_id) : '';
     const on = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).online) : false;
-    const lab = g ? `계정 ${num} · ${esc(g.pc_id)}${on?'':' · offline'}` : '계정 (미접속)';
+    // 접미사 pc_id 대신 아이디(전 계정 지도)로 — "20b" 노출 금지(v1.1.424 사용자)
+    const gid = g ? (g.acct_id || groupAcctMaps(s.base).ids[num] || '') : '';
+    const lab = g ? `계정 ${num}${gid?` · ${esc(gid)}`:''}${on?'':' · offline'}` : '계정 (미접속)';
     layers += `<div class="stack-layer" style="top:${LH*(s.n-1-k)}px;left:${5*k}px;right:${5*k}px;bottom:8px;z-index:${5-k}"
       ${g?`onclick="stackShow('${s.base}','${g.pc_id}')" title="클릭하면 이 계정 카드를 앞으로"`:''}>
       <div class="px-3 flex items-center" style="height:${LH-2}px;font-size:10px">${lab}</div></div>`;
@@ -2616,8 +2639,9 @@ function openCardMenu(pc_id, e) {
   const pc=state[pc_id]||{};
   const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
   const ver=pc.macro_version?`v${pc.macro_version}`:'';
+  const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${acctNumOf(pc_id)}</span>` : '';
   document.getElementById('menu-pc-label').innerHTML=
-    `<span class="font-bold text-gray-100">${pc_id}</span>`+
+    `<span class="font-bold text-gray-100">${baseId(pc_id)}${_mAcct}</span>`+
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
   refreshAcctButtons(pc_id);   // 계정 1~4 버튼 활성/비활성 (있는 계정만, 현재 계정 ✓)
@@ -3481,15 +3505,18 @@ function renderCharTable() {
              (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
     }).length;
     const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
-    const pcServer = (state[pc] || {}).server || '';
-    const serverTag = pcServer ? ` <span class="text-cyan-400 text-xs font-normal ml-1">[${pcServer}]</span>` : '';
+    // ★서버는 계정별 우선(v1.1.424, 사용자: "2계정 서버를 못 읽는 것 같네")★ —
+    //   info.txt 계정N_서버(지도) > 그 카드의 acct_server > 게임 감지 공통 서버 순.
+    const pcServer = groupAcctMaps(baseId(pc)).servers[acctNumOf(pc)]
+                  || (state[pc] || {}).acct_server || (state[pc] || {}).server || '';
+    const serverTag = pcServer ? ` <span class="text-cyan-400 text-xs font-normal ml-1">[${esc(pcServer)}]</span>` : '';
     const pcKinaRaw = pcRows[0]?.total_kina;
     const kinaTag = pcKinaRaw ? ` <span class="text-yellow-300 text-xs font-normal ml-1">₭${Number(pcKinaRaw).toLocaleString()}</span>` : '';
     html += `<tr class="bg-gray-700/80 cursor-pointer" onclick="togglePcGroup('${pc}')">
       <td colspan="23" class="px-3 py-2 font-bold text-gray-100"><!-- ★colspan=컬럼 수와 동기★ 회랑 열 추가 때 22 그대로라 마지막 열 위가 빈칸(사용자: "회랑 위에 아무것도 없고 짤려있다") -->
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
-          <span>${pc}</span>
+          <span>${baseId(pc)}</span><!-- ★접미사(PC-20b) 노출 금지(사용자) — 계정은 태그가 말한다★ -->
           ${acctTagSpread(pc)}
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
           ${serverTag}${kinaTag}${redBadge}
