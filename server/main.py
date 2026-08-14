@@ -1442,6 +1442,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="selCmd('start')" class="chip chip-green">▶ 시작</button>
     <button onclick="selCmd('exit')" class="chip chip-red">✕ 종료</button>
     <button onclick="selUpdaterCmd('update')" class="chip chip-cyan">↑ 업데이트+재시작</button>
+    <button onclick="switchAccountSelected()" class="chip chip-purple"
+            title="선택한 PC들을 한꺼번에 지정 계정(1~4)으로 자동 전환 — 각 PC가 크롬 로그아웃→로그인→게임 진입 (물리 PC당 1건, 온라인 카드로 전송)">🔁 계정전환</button>
   </div>
 
   <!-- 그룹 3: 콘텐츠 -->
@@ -1926,6 +1928,16 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
 // ★멀티계정(v1.1.412): 계정 칩★ — pc_id가 b/c/d로 끝나면 '계정 B' 칩을 붙여 같은 PC의
 //   부계정임을 표시. 카드는 pc_id로 정렬돼 PC-03/PC-03b/PC-03c가 자연히 이웃하므로,
 //   칩으로 "이 카드는 PC-03의 두 번째 계정"이 한눈에 읽힌다. 본계정(숫자로 끝)은 칩 없음.
+// ★계정 표기는 사용자에게 1/2/3/4 (2026-08-15 사용자 지시: "abcd 하지 말고 1,2,3,4로")★
+//   내부 프로토콜(account.txt·pc_id 접미사·switch_account args)은 a/b/c/d 그대로 —
+//   함대 코드·기존 카드와의 호환을 위해 표기만 숫자로 바꾼다. 변환은 이 두 함수로만.
+function acctNum(label){ return ({a:1,b:2,c:3,d:4})[label] || '?'; }
+function normAcct(input){
+  const v = (input||'').trim().toLowerCase();
+  const m = {'1':'a','2':'b','3':'c','4':'d','a':'a','b':'b','c':'c','d':'d'}[v];
+  if(!m) { if(v) alert('1~4 중 하나만 됩니다'); return null; }
+  return m;
+}
 function acctChip(pid){
   if(!pid) return '';
   const c = pid.slice(-1);
@@ -1933,7 +1945,7 @@ function acctChip(pid){
   const color = {b:'bg-purple-800/70 text-purple-200 border-purple-600',
                  c:'bg-teal-800/70 text-teal-200 border-teal-600',
                  d:'bg-amber-800/70 text-amber-200 border-amber-600'}[c];
-  return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${c.toUpperCase()}">계정 ${c.toUpperCase()}</span>`;
+  return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${acctNum(c)}">계정 ${acctNum(c)}</span>`;
 }
 function buildCard(pc) {
   const st = pc.status||'offline';
@@ -2351,6 +2363,30 @@ async function selCmd(command, args={}) {
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
+}
+
+// ─── 멀티계정: 선택 PC 일괄 자동 전환 (2026-08-15 사용자: "멀티선택해서 한꺼번에") ───
+// ★물리 PC당 1건★ — 같은 PC의 계정 카드가 여러 장 선택돼도(PC-03 + PC-03b) 매크로는
+// 한 대뿐이다. 온라인 카드가 곧 수신자이므로 base별로 온라인 카드를 골라 거기로만 보낸다.
+// (오프라인 카드로 보내면 아무도 안 가져가는 고아 명령 — selUpdaterCmd의 dedup과 같은 이유)
+async function switchAccountSelected() {
+  if(!selectedPcs.size){alert('PC를 선택하세요');return;}
+  const v = normAcct(prompt(
+    `선택 PC들을 전환할 계정 번호 (1~4)\n1 = 본계정 / 2,3,4 = 부계정\n` +
+    `각 PC가 크롬 로그아웃→로그인→게임 진입까지 자동 (info.txt 계정N_아이디/비번 필요)`));
+  if(!v) return;
+  const byBase = {};
+  for (const id of selectedPcs) {
+    const b = baseId(id);
+    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
+  }
+  const targets = Object.values(byBase).map(x=>x.id);
+  if(!confirm(`${targets.length}대 → 계정 ${acctNum(v)} 자동 전환\n(각 PC 재시작됨, 게임 세션 끊김)`))return;
+  await Promise.all(targets.map(id=>sendCmd(id,'switch_account',{label:v})));
+  showToast(`🔁 ${targets.length}대 계정 ${acctNum(v)} 전환 시작 (선택 해제됨)`);
+  loadCmdHistory();
+  clearSelection();
 }
 
 // ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
@@ -3549,14 +3585,13 @@ async function setAccountFromMenu() {
   const id = menuPcId;
   closeCardMenu();
   if (!id) return;
-  const v = (prompt(`${id} — 지금 게임에 로그인된 계정 라벨을 입력하세요\n` +
-                    `a = 본계정 / b, c, d = 부계정\n` +
-                    `(매크로가 재시작하며 해당 계정 카드로 갈아탑니다)`) || '').trim().toLowerCase();
+  const v = normAcct(prompt(`${id} — 지금 게임에 로그인된 계정 번호를 입력하세요\n` +
+                    `1 = 본계정 / 2, 3, 4 = 부계정\n` +
+                    `(매크로가 재시작하며 해당 계정 카드로 갈아탑니다)`));
   if (!v) return;
-  if (!['a', 'b', 'c', 'd'].includes(v)) { alert('a/b/c/d 중 하나만 됩니다'); return; }
-  if (!confirm(`${id} → 계정 '${v}' 선언 (매크로 재시작됨)`)) return;
+  if (!confirm(`${id} → 계정 ${acctNum(v)} 선언 (매크로 재시작됨)`)) return;
   const ok = await sendCmd(id, 'set_account', {label: v});
-  showToast(ok ? `👥 ${id} 계정 '${v}' 선언 — 재시작 후 새 카드로 접속` : '✗ 전송 실패');
+  showToast(ok ? `👥 ${id} 계정 ${acctNum(v)} 선언 — 재시작 후 새 카드로 접속` : '✗ 전송 실패');
   loadCmdHistory();
 }
 
@@ -3568,16 +3603,15 @@ async function switchAccountFromMenu() {
   const id = menuPcId;
   closeCardMenu();
   if (!id) return;
-  const v = (prompt(`${id} — 자동 전환할 계정 라벨 (a/b/c/d)\n` +
+  const v = normAcct(prompt(`${id} — 자동 전환할 계정 번호 (1~4)\n` +
                     `매크로가 크롬 로그아웃→로그인→게임 진입까지 자동으로 합니다\n` +
-                    `(info.txt에 계정N_아이디/비번이 있어야 동작)`) || '').trim().toLowerCase();
+                    `(info.txt에 계정N_아이디/비번이 있어야 동작)`));
   if (!v) return;
-  if (!['a','b','c','d'].includes(v)) { alert('a/b/c/d 중 하나만 됩니다'); return; }
-  if (!confirm(`${id} → 계정 '${v}' 자동 전환 (로그인+재시작)`)) return;
+  if (!confirm(`${id} → 계정 ${acctNum(v)} 자동 전환 (로그인+재시작)`)) return;
   // ★매크로 명령이라 '지금 켜진 그 카드' pc_id로 보낸다(업데이터 명령만 base). 물리 PC엔
   //   한 계정 매크로만 돌므로 온라인 카드가 곧 수신자다.
   const ok = await sendCmd(id, 'switch_account', {label: v});
-  showToast(ok ? `🔁 ${id} 계정 '${v}' 자동 전환 시작` : '✗ 전송 실패');
+  showToast(ok ? `🔁 ${id} 계정 ${acctNum(v)} 자동 전환 시작` : '✗ 전송 실패');
   loadCmdHistory();
 }
 
