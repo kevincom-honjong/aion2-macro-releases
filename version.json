@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.429",
+    "version": "1.1.430",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "bf455438ad5e166dbcb73aeb5d31769e156ad9e4a32e42f4efdb7217162e56bc",
+    "sha256": "6869ee099e455cbf2081bb3dd7313a338154fa19920b1ea08c8991505d8c9abf",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -119,6 +119,8 @@
     "hobup_buff_8.png": "6845c23954c2e83d9ad1b28a3fc9b3e2fb9ebc48b3462edcd6e4814dbaf8a82d",
     "hobupsung.png": "15e8364692ded38fb7d7ba77f55ce1a2625459f8d583ebb7356a4676f6729cbd",
     "horn_map_title.png": "ddbb330b6901ca463537ff39d1ccbd8a6364479a61dc46fb1b4988cf5675e0f9",
+    "immortal_island.png": "c80a0b9c386d2465e2f9aff7ed9ba56c2ebce2fcf7e57c099e464d5d323931bb",
+    "immortal_map_target.png": "725135f46703555ee662c3d3ecd3664b9a63c6410bf664126261556ed8fa6519",
     "ingame.png": "beea96978bb876b21e5f30d432fd36f9aff9fe97540f7af889a0d6331c392d9a",
     "internet_error.png": "e59db6169a5942ba493c9919c1b6b922f5af0c96035e21b86584328740ca9652",
     "jump_skill.png": "b73e275c607b7aadb35b15008e5e5cdcf6acd0e506e5284e2e3af6caa8ebcd24",
@@ -263,11 +265,11 @@
     "sha256": "762d8fa590bdb87351f4defa711e2a4764b541004312d4ab3d2bbb494cbd483f",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260731180619",
-  "updated_at": "2026-08-14T20:26:56",
+  "images_version": "20260814203236",
+  "updated_at": "2026-08-14T20:32:36",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.429",
+    "version": "1.1.430",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
