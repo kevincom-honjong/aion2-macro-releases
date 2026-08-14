@@ -2005,13 +2005,14 @@ function buildCard(pc) {
           <!-- ★뱃지는 PC명과 같은 줄에 고정(shrink-0). 예전엔 flex-wrap 한 줄에
                캐릭터명 태그까지 같이 넣어서, 정보수집으로 캐릭명이 붙는 순간
                🏹⚔🏰 뱃지가 아래로 밀려났다(사용자 지적). 캐릭명은 아랫줄로 분리.★ -->
-          <!-- ★뱃지는 PC명 '다음 줄'(2026-08-15 사용자: "뱃지 때문에 피시 이름이 짤린다 —
-               뱃지를 다음 칸으로 보내버려")★ 이름 줄엔 PC명+계정칩만. -->
+          <!-- ★완료 뱃지(🏹⚔🏰)는 PC명 '다음 줄', 🐛 스크린샷 뱃지는 이름 '옆' 유지
+               (2026-08-15 사용자: "뱃지는 다음 칸으로" → "스크린샷은 PC 이름 옆에 있게 해")★ -->
           <div class="font-bold text-base flex items-center gap-0 min-w-0">
             <span class="truncate">${esc(pc.pc_id||'?')}</span>
             ${acctChip(pc.pc_id)}
+            <span class="shrink-0 flex items-center">${bugBadge}</span>
           </div>
-          ${(doneBadges||bugBadge||activeTag)?`<div class="mt-0.5 flex items-center gap-1 flex-wrap">${doneBadges}${bugBadge}${activeTag}</div>`:''}
+          ${(doneBadges||activeTag)?`<div class="mt-0.5 flex items-center gap-1 flex-wrap">${doneBadges}${activeTag}</div>`:''}
         </div>
       </div>
       <div class="flex items-center gap-1 shrink-0">
