@@ -2463,6 +2463,13 @@ window.addEventListener('beforeunload', () => {
 });
 
 async function sendCmd(pc_id, command, args={}) {
+  // ★고아 명령 차단(2026-08-15)★ — '다른 계정 접속중' 카드의 pc_id로 매크로 명령을 보내면
+  //   아무도 안 가져간다(매크로는 현재 정체성 pc_id로만 수신, 15분 뒤 만료). 조용히 증발하는
+  //   대신 안내하고 막는다. 그 계정에 실행하려면 먼저 계정 전환(오른클릭 계정 N).
+  if (((state[pc_id]||{}).status) === 'other_account') {
+    showToast(`⚠️ ${pc_id}는 지금 다른 계정 접속 중 — 계정 전환 후 실행하세요`);
+    return false;
+  }
   const res=await fetch(`/command/${pc_id}`,{
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({command,args})});
