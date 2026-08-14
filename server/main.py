@@ -1949,14 +1949,27 @@ function acctTagSpread(pcid){
   const st = state[pcid] || {};
   const c = (pcid||'').slice(-1);
   const isSub = 'bcd'.includes(c);
-  if (!isSub && !st.acct_id) return '';
+  // 본계정도 멀티계정 PC면 '계정 1' 표시 (2026-08-15 사용자: "계정1은 안 나온다")
+  if (!isSub && !st.acct_id && !isMultiAcct(pcid)) return '';
   const n = isSub ? ({b:2,c:3,d:4}[c]) : (st.acct_num || 1);
   return `<span class="text-purple-300 text-xs font-normal">계정 ${n}${st.acct_id?` · ${esc(st.acct_id)}`:''}</span>`;
+}
+// 이 PC가 멀티계정인가 — 형제 계정 카드가 있거나(접미사 카드 존재) 매크로가 acct_total>1 보고.
+function isMultiAcct(pid){
+  const b = baseId(pid||'');
+  if (((state[pid]||{}).acct_total || 0) > 1) return true;
+  if ('bcd'.includes((pid||'').slice(-1))) return true;
+  return ['b','c','d'].some(s => state[b+s]);
 }
 function acctChip(pid){
   if(!pid) return '';
   const c = pid.slice(-1);
-  if(!'bcd'.includes(c)) return '';
+  if(!'bcd'.includes(c)){
+    // ★본계정도 멀티계정 PC에선 '계정 1' 칩(2026-08-15 사용자: "계정2는 나오는데 계정1은
+    //   안 나온다")★ — 단일 계정 PC(함대 17대)는 칩 없음 그대로.
+    if (!isMultiAcct(pid)) return '';
+    return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none bg-emerald-800/70 text-emerald-200 border-emerald-600" style="font-size:10px" title="같은 PC의 계정 1 (본계정)">계정 1</span>`;
+  }
   const color = {b:'bg-purple-800/70 text-purple-200 border-purple-600',
                  c:'bg-teal-800/70 text-teal-200 border-teal-600',
                  d:'bg-amber-800/70 text-amber-200 border-amber-600'}[c];
@@ -2043,7 +2056,8 @@ function buildCard(pc) {
 //   상태 payload(acct_num/acct_id/acct_nick/acct_server, v1.1.422+)로 보고한다.
 //   구버전 매크로는 필드가 없어 줄 자체가 안 뜬다(레이아웃 불변 = 함대 무해).
 function acctRow(pc){
-  if (!pc.acct_id && !pc.acct_num) return '';
+  // 멀티계정 PC면 acct 필드(v1.1.422+ 매크로)가 아직 없어도 '몇번 계정'만이라도 표시
+  if (!pc.acct_id && !pc.acct_num && !isMultiAcct(pc.pc_id)) return '';
   const c = (pc.pc_id||'').slice(-1);
   const n = pc.acct_num || ({b:2,c:3,d:4}[c] || 1);
   return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
