@@ -2316,13 +2316,17 @@ async function selCmd(command, args={}) {
 }
 
 // ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
-// 거래소 가격은 localStorage에 저장(확정) → 사이트 닫았다 열어도·서버 재배포에도 유지.
+// ★2026-08-14: 확정가의 정본을 localStorage → 서버 설정(/setting/sale_price)으로 이동★
+// localStorage는 브라우저별이라 "사이트에서 바꿨는데 함대는 옛 가격" 혼선의 근원이었다.
+// 이제 [확정]이 서버에 저장되고, 각 PC의 사냥종료 자동판매가 판매 시작마다 서버 확정가를
+// 읽는다(sale.py _fetch_dashboard_price, v1.1.410+). localStorage는 서버 불통 시 폴백 캐시.
+let salePriceServerOk=false;   // 이번 세션에 서버 확정가를 성공적으로 읽었는가
 function getSalePrice() {
   const el=document.getElementById('sale-price');
   const v=parseInt((el&&el.value)||'0',10);
   return isNaN(v)?0:v;
 }
-function isSalePriceConfirmed(){ return localStorage.getItem('sale_price_confirmed')==='1'; }
+function isSalePriceConfirmed(){ return salePriceServerOk || localStorage.getItem('sale_price_confirmed')==='1'; }
 // ─── 각성전 난이도 프리셋 (2026-07-26) ────────────────────────────────────────
 async function loadAwakenPreset(){
   try{
@@ -2342,26 +2346,41 @@ async function setAwakenPreset(v){
   }catch(e){showToast('✗ 프리셋 저장 실패');}
 }
 
-function loadSalePrice() {
+async function loadSalePrice() {
   const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
   if(!el||!btn) return;
-  const v=localStorage.getItem('sale_price');
+  // 서버 확정가 1순위 — 어느 브라우저에서 열어도 같은 값(=함대가 실제로 쓰는 값)을 보여준다
+  let v='';
+  try{
+    const r=await fetch('/setting/sale_price');
+    if(r.ok){ v=String((await r.json()).value||'').trim(); if(v)salePriceServerOk=true; }
+  }catch(e){}
+  if(!v) v=localStorage.getItem('sale_price')||'';   // 서버 불통/미설정 → 옛 로컬 캐시
   if(v) el.value=v;                       // 프리셋에 없는 옛 저장값이면 select가 빈 값으로 남는다(재확정 유도)
   if(isSalePriceConfirmed()&&el.value){ el.disabled=true; el.classList.add('opacity-60'); btn.textContent='수정'; }
   else { el.disabled=false; el.classList.remove('opacity-60'); btn.textContent='확정'; }
 }
-function toggleSalePrice() {
+async function toggleSalePrice() {
   const el=document.getElementById('sale-price'), btn=document.getElementById('sale-price-btn');
   if(isSalePriceConfirmed()){
+    // 수정 모드 진입 — 서버 확정가 자체는 그대로 살아 있다(재확정 전까지 함대는 기존가 유지)
+    salePriceServerOk=false;
     localStorage.setItem('sale_price_confirmed','0');
     el.disabled=false; el.classList.remove('opacity-60'); btn.textContent='확정'; el.focus();
   } else {
     const p=parseInt(el.value||'0',10);
     if(!p||p<=0){alert('거래소 가격을 선택하세요');return;}
+    // ★서버에 저장해야 확정 — 실패하면 확정으로 치지 않는다(함대에 안 갔는데 갔다고 보이면 안 됨)★
+    try{
+      const r=await fetch('/setting/sale_price',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({value:String(p)})});
+      if(!r.ok){showToast('✗ 가격 저장 실패 — 다시 시도하세요');return;}
+    }catch(e){showToast('✗ 가격 저장 실패 — 다시 시도하세요');return;}
+    salePriceServerOk=true;
     localStorage.setItem('sale_price', String(p));
     localStorage.setItem('sale_price_confirmed','1');
     el.disabled=true; el.classList.add('opacity-60'); btn.textContent='수정';
-    showToast(`거래소 가격 확정: ${p.toLocaleString()} (유지됨)`);
+    showToast(`거래소 가격 확정: ${p.toLocaleString()} — 전 함대 다음 판매부터 자동 적용`);
   }
 }
 async function sellAllSel() {
