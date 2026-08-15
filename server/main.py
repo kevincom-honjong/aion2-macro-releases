@@ -1554,6 +1554,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="목소리 고르기">⚙</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
+    <button onclick="openAcctModal()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-violet-900/70 hover:bg-violet-700 text-violet-100 transition-colors whitespace-nowrap" title="계정 세부정보 — PC별 계정 아이디·이메일·휴대폰 (info.txt 에서 모아옵니다)">📇 계정정보</button>
     <button id="rental-btn" onclick="openRentalModal()" class="hidden px-3 py-1 rounded-lg text-xs font-semibold bg-rose-900/70 hover:bg-rose-700 text-rose-100 transition-colors whitespace-nowrap" title="대여 계정 관리 — 이용 중지/재개 (킬스위치)">🛑 렌탈</button>
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
@@ -1904,6 +1905,23 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <span class="text-gray-500">(내 함대 20대는 영향 없음)</span>
     </div>
     <div id="rental-list" class="px-5 py-3 space-y-2 max-h-[50vh] overflow-y-auto text-sm">불러오는 중…</div>
+  </div>
+</div>
+
+<!-- 계정 세부정보(스프레드) — info.txt 계정N_* 를 PC×계정 표로 (2026-08-16) -->
+<div id="acct-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-3xl flex flex-col max-h-[85vh]">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
+      <h2 class="font-bold text-violet-300">📇 계정 세부정보</h2>
+      <div class="flex items-center gap-2">
+        <button onclick="copyAcctTable()" class="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg font-semibold transition-colors" title="엑셀에 그대로 붙여넣을 수 있게 복사">📋 복사</button>
+        <button onclick="closeAcctModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none ml-1">✕</button>
+      </div>
+    </div>
+    <div class="px-5 py-2 text-xs text-gray-500 border-b border-gray-800 shrink-0">
+      각 PC의 <b class="text-gray-400">C:\auto\info.txt</b> 에 적힌 값입니다. 고치려면 그 PC의 info.txt 를 수정하세요.
+    </div>
+    <div id="acct-table" class="flex-1 overflow-auto p-4 text-sm"></div>
   </div>
 </div>
 
@@ -2872,6 +2890,68 @@ function parsecWebFromMenu(){
   //   경로를 끊는다(대시보드는 비번 로그인이라 피싱 표적이 된다). 반환값은 안 쓴다.
   window.open(`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,'_blank','noopener');
   showToast(`🌐 파섹 웹 → ${baseId(id)} (새 탭 — 탭을 닫으면 접속도 끝납니다)`);
+}
+
+// ─── 계정 세부정보 표 (2026-08-16) ────────────────────────────────────────────
+// 각 PC info.txt 의 계정N_아이디/이메일/휴대폰 을 PC×계정 표로 편다.
+// ★한 물리 PC의 값이 형제 카드에 흩어져 있다★ — 지금 돌고 있는 계정의 매크로가 info.txt
+//   전체를 보고하는데, 계정 전환 직후엔 카드마다 최신도가 다르다. base 로 묶어 합친다
+//   (먼저 찾은 비지 않은 값 우선). 안 그러면 계정2 카드가 현역일 때 계정1 줄이 빈다.
+function acctRows(){
+  const byBase = {};
+  Object.values(state).forEach(p=>{
+    const b = baseId(p.pc_id||''); if(!b) return;
+    const m = byBase[b] || (byBase[b] = {ids:{}, emails:{}, phones:{}});
+    [['acct_ids','ids'],['acct_emails','emails'],['acct_phones','phones']].forEach(([src,dst])=>{
+      const o = p[src] || {};
+      for(const k in o){ if(o[k] && !m[dst][k]) m[dst][k] = o[k]; }
+    });
+  });
+  const rows = [];
+  Object.keys(byBase).forEach(b=>{
+    const m = byBase[b];
+    for(let n=1; n<=4; n++){
+      const k = String(n);
+      const id = m.ids[k]||'', em = m.emails[k]||'', ph = m.phones[k]||'';
+      if(!id && !em && !ph) continue;      // 아무것도 안 적은 계정은 줄을 만들지 않는다
+      rows.push({pc:b, n, id, em, ph});
+    }
+  });
+  const num = s => { const mm = String(s).match(/(\d+)/); return mm ? parseInt(mm[1]) : 9999; };
+  rows.sort((a,b)=> num(a.pc)-num(b.pc) || a.n-b.n);
+  return rows;
+}
+
+function renderAcctTable(){
+  const rows = acctRows(), el = document.getElementById('acct-table');
+  if(!rows.length){
+    el.innerHTML = '<div class="text-gray-500 py-8 text-center">아직 올라온 계정 정보가 없습니다.'
+      + '<br><span class="text-xs">각 PC의 info.txt 에 계정N_아이디 / 계정N_이메일 / 계정N_휴대폰 을 채우면 여기에 나옵니다.</span></div>';
+    return;
+  }
+  const dash = '<span class="text-gray-700">–</span>';
+  el.innerHTML = '<table class="w-full text-left border-collapse"><thead>'
+    + '<tr class="text-gray-500 text-xs border-b border-gray-700">'
+    + '<th class="py-1.5 pr-3">PC</th><th class="py-1.5 pr-3">계정</th>'
+    + '<th class="py-1.5 pr-3">플랫폼 아이디</th><th class="py-1.5 pr-3">이메일</th>'
+    + '<th class="py-1.5">휴대폰</th></tr></thead><tbody>'
+    + rows.map(r=>'<tr class="border-b border-gray-800/70 hover:bg-gray-800/40">'
+        + `<td class="py-1.5 pr-3 text-indigo-300 whitespace-nowrap">${esc(r.pc)}</td>`
+        + `<td class="py-1.5 pr-3 text-purple-300">${r.n}</td>`
+        + `<td class="py-1.5 pr-3 text-gray-200">${esc(r.id) || dash}</td>`
+        + `<td class="py-1.5 pr-3 text-gray-300">${esc(r.em) || dash}</td>`
+        + `<td class="py-1.5 text-gray-300">${esc(r.ph) || dash}</td></tr>`).join('')
+    + '</tbody></table>';
+}
+
+function openAcctModal(){ renderAcctTable(); document.getElementById('acct-modal').classList.remove('hidden'); }
+function closeAcctModal(){ document.getElementById('acct-modal').classList.add('hidden'); }
+function copyAcctTable(){
+  const t = ['PC\t계정\t플랫폼 아이디\t이메일\t휴대폰']
+    .concat(acctRows().map(r=>[r.pc, r.n, r.id, r.em, r.ph].join('\t'))).join('\n');
+  navigator.clipboard.writeText(t).then(
+    ()=>showToast('📋 복사했습니다 — 엑셀에 그대로 붙여넣으세요'),
+    ()=>showToast('복사 실패 — 브라우저가 클립보드를 막았습니다'));
 }
 
 function parsecAppFromMenu(){

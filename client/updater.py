@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.1"
+UPDATER_VERSION  = "3.1.2"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -971,6 +971,230 @@ def _cleanup_old_updaters():
                 pass
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# info.txt — 계정별로 묶은 새 폼 (2026-08-16 사용자 지시)
+# ══════════════════════════════════════════════════════════════════════════════
+# ★왜 다시 쓰나★ 예전엔 칸이 필요할 때마다 파일 ★뒤에 갖다 붙였다★. 그래서 아이디는 위,
+#   캐릭은 중간, 서버는 맨 아래로 흩어졌다(사용자: "계정1 관련된건 모아놓게 보이게해
+#   너무나눠져잇으면 헷갈려"). 이제 계정 하나의 칸은 한 덩어리로 모은다.
+#
+# ★안전장치★ info.txt 에는 pc_id 가 들어 있고, 이게 날아가면 그 PC가 PC-01 로 잡혀
+#   대시보드 카드가 충돌하는 사고가 이미 있었다. 그래서 다시 쓰기는 이렇게만 한다:
+#     ① info.txt.bak 으로 원본 백업  ② 임시파일에 쓰고 os.replace 로 원자 교체
+#     ③ ★옛 파일의 값이 전부 새 파일에 살아있는지 검증★ — 하나라도 없으면 중단하고 원본 유지
+#     ④ 한 번만 (표식 `계정1_이메일` 이 보이면 재실행 안 함)
+#     ⑤ 내가 모르는 칸은 [ 기타 ] 로 그대로 보존
+OWNER_CONTROL_KEY = "aion2_secret_2026"   # ★사용자 지시로 내장(2026-08-16)★ 공개 노출 인지·수용됨
+
+INFO_FORM = "2"          # 파일 양식 번호 — 1=옛 폼(칸이 흩어짐), 2=계정별 묶음 + 캐릭수 9칸 환산됨
+
+_PC_FIELDS = [
+    ("info_form",          "건드리지 마세요 (파일 양식 번호)"),
+    ("pc_id",              "컴퓨터마다 다르게 (PC-01, PC-02 ...)"),
+    ("control_api_key",    "관제 서버 열쇠 - 이미 채워져 있습니다"),
+    ("edition",            "비워두세요"),
+    ("token",              "비워두세요 (알림은 서버 봇이 대신 보냅니다)"),
+    ("telegram_chat_id",   "비우면 내장 기본값을 씁니다"),
+    ("screenshot_key",     "스샷 단축키"),
+    ("lan_prefix",         "내부망 대역 (예: 172.30.1.)"),
+]
+_PC_RARE = ["lan_ip", "lan_allow", "live_fps", "live_q",
+            "gemini_api_key", "anthropic_api_key", "twocaptcha_api_key"]
+
+
+def _acct_fields(n):
+    """계정 n 의 칸 목록 — 이 순서대로 한 덩어리로 쓴다."""
+    return ([f"계정{n}_아이디", f"계정{n}_비번", f"계정{n}_이메일", f"계정{n}_휴대폰",
+             f"계정{n}_서버", f"계정{n}_PIN", f"계정{n}_캐릭수"]
+            + [f"계정{n}_캐릭{i}" for i in range(1, 10)])
+
+
+def _read_kv(text):
+    kv = {}
+    for ln in text.splitlines():
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            kv[k.strip()] = v.strip()
+    return kv
+
+
+def _conv_slots(v):
+    """캐릭수 값 변환 — 옛 규칙 → 새 규칙(십의자리=비울 칸수, 일의자리=캐릭수).
+
+    ★옛 표(CHAR_SLOT_POSITIONS)는 9칸 그리드의 2~7칸이었다★ — 즉 예전에 숫자만 적은 것은
+    실제로는 '한 칸 비우고 시작'이었다. 그래서 전부 +10 하면 지금 동작이 그대로 유지된다.
+    'all' 은 예전에도 9칸 그리드 1번째부터였으므로 그냥 9.
+    """
+    v = (v or "").strip()
+    if not v:
+        return ""
+    if v.lower() == "all":
+        return "9"
+    try:
+        return str(int(v) + 10)
+    except ValueError:
+        return v
+
+
+def _build_new_info(kv):
+    """옛 kv → (새 본문, 변환된키맵, 남은키). 값은 하나도 버리지 않는다."""
+    used, out, conv, compat = set(), {}, {}, {}
+
+    def take(*names):
+        """후보 중 ★처음 나오는 값★을 쓰되, 후보 전부를 '읽은 칸'으로 표시한다.
+
+        ★전부 표시해야 한다★ — 값을 준 칸만 표시하면, 새 이름(계정1_캐릭1)에 값이 있을 때
+        옛 이름(char1)이 '안 읽은 칸'으로 남아 [ 기타 ]에 그대로 다시 찍힌다. 같은 값이 파일에
+        두 번 보이는 셈이라, 계정별로 묶어놓은 의미가 없어진다.
+        """
+        val = ""
+        for nm in names:
+            if nm in kv:
+                used.add(nm)
+                if kv[nm] and not val:
+                    val = kv[nm]
+        return val
+
+    for k, _ in _PC_FIELDS:
+        out[k] = take(k)
+    for k in _PC_RARE:
+        out[k] = take(k)
+    # ★양식 번호는 이 함수가 정한다★ — 옛 파일 값을 그대로 물려받으면 안 된다.
+    #   이 값이 곧 "캐릭수가 9칸 기준으로 환산됐다"는 보증이고, 매크로가 이걸 보고
+    #   환산 보정을 걸지 말지 정한다.
+    out["info_form"] = INFO_FORM
+    if not out.get("control_api_key"):
+        out["control_api_key"] = OWNER_CONTROL_KEY
+    if not out.get("pc_id"):
+        out["pc_id"] = take("pc_name") or "PC-??"
+    if not out.get("screenshot_key"):
+        out["screenshot_key"] = "ctrl+q"
+
+    for n in range(1, 5):
+        lab = "abcd"[n - 1]
+        base = (n == 1)
+        out[f"계정{n}_아이디"] = take(f"계정{n}_아이디", f"{lab}_web_id")
+        out[f"계정{n}_비번"]   = take(f"계정{n}_비번",   f"{lab}_web_pw")
+        out[f"계정{n}_이메일"] = take(f"계정{n}_이메일", f"{lab}_email")
+        out[f"계정{n}_휴대폰"] = take(f"계정{n}_휴대폰", f"{lab}_phone")
+        out[f"계정{n}_서버"]   = take(f"계정{n}_서버", f"{lab}_server", *(["server"] if base else []))
+        out[f"계정{n}_PIN"]    = take(f"계정{n}_PIN", f"{lab}_password_digits",
+                                     *(["password_digits"] if base else []))
+        # ★캐릭수만은 옛 키를 '소비하지 않고' 원래 값 그대로 남긴다(2026-08-16)★
+        #   업데이트는 ①업데이터 자가갱신 → ②info.txt 이관 → ③매크로 exe 다운로드(75MB, 수 분)
+        #   순서라, ②와 ③ 사이에는 ★옛 매크로가 새 파일을 읽는 구간★이 있다. 이때 옛 매크로가
+        #   환산된 값(16)을 옛 규칙으로 해석하면 한 칸 어긋난 칸을 누른다(20대 동시).
+        #   옛 키(total_slots / b_total_slots …)를 원래 값으로 남겨두면 옛 매크로는 그걸 읽어
+        #   지금까지와 똑같이 동작하고, 새 매크로는 계정N_캐릭수를 우선해서 새 규칙으로 읽는다.
+        _legacy_key = f"{lab}_total_slots" if not base else "total_slots"
+        _slots_raw = (kv.get(f"계정{n}_캐릭수") or kv.get(_legacy_key) or "").strip()
+        used.add(f"계정{n}_캐릭수")
+        _new = _conv_slots(_slots_raw)
+        out[f"계정{n}_캐릭수"] = _new
+        if _slots_raw and _new != _slots_raw:
+            conv[f"계정{n}_캐릭수"] = (_slots_raw, _new)
+        if kv.get(_legacy_key):
+            compat[_legacy_key] = kv[_legacy_key]      # 원래 값 그대로 보존
+            used.add(_legacy_key)
+        for i in range(1, 10):
+            out[f"계정{n}_캐릭{i}"] = take(f"계정{n}_캐릭{i}", *([f"char{i}"] if base else []))
+
+    # ★신규 PC 기본 캐릭수(2026-08-16 리뷰) — 반드시 계정 루프 '뒤'★
+    #   옛 양식은 `total_slots=5` 를 미리 박아뒀다. 새 폼에서 이 칸이 비면 매크로가 모듈
+    #   기본값으로 굴러가고, 사람이 채우기 전까지 '몇 칸부터 몇 개'가 불분명해진다.
+    #   옛 total_slots=5 는 9칸 그리드의 2~6칸이었으므로 같은 뜻인 15 를 넣어둔다.
+    #   (루프 앞에 두면 루프가 빈 값으로 덮어쓴다 — 실제로 한 번 그렇게 짰다가 잡았다)
+    if not out.get("계정1_캐릭수"):
+        out["계정1_캐릭수"] = "15"
+
+    leftover = {k: v for k, v in kv.items() if k not in used and v}
+
+    L = []
+    L.append("==================  이 PC 설정  ==================")
+    for k, _ in _PC_FIELDS:
+        L.append(f"{k}={out.get(k, '')}")
+    L.append("")
+    L.append("------  거의 안 씀 (비워두세요)  ------")
+    for k in _PC_RARE:
+        L.append(f"{k}={out.get(k, '')}")
+    for n in range(1, 5):
+        L.append("")
+        L.append(f"=================={'  계정 %d  (본계정)  ' % n if n == 1 else '  계정 %d  ' % n}==================")
+        for k in _acct_fields(n):
+            L.append(f"{k}={out.get(k, '')}")
+    if compat:
+        L.append("")
+        L.append("------  예전 프로그램 호환용 (건드리지 마세요)  ------")
+        for k in sorted(compat):
+            L.append(f"{k}={compat[k]}")
+    if leftover:
+        L.append("")
+        L.append("------  기타 (예전 칸 - 지우지 마세요)  ------")
+        for k in sorted(leftover):
+            L.append(f"{k}={leftover[k]}")
+    L.append("")
+    L.append("[ 채우는 법 ]")
+    L.append("info_form        건드리지 마세요 (파일 양식 번호 - 프로그램이 씁니다)")
+    L.append("pc_id            컴퓨터마다 다르게 (PC-01, PC-02 ...)")
+    L.append("계정N_아이디     퍼플 로그인 아이디 - 비우면 그 계정은 없는 것으로 봅니다")
+    L.append("계정N_캐릭수     십의자리는 앞에서 비울 칸수, 일의자리는 캐릭 수")
+    L.append("                 6 은 9칸 중 1번째부터 6개, 16 은 2번째부터 6개, 26 은 3번째부터 6개")
+    L.append("계정N_PIN        그 계정 퍼플 재접속 PIN")
+    L.append("계정N_캐릭1~9    캐릭 이름 - 적으면 이름 읽기를 건너뜁니다. 없으면 비워두세요")
+    return "\n".join(L) + "\n", conv, leftover
+
+
+def ensure_info_txt():
+    """info.txt 를 새 폼으로 만들거나 옮긴다. 실패하면 원본을 절대 건드리지 않는다."""
+    try:
+        if not os.path.exists(INFO_TXT):
+            body, _, _ = _build_new_info({})
+            with open(INFO_TXT, "w", encoding="utf-8") as f:
+                f.write(body)
+            log(f"[업데이터] info.txt 새 폼 생성됨(키 내장) → {INFO_TXT}")
+            log("[업데이터] ※ pc_id 와 계정1_아이디/비번을 채우고 updater를 재시작하세요")
+            return
+
+        with open(INFO_TXT, encoding="utf-8-sig", errors="replace") as f:
+            old = f.read()
+        # ★판정은 양식 번호로만★ — 예전엔 '계정1_이메일 이 있으면 새 폼'으로 봤는데, 사용자가
+        #   옛 파일에 그 줄만 손으로 추가하면 ★캐릭수는 환산 안 된 채 새 폼 취급★이 돼
+        #   매크로가 한 칸 어긋난 칸을 누른다. 양식 번호는 이관이 실제로 끝나야만 찍힌다.
+        try:
+            _form = int((_read_kv(old).get("info_form") or "1").strip() or "1")
+        except ValueError:
+            _form = 1
+        if _form >= int(INFO_FORM):
+            return                                   # 이미 새 폼 — 다시 건드리지 않는다
+
+        kv = _read_kv(old)
+        body, conv, leftover = _build_new_info(kv)
+
+        # ★검증★ 옛 파일의 값이 전부 살아있나 (변환된 캐릭수는 새 값으로 확인)
+        newkv = _read_kv(body)
+        newvals = set(newkv.values())
+        conv_old = {o for o, _ in conv.values()}
+        missing = [k for k, v in kv.items()
+                   if v and v not in newvals and v not in conv_old]
+        if missing:
+            log(f"[업데이터] ★info.txt 이관 중단★ — 옮기지 못한 칸 {missing[:6]} "
+                f"→ 원본을 그대로 둡니다(동작에 지장 없음)")
+            return
+
+        shutil.copy2(INFO_TXT, INFO_TXT + ".bak")
+        tmp = INFO_TXT + ".new"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.replace(tmp, INFO_TXT)
+        log(f"[업데이터] info.txt 를 계정별 묶음 폼으로 정리했습니다 (원본: info.txt.bak)")
+        for k, (o, n) in conv.items():
+            log(f"[업데이터]   {k}: {o} → {n} (9칸 기준으로 환산 — 동작은 그대로)")
+        if leftover:
+            log(f"[업데이터]   모르는 칸 {len(leftover)}개는 [ 기타 ] 로 보존했습니다")
+    except Exception as e:
+        err(f"[업데이터] info.txt 처리 실패(원본 유지): {e}")
+
+
 def main():
     log("=" * 60)
     log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
@@ -984,52 +1208,8 @@ def main():
         os.makedirs(d, exist_ok=True)
         log(f"[업데이터] 폴더 확인: {d}")
 
-    # ── info.txt 없으면 기본 양식 생성 ──────────────────────────────────────
-    if not os.path.exists(INFO_TXT):
-        try:
-            # ★양식에 '필요한 칸이 전부' 있어야 한다(v3.1.1, 2026-08-07 사용자 지적)★
-            #   예전 양식엔 edition·control_api_key·password_digits·API키 칸이 아예 없었다.
-            #   칸이 없으면 사용자는 뭘 넣어야 하는지 모르고, 키가 없으니 렌탈은 프로그램조차
-            #   못 받는다(서버가 키로 채널을 정한다) — '조용한 실패'의 출발점이었다.
-            #   ※설명 줄에는 '='를 쓰지 않는다 — 파서가 '='가 있는 줄을 전부 항목으로 읽는다.
-            with open(INFO_TXT, 'w', encoding='utf-8') as f:
-                f.write("pc_id=PC-??\n")
-                f.write("edition=\n")               # 렌탈이면 rental (비우면 본판)
-                f.write("control_api_key=\n")       # 관제 서버 열쇠 — 없으면 프로그램을 못 받음
-                f.write("server=\n")
-                f.write("password_digits=\n")
-                f.write("token=\n")
-                f.write("telegram_chat_id=\n")
-                f.write("anthropic_api_key=\n")
-                f.write("gemini_api_key=\n")
-                f.write("twocaptcha_api_key=\n")
-                f.write("total_slots=5\n")
-                f.write("screenshot_key=ctrl+q\n")
-                # ★캐릭 이름 칸(v1.1.343+): charN=이름 을 적으면 그 슬롯은 이름 OCR을
-                #   건너뛴다(사용자 지시 — 새 양식). 비워두면 예전처럼 Gemini로 읽는다.
-                for _s in range(1, 7):
-                    f.write(f"char{_s}=\n")
-                # ★멀티계정(v1.1.412): 계정1이 본계정, 2~4는 부계정. 채우면 매크로가 웹
-                #   로그인·전환을 자동으로 한다. ★비워두면 그 계정 없음으로 인식★(사용자 지시:
-                #   4칸 다 만들어두고 딱 보고 쓰게). 부계정 전용 PIN·캐릭수는 b_/c_/d_ 접두사.
-                f.write("[ 멀티계정 - 계정1이 본계정, 비워두면 그 계정 없음 ]\n")
-                for _a in range(1, 5):
-                    f.write(f"계정{_a}_아이디=\n")
-                    f.write(f"계정{_a}_비번=\n")
-                f.write("\n")
-                f.write("[ 채우는 법 ]\n")
-                f.write("pc_id            컴퓨터마다 다르게 (PC-01, PC-02 ...)\n")
-                f.write("edition          대여판이면 rental, 본인 것이면 비워둠\n")
-                f.write("control_api_key  판매자에게 받은 열쇠 (이게 없으면 프로그램을 못 받습니다)\n")
-                f.write("server           접속하는 게임 서버 이름\n")
-                f.write("password_digits  퍼플 웹플레이 재접속 PIN\n")
-                f.write("telegram_chat_id userinfobot이 알려주는 숫자\n")
-                f.write("token            비워두세요 (알림은 서버 봇이 대신 보냅니다)\n")
-                f.write("total_slots      돌릴 캐릭터 수 (매뉴얼 참고)\n")
-            log(f"[업데이터] info.txt 기본 양식 생성됨(키·에디션 칸 포함) → {INFO_TXT}")
-            log("[업데이터] ※ pc_id / control_api_key / edition 을 채우고 updater를 재시작하세요")
-        except Exception as e:
-            err(f"[업데이터] info.txt 생성 실패: {e}")
+    # ── info.txt 새 폼(계정별 묶음) 생성 / 이관 ─────────────────────────────
+    ensure_info_txt()
 
     # ── 시작 시 자동 업데이트 (exe + 이미지) ────────────────────────────────
     log("[업데이터] 시작 업데이트 체크 중...")
