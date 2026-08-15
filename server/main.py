@@ -801,7 +801,86 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             m["status"] = "other_account"
             if live.get("macro_version"):
                 m["macro_version"] = live.get("macro_version")
+
+    # ★파섹 주소록 주입(2026-08-15)★ — 카드에 parsec_peer_id 를 붙여 [🎮 파섹] 버튼을 만든다.
+    #   ★매크로가 보고하지 않는다★. 처음엔 각 PC의 매크로가 자기 peer_id를 보고하게 만들었는데,
+    #   사용자가 정확히 짚었다: "매크로는 파섹이랑 상관이 없어". 실제로 그 설계는 순환 의존이었다 —
+    #   매크로가 죽으면 보고가 끊겨 파섹 버튼도 사라지는데, ★파섹으로 들어가야 할 상황이 바로
+    #   그 상황★이다(PC-13: 게임 끊기고 멈춰 있어 원격으로 봐야 하는 상태). 그래서 주소록은
+    #   관제컴이 파섹 계정 API에서 뽑아 POST /parsec/map 으로 밀어넣고, 서버가 들고 있는다.
+    #   → 대상 PC가 꺼져 있든 매크로가 죽었든 버튼은 항상 살아 있다.
+    pmap = await _get_parsec_map(tenant)
+    if pmap:
+        for pc in statuses:
+            n = _pc_num(pc.get("pc_id"))
+            if n is None:
+                continue
+            peer = pmap.get(str(n))
+            if peer:
+                pc["parsec_peer_id"] = peer
     return statuses
+
+
+# ─── 파섹 주소록 (관제컴 → 서버, 매크로 무관) ─────────────────────────────────
+PARSEC_MAP_SETTING = "parsec_map"
+# peer_id 는 27자 base62(+ - _) 였다(실측). 길이는 넉넉히 잡되 형식은 좁게 검증한다.
+_PEER_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
+def _pc_num(pc_id: str):
+    """'PC-18' → 18, 'PC-18b'(부계정 카드) → 18. 번호를 못 뽑으면 None.
+
+    ★부계정 접미사를 먼저 벗긴다★ — 파섹 호스트는 '물리 PC' 하나뿐이므로 같은 본체의
+    계정 카드는 모두 같은 peer_id 를 가리켜야 한다.
+    """
+    if not pc_id:
+        return None
+    s = pc_id[:-1] if pc_id[-1] in ("b", "c", "d") else pc_id
+    m = re.search(r"(\d{1,3})\s*$", s)
+    return int(m.group(1)) if m else None
+
+
+async def _get_parsec_map(tenant: str) -> dict:
+    try:
+        raw = await get_setting(ns(tenant, PARSEC_MAP_SETTING))
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+@app.post("/parsec/map")
+async def set_parsec_map(request: Request):
+    """관제컴의 updater/parsec_multi.py 가 밀어넣는 {"번호": "peer_id"} 주소록.
+
+    파섹 세션 토큰은 관제컴 밖으로 나오지 않는다 — 여기 올라오는 건 peer_id 뿐이고,
+    peer_id 만으로는 접속이 안 된다(호스트가 내 파섹 계정으로 로그인돼 있어야 한다).
+    """
+    tenant = check_api_key(request) or check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    src = body.get("map")
+    if not isinstance(src, dict):
+        raise HTTPException(status_code=400, detail="map 은 {\"번호\": \"peer_id\"} 객체여야 합니다")
+    clean: dict = {}
+    for k, v in list(src.items())[:200]:
+        ks, vs = str(k).strip(), str(v).strip()
+        if ks.isdigit() and _PEER_RE.match(vs):
+            clean[str(int(ks))] = vs          # "08" 과 "8" 을 같은 칸으로 정규화
+    await set_setting(ns(tenant, PARSEC_MAP_SETTING), json.dumps(clean, ensure_ascii=False))
+    await push_state(tenant)                   # 대시보드 즉시 반영
+    return JSONResponse({"ok": True, "count": len(clean), "skipped": len(src) - len(clean)})
+
+
+@app.get("/parsec/map")
+async def get_parsec_map(request: Request):
+    tenant = check_api_key(request) or check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    return JSONResponse({"map": await _get_parsec_map(tenant)})
 
 
 async def push_state(tenant: str = "main"):
@@ -1323,7 +1402,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .chip-red{--c:248,113,113}   .chip-cyan{--c:34,211,238}   .chip-purple{--c:192,132,252}
   .chip-pink{--c:244,114,182}  .chip-orange{--c:251,146,60} .chip-blue{--c:96,165,250}
   .chip-sky{--c:56,189,248}    .chip-yellow{--c:250,204,21} .chip-amber{--c:251,191,36}
-  .chip-emerald{--c:52,211,153} .chip-teal{--c:45,212,191}
+  .chip-emerald{--c:52,211,153} .chip-teal{--c:45,212,191} .chip-violet{--c:167,139,250}
   .sel-badge{font-size:11px;font-weight:800;color:#c7d2fe;padding:3px 11px;border-radius:999px;white-space:nowrap;
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
@@ -1751,9 +1830,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-pink"   onclick="screenshotFromMenu()">📸 스샷</button>
   </div>
   <div class="cm-sec">화면 · 원격</div>
-  <div class="cm-grid2">
+  <div class="cm-grid2" style="margin-bottom:5px">
     <button class="cm-btn chip-emerald" onclick="liveFromMenu()" title="실시간 화면 — 어디서나 됨 (Railway 경유, 960x540 · 3fps)">🖵 화면</button>
     <button class="cm-btn chip-teal" id="cm-lan" onclick="lanFromMenu()" title="내부망 직결 — 원본 해상도 + 원격 조작 (같은 내부망에서만)">⚡ 내부망 원격</button>
+  </div>
+  <div class="cm-grid2">
+    <button class="cm-btn chip-violet" id="cm-parsec-web" onclick="parsecWebFromMenu()" title="파섹 웹 — 새 탭으로 열립니다. ★탭을 여러 개 열면 여러 대를 동시에 볼 수 있습니다★ (설치 불필요, 크롬 전용, H.264). web.parsec.app 에 한 번 로그인해 두면 이후 자동 접속">🌐 파섹 웹</button>
+    <button class="cm-btn chip-purple" id="cm-parsec-app" onclick="parsecAppFromMenu()" title="파섹 앱 — 이 브라우저를 띄운 PC(관제컴)에 설치된 파섹이 열립니다. 화질·지연이 웹보다 좋지만 ★창은 한 번에 하나★라 누를 때마다 그 창이 갈아탑니다">🎮 파섹 앱</button>
   </div>
   <div class="cm-sec">UPDATER · 프로세스</div>
   <div class="cm-grid4">
@@ -2672,7 +2755,7 @@ function openCardMenu(pc_id, e) {
   menu.classList.remove('hidden');
   let top=e.clientY+4, left=e.clientX;
   if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
-  if(top+480>window.innerHeight) top=e.clientY-484;            // 메뉴 v2 실측 높이 472px
+  if(top+510>window.innerHeight) top=e.clientY-514;            // 메뉴 v2 높이 472px + 파섹 줄 30px
   if(top<4) top=4;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
@@ -2710,6 +2793,64 @@ function lanFromMenu(){
     return;
   }
   window.open(u,'_blank');
+}
+
+// ─── 파섹 원격 (2026-08-15) ───────────────────────────────────────────────────
+// 두 갈래가 있고 성격이 완전히 다르다.
+//
+//   🌐 파섹 웹 : https://web.parsec.app/?peer_id=<ID>  를 ★새 탭★으로 연다.
+//       ★다중 접속은 이쪽만 된다★ — 탭마다 독립 인스턴스(WASM+워커+WebRTC)라 여러 대를
+//       동시에 띄울 수 있다. 관제컴에 설치할 게 없다. 크롬 전용·H.264 전용.
+//       iframe으로는 못 넣는다(web.parsec.app 이 X-Frame-Options: DENY + frame-ancestors 'self').
+//
+//   🎮 파섹 앱 : parsec://peer_id=<ID>  — OS 프로토콜 핸들러라 ★이 브라우저를 띄운 PC★
+//       (=관제컴)에 설치된 파섹이 열린다. 서버나 대상 PC가 뭘 실행하는 게 아니다.
+//       화질·지연은 이쪽이 낫지만 ★창은 한 번에 하나★다: 파섹은 %APPDATA%\Parsec\lock_client
+//       를 배타 잠금(CreateFile dwShareMode=0)으로 잡아 인스턴스를 1개만 허용하고, 두 번째
+//       실행은 argv를 실행 중인 창에 넘기고 죽는다(2026-08-15 실측: 종료코드 0 + 그 창이
+//       대상 PC로 갈아탐). 앱으로도 동시에 여러 대를 띄우려면 ★포터블 모드★를 써야 한다
+//       (parsecd.exe + appdata.json + parsecd-<빌드>.dll 을 한 폴더에 두면 그 폴더에만 상태를
+//       가둬서 잠금이 갈린다 — 파섹 공식 문서가 안내하는 방식. 폴더마다 로그인 1회 필요).
+//
+// ★★URI 꼬리 `&host_secret=&a=` 를 절대 빼지 말 것 (2026-08-15 실측으로 잡은 함정)★★
+//   `parsec://peer_id=<ID>` 만 쓰면 ★1초 만에 -6107(peer 못 찾음)★ 로 죽는다. 가짜 peer_id를
+//   넣었을 때와 완전히 같은 증상이라 원인을 찾기 어렵다.
+//   원인: 셸/브라우저가 `scheme://authority` 를 `scheme://authority/` 로 ★정규화하면서 슬래시를
+//   덧붙인다★ → peer_id 가 "<ID>/" 가 돼 조회에 실패한다.
+//   파섹 자기 대시보드가 만드는 링크에 의미 없어 보이는 꼬리 `&a=` 가 붙어 있는 게 바로 이
+//   슬래시를 받아내는 완충장치다(dash.parsec.app 번들:
+//   `window.location.assign("parsec://peer_id="+e+"&host_secret="+t+"&a=")`).
+//   실측 A/B: 꼬리 없음 → -6107 즉사 / 꼬리 있음 → status 20 정상 진행(명령줄 형식과 동일).
+//   ※URI는 `&` 구분, 명령줄(parsecd.exe peer_id=x:client_vsync=1)은 `:` 구분 — 섞으면 안 된다.
+//   host_secret 은 남의 PC에 붙는 공유용이라 내 PC엔 빈 값으로 둔다.
+// ★peer_id 의 출처 = 서버 주소록(POST /parsec/map), ★매크로가 아니다★.
+//   매크로 보고에 의존하면 매크로가 죽는 순간 파섹 버튼도 사라지는데, 원격으로 들어가 봐야
+//   하는 때가 정확히 그때다(2026-08-15 사용자 지적). 서버가 주소록을 들고 있으므로 대상 PC가
+//   꺼져 있어도 버튼은 살아 있다. 서버가 카드마다(부계정 카드 포함) 이미 채워 보내준다.
+function parsecPeerOf(id){
+  return (((state[id]||{}).parsec_peer_id)||'').trim()
+      || (((state[baseId(id||'')]||{}).parsec_peer_id)||'').trim();
+}
+
+// ★조용히 죽지 않는다★ — 내부망 버튼과 같은 원칙. 안 되면 왜 안 되는지 말해준다.
+function _parsecPeerOrWarn(id){
+  const pid=parsecPeerOf(id);
+  if(!pid) showToast(`파섹 주소 없음 (${baseId(id)}) — 그 PC 파섹 이름을 번호로 바꾸고 관제컴에서 "parsec_multi.py push" 하세요`);
+  return pid;
+}
+
+function parsecWebFromMenu(){
+  const id=menuPcId; closeCardMenu();
+  const pid=_parsecPeerOrWarn(id); if(!pid) return;
+  window.open(`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,'_blank');
+  showToast(`🌐 파섹 웹 → ${baseId(id)} (새 탭 — 여러 탭 = 여러 대 동시)`);
+}
+
+function parsecAppFromMenu(){
+  const id=menuPcId; closeCardMenu();
+  const pid=_parsecPeerOrWarn(id); if(!pid) return;
+  location.href = `parsec://peer_id=${encodeURIComponent(pid)}&host_secret=&a=`;   // 꼬리 필수 — 위 주석
+  showToast(`🎮 파섹 앱 → ${baseId(id)} (관제컴 파섹이 이 PC로 갈아탑니다)`);
 }
 
 async function sellAllFromMenu() {
