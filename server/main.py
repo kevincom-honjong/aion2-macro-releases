@@ -2752,11 +2752,18 @@ function openCardMenu(pc_id, e) {
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
   refreshAcctButtons(pc_id);   // 계정 1~4 버튼 활성/비활성 (있는 계정만, 현재 계정 ✓)
+  refreshParsecButtons(pc_id); // 파섹 주소 없는 PC는 눌러도 소용없으니 흐리게
   menu.classList.remove('hidden');
-  let top=e.clientY+4, left=e.clientX;
+  let left=e.clientX;
   if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
-  if(top+510>window.innerHeight) top=e.clientY-514;            // 메뉴 v2 높이 472px + 파섹 줄 30px
-  if(top<4) top=4;
+  // ★높이는 상수로 박지 말고 실측한다(2026-08-15 리뷰)★ — 예전엔 '472px' 같은 상수를
+  //   손으로 적어뒀는데, 메뉴에 줄이 추가될 때마다 상수가 뒤처져서 화면 아래쪽 카드를 누르면
+  //   맨 밑 버튼들(업데이트·삭제)이 화면 밖으로 나가 클릭도 스크롤도 안 됐다.
+  //   hidden 을 벗긴 뒤라 offsetHeight 가 실제 값을 준다 → 앞으로 줄이 늘어도 안 깨진다.
+  const mh = menu.offsetHeight;
+  let top = e.clientY + 4;
+  if(top + mh > window.innerHeight - 8) top = window.innerHeight - 8 - mh;
+  if(top < 8) top = 8;
   menu.style.top=top+'px'; menu.style.left=left+'px';
 }
 
@@ -2827,9 +2834,22 @@ function lanFromMenu(){
 //   매크로 보고에 의존하면 매크로가 죽는 순간 파섹 버튼도 사라지는데, 원격으로 들어가 봐야
 //   하는 때가 정확히 그때다(2026-08-15 사용자 지적). 서버가 주소록을 들고 있으므로 대상 PC가
 //   꺼져 있어도 버튼은 살아 있다. 서버가 카드마다(부계정 카드 포함) 이미 채워 보내준다.
+// ★형제 카드로 폴백하지 않는다★ — 서버가 번호로 카드마다(부계정 카드 포함) 이미 채워주므로
+//   폴백은 불필요하고, 굳이 남겨두면 '내 카드엔 없는데 옆 카드 값으로 열어버리는' 추측이 된다.
+//   엉뚱한 PC를 여느니 안 여는 게 낫다는 원칙 그대로.
 function parsecPeerOf(id){
-  return (((state[id]||{}).parsec_peer_id)||'').trim()
-      || (((state[baseId(id||'')]||{}).parsec_peer_id)||'').trim();
+  return (((state[id]||{}).parsec_peer_id)||'').trim();
+}
+
+// 주소 없는 PC의 파섹 버튼은 흐리게 — 20대를 하나씩 눌러보게 만들지 않는다.
+function refreshParsecButtons(pc_id){
+  const has = !!parsecPeerOf(pc_id);
+  for(const bid of ['cm-parsec-web','cm-parsec-app']){
+    const b=document.getElementById(bid);
+    if(!b) continue;
+    b.style.opacity = has ? '' : '0.35';
+    b.title = has ? b.title : '이 PC는 파섹 주소가 없습니다 — 파섹 컴퓨터 이름을 번호로 바꾼 뒤 관제컴에서 parsec_multi.py push';
+  }
 }
 
 // ★조용히 죽지 않는다★ — 내부망 버튼과 같은 원칙. 안 되면 왜 안 되는지 말해준다.
@@ -2842,8 +2862,10 @@ function _parsecPeerOrWarn(id){
 function parsecWebFromMenu(){
   const id=menuPcId; closeCardMenu();
   const pid=_parsecPeerOrWarn(id); if(!pid) return;
-  window.open(`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,'_blank');
-  showToast(`🌐 파섹 웹 → ${baseId(id)} (새 탭 — 여러 탭 = 여러 대 동시)`);
+  // noopener — 새 탭이 opener.location 으로 이 대시보드 탭을 가짜 로그인 페이지로 바꿔치기하는
+  //   경로를 끊는다(대시보드는 비번 로그인이라 피싱 표적이 된다). 반환값은 안 쓴다.
+  window.open(`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,'_blank','noopener');
+  showToast(`🌐 파섹 웹 → ${baseId(id)} (새 탭 — 탭을 닫으면 접속도 끝납니다)`);
 }
 
 function parsecAppFromMenu(){

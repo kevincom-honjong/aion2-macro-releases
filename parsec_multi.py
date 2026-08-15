@@ -105,17 +105,33 @@ def hosts() -> list:
 
 
 def resolve(name: str, rows: list) -> dict:
-    """이름으로 호스트 찾기 — 정확일치 → 대소문자무시 → 부분일치. ★모호하면 찍지 않는다★"""
+    """이름으로 호스트 찾기 — 번호일치 → 정확일치 → 대소문자무시. ★모호하면 찍지 않는다★
+
+    ★부분일치는 절대 쓰지 않는다(2026-08-15 리뷰 critical)★ — 예전엔 폴백으로 부분일치가
+    있었는데, 1번이 아직 없는 상태에서 `grid 1` 을 치면 "11" 하나만 걸려서 ★후보가 1개니
+    모호하지도 않다고 판단하고 11번 본컴에 접속★했다. 화면엔 'slot1 → 11' 이라고 찍히지만
+    사용자는 1번을 요청한 것이고, 열린 창이 남의 계정인 줄 모른 채 조작하게 된다.
+    없으면 아무것도 안 여는 게 맞다.
+    """
+    want = _num_of(name)
+    if want is not None:
+        hit = [h for h in rows if _num_of(h["name"]) == want]
+        if len(hit) == 1:
+            return hit[0]
+        if len(hit) > 1:
+            sys.exit(f"번호 {want} 인 파섹 컴퓨터가 {len(hit)}개입니다"
+                     f"({', '.join(h['name'] for h in hit)}) — 파섹에서 이름을 서로 다르게 해주세요")
     for pred, why in ((lambda h: h["name"] == name, "정확일치"),
-                      (lambda h: h["name"].lower() == name.lower(), "대소문자무시"),
-                      (lambda h: name.lower() in h["name"].lower(), "부분일치")):
+                      (lambda h: h["name"].lower() == name.lower(), "대소문자무시")):
         hit = [h for h in rows if pred(h)]
         if len(hit) == 1:
             return hit[0]
         if len(hit) > 1:
             sys.exit(f"'{name}' 에 {len(hit)}개가 걸립니다({why}): "
                      f"{', '.join(h['name'] for h in hit)} — 이름을 더 정확히 주세요")
-    sys.exit(f"'{name}' 인 파섹 호스트가 없습니다. list 로 이름을 확인하세요")
+    sys.exit(f"'{name}' 인 파섹 컴퓨터가 없습니다.\n"
+             f"  현재 목록: {', '.join(h['name'] for h in rows)}\n"
+             f"  (비슷한 이름으로 대신 열지 않습니다 — 엉뚱한 PC를 여는 것보다 안 여는 게 낫습니다)")
 
 
 # ─── 포터블 슬롯 ──────────────────────────────────────────────────────────────
@@ -123,14 +139,45 @@ def slot_dir(n: int) -> str:
     return os.path.join(ROOT, f"slot{n}")
 
 
+def slot_ok(n: int) -> bool:
+    """슬롯이 ★완전한 한 세트★인가 — 세 파일 + 해시 일치까지.
+
+    ★parsecd.exe 존재만으로 판정하면 안 된다(2026-08-15 리뷰 critical)★ — 백신이 DLL을
+    격리하는 등으로 반쪽이 된 슬롯을 띄우면 포터블로 안 뜨고 ★설치본으로 핸드오프★된다.
+    그러면 사용자가 보고 있던 원격 세션이 엉뚱한 PC로 갈아타 버린다.
+    """
+    d = slot_dir(n)
+    exe, aj = os.path.join(d, "parsecd.exe"), os.path.join(d, "appdata.json")
+    if not (os.path.exists(exe) and os.path.exists(aj)):
+        return False
+    try:
+        import hashlib
+        with open(aj, encoding="utf-8") as f:
+            meta = json.load(f)
+        dll = os.path.join(d, meta["so_name"])
+        if not os.path.exists(dll):
+            return False
+        with open(dll, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest() == meta.get("hash")
+    except Exception:
+        return False
+
+
 def existing_slots() -> list:
+    """온전한 슬롯 번호만. 손상·잉여 폴더는 조용히 건너뛰되 손상은 알려준다."""
     if not os.path.isdir(ROOT):
         return []
-    out = []
+    out, broken = [], []
     for name in sorted(os.listdir(ROOT)):
-        if name.startswith("slot") and os.path.exists(os.path.join(ROOT, name, "parsecd.exe")):
-            out.append(int(name[4:]))
-    return sorted(out)
+        # ★엄격 파싱★ — 'slot1 - 복사본' 같은 폴더에 int() 가 그대로 죽던 것 방지
+        m = re.fullmatch(r"slot(\d+)", name)
+        if not m:
+            continue
+        n = int(m.group(1))
+        (out if slot_ok(n) else broken).append(n)
+    if broken:
+        print(f"※ 손상된 슬롯 {broken} — 건너뜁니다. `setup` 을 다시 돌리면 복구됩니다")
+    return sorted(set(out))
 
 
 def setup(n: int) -> None:
@@ -204,6 +251,8 @@ def _windows_of(pids: set) -> dict:
 
 def tile(procs: list) -> None:
     """실행한 창들을 화면에 격자로 깐다. 창을 못 찾은 건 조용히 건너뛴다(사용자가 직접 옮기면 됨)."""
+    if not procs:                    # grid --all 인데 온라인 호스트가 0대면 여기로 온다
+        return                       # (예전엔 0으로 나눠 ZeroDivisionError 트레이스백)
     user32 = ctypes.windll.user32
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)   # 좌표를 물리 픽셀로 (스케일 왜곡 방지)
@@ -213,8 +262,8 @@ def tile(procs: list) -> None:
 
     n = len(procs)
     cols = 1 if n <= 1 else (2 if n <= 4 else 3)
-    rows = (n + cols - 1) // cols
-    w, h = sw // cols, sh // rows
+    rows = max(1, (n + cols - 1) // cols)
+    w, h = max(320, sw // cols), max(240, sh // rows)
 
     pids = {p.pid for p in procs}
     # 파섹 창은 기동 후 몇 초 뒤에 뜬다 — 다 뜰 때까지 최대 40초 기다린다.
@@ -252,9 +301,15 @@ def cmd_grid(names):
 
     rows = hosts()
     if names == ["--all"]:
-        targets = [h for h in sorted(rows, key=lambda r: r["name"]) if h.get("online")]
+        # ★번호 순으로 정렬한다★ — 문자열 정렬이면 1,2,3,4 가 아니라 1,10,11,12 가 열려서
+        #   "1~4번 보는 중"인 줄 알고 10/11/12번 계정을 조작하게 된다(리뷰 지적).
+        online = [h for h in rows if h.get("online") and _num_of(h["name"]) is not None]
+        targets = sorted(online, key=lambda r: _num_of(r["name"]))
     else:
         targets = [resolve(nm, rows) for nm in names]
+
+    if not targets:
+        sys.exit("열 수 있는(온라인 + 번호 이름) 파섹 컴퓨터가 없습니다 — `list` 로 확인하세요")
 
     if len(targets) > len(slots):
         print(f"※ 슬롯이 {len(slots)}개뿐이라 앞 {len(slots)}대만 엽니다 "
@@ -262,10 +317,21 @@ def cmd_grid(names):
         targets = targets[:len(slots)]
 
     procs = []
-    for slot, h in zip(slots, targets):
-        print(f"  slot{slot} → {h['name']}")
-        procs.append(launch(slot, h["peer_id"]))
-        time.sleep(1.5)          # 동시 기동 시 서로 포트/시그널링이 엉키는 걸 피한다
+    try:
+        for slot, h in zip(slots, targets):
+            print(f"  slot{slot} → {h['name']}")
+            procs.append(launch(slot, h["peer_id"]))
+            time.sleep(1.5)      # 동시 기동 시 서로 포트/시그널링이 엉키는 걸 피한다
+    except (Exception, KeyboardInterrupt) as e:
+        # ★중간에 죽으면 그때까지 띄운 창을 회수한다★ — 안 그러면 배치도 안 된 창이 화면에
+        #   남고, 다시 grid 를 돌리면 그 슬롯은 이미 실행 중이라 argv 핸드오프로 ★조용히
+        #   다른 PC로 갈아타 버린다★(어느 창이 어느 PC인지 알 수 없게 된다).
+        for p in procs:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        sys.exit(f"기동 중 중단({type(e).__name__}) — 띄운 창 {len(procs)}개를 정리했습니다")
     tile(procs)
     print("\n각 창이 로그인 화면이면 그 슬롯은 아직 로그인 전입니다(슬롯마다 1회 필요).")
 
@@ -353,7 +419,13 @@ def main():
     elif cmd == "push":
         cmd_push()
     elif cmd == "setup":
-        setup(int(rest[0]) if rest else 4)
+        try:
+            n = int(rest[0]) if rest else 4
+        except ValueError:
+            sys.exit("슬롯 개수는 숫자입니다 (예: setup 4)")
+        if not 1 <= n <= 9:
+            sys.exit("슬롯은 1~9개만 지원합니다 (오타로 44 같은 값이 들어오면 수백 MB를 복사하게 됩니다)")
+        setup(n)
     elif cmd == "login":
         cmd_login()
     elif cmd == "grid":
