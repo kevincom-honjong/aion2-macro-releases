@@ -1420,11 +1420,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
   .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:5px}
   .cm-span2{grid-column:span 2}
-  .cm-btn{--c:148,163,184;padding:5px 6px;border-radius:8px;font-size:11.5px;font-weight:700;text-align:center;
-    color:rgb(var(--c));border:1px solid rgba(var(--c),.4);background:rgba(var(--c),.08);
+  /* ★--c 를 여기서 선언하면 안 된다(2026-08-15 리뷰)★ — .cm-btn 이 .chip-* 팔레트보다 뒤에
+     오는데 특정도가 같아서(둘 다 클래스 1개) 나중 것이 이긴다. 그래서 chip-teal/violet 등을
+     붙여도 전부 회색으로 렌더됐다(파섹 버튼만이 아니라 카드 메뉴 전체가 그랬음).
+     선언 대신 var() 폴백으로 두면 팔레트가 있으면 팔레트, 없으면 회색이 된다. */
+  .cm-btn{padding:5px 6px;border-radius:8px;font-size:11.5px;font-weight:700;text-align:center;
+    color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
+    background:rgba(var(--c,148,163,184),.08);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .cm-btn:hover{background:rgba(var(--c),.24);color:#fff;border-color:rgba(var(--c),.95);
-    box-shadow:0 0 12px -3px rgba(var(--c),.65)}
+  .cm-btn:hover{background:rgba(var(--c,148,163,184),.24);color:#fff;
+    border-color:rgba(var(--c,148,163,184),.95);
+    box-shadow:0 0 12px -3px rgba(var(--c,148,163,184),.65)}
   .cm-danger{width:100%;margin-top:9px;padding:5px;border-radius:8px;font-size:11px;font-weight:700;color:#f87171;
     border:1px dashed rgba(248,113,113,.45);background:rgba(248,113,113,.05)}
   .cm-danger:hover{background:rgba(239,68,68,.22);color:#fecaca;border-style:solid;box-shadow:0 0 14px -4px rgba(239,68,68,.6)}
