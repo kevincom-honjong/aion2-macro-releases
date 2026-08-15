@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.2"
+UPDATER_VERSION  = "3.1.3"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -986,7 +986,11 @@ def _cleanup_old_updaters():
 #     ⑤ 내가 모르는 칸은 [ 기타 ] 로 그대로 보존
 OWNER_CONTROL_KEY = "aion2_secret_2026"   # ★사용자 지시로 내장(2026-08-16)★ 공개 노출 인지·수용됨
 
-INFO_FORM = "2"          # 파일 양식 번호 — 1=옛 폼(칸이 흩어짐), 2=계정별 묶음 + 캐릭수 9칸 환산됨
+INFO_FORM = "3"          # 파일 양식 번호 — 1=옛 폼(칸이 흩어짐), 2=계정별 묶음 + 캐릭수 9칸 환산됨,
+#                          3=계정N_플랫폼 칸 추가 (퍼플/스토브 등 — 아이디와 별개, 2026-08-16)
+# ★폼을 올릴 때마다 _build_new_info 의 캐릭수 처리를 반드시 확인할 것★ — 환산(+10)은
+#   ★1→2 이관에서 단 한 번만★ 일어나야 한다. 폼 2 파일을 다시 환산하면 16이 26이 되어
+#   20대가 한 칸씩 밀린 캐릭으로 들어간다(_build_new_info 의 _src_form 가드 참조).
 
 _PC_FIELDS = [
     ("info_form",          "건드리지 마세요 (파일 양식 번호)"),
@@ -1004,8 +1008,8 @@ _PC_RARE = ["lan_ip", "lan_allow", "live_fps", "live_q",
 
 def _acct_fields(n):
     """계정 n 의 칸 목록 — 이 순서대로 한 덩어리로 쓴다."""
-    return ([f"계정{n}_아이디", f"계정{n}_비번", f"계정{n}_이메일", f"계정{n}_휴대폰",
-             f"계정{n}_서버", f"계정{n}_PIN", f"계정{n}_캐릭수"]
+    return ([f"계정{n}_플랫폼", f"계정{n}_아이디", f"계정{n}_비번", f"계정{n}_이메일",
+             f"계정{n}_휴대폰", f"계정{n}_서버", f"계정{n}_PIN", f"계정{n}_캐릭수"]
             + [f"계정{n}_캐릭{i}" for i in range(1, 10)])
 
 
@@ -1039,6 +1043,13 @@ def _conv_slots(v):
 def _build_new_info(kv):
     """옛 kv → (새 본문, 변환된키맵, 남은키). 값은 하나도 버리지 않는다."""
     used, out, conv, compat = set(), {}, {}, {}
+    # ★원본 파일의 양식 번호★ — 캐릭수 환산(+10)을 걸지 말지 정하는 유일한 근거.
+    #   폼 1 → 2 에서 딱 한 번만 환산한다. 폼 2 이상인 파일을 다시 환산하면 16이 26이 되어
+    #   전 함대가 한 칸 밀린 캐릭으로 들어간다. 폼 번호를 또 올릴 때도 이 가드가 지켜준다.
+    try:
+        _src_form = int((kv.get("info_form") or "1").strip() or "1")
+    except ValueError:
+        _src_form = 1
 
     def take(*names):
         """후보 중 ★처음 나오는 값★을 쓰되, 후보 전부를 '읽은 칸'으로 표시한다.
@@ -1073,6 +1084,8 @@ def _build_new_info(kv):
     for n in range(1, 5):
         lab = "abcd"[n - 1]
         base = (n == 1)
+        # 플랫폼(퍼플/스토브 등) — 아이디와 별개 칸(2026-08-16 사용자 지시). 옛 키는 없다.
+        out[f"계정{n}_플랫폼"] = take(f"계정{n}_플랫폼", f"{lab}_platform")
         out[f"계정{n}_아이디"] = take(f"계정{n}_아이디", f"{lab}_web_id")
         out[f"계정{n}_비번"]   = take(f"계정{n}_비번",   f"{lab}_web_pw")
         out[f"계정{n}_이메일"] = take(f"계정{n}_이메일", f"{lab}_email")
@@ -1089,7 +1102,8 @@ def _build_new_info(kv):
         _legacy_key = f"{lab}_total_slots" if not base else "total_slots"
         _slots_raw = (kv.get(f"계정{n}_캐릭수") or kv.get(_legacy_key) or "").strip()
         used.add(f"계정{n}_캐릭수")
-        _new = _conv_slots(_slots_raw)
+        # ★환산은 옛 폼(1)에서 올라올 때만★ — 폼 2 이상은 이미 9칸 기준이라 그대로 둔다.
+        _new = _conv_slots(_slots_raw) if _src_form < 2 else _slots_raw
         out[f"계정{n}_캐릭수"] = _new
         if _slots_raw and _new != _slots_raw:
             conv[f"계정{n}_캐릭수"] = (_slots_raw, _new)
@@ -1136,6 +1150,7 @@ def _build_new_info(kv):
     L.append("[ 채우는 법 ]")
     L.append("info_form        건드리지 마세요 (파일 양식 번호 - 프로그램이 씁니다)")
     L.append("pc_id            컴퓨터마다 다르게 (PC-01, PC-02 ...)")
+    L.append("계정N_플랫폼     퍼플 / 스토브 등 - 그 계정이 어느 플랫폼 것인지")
     L.append("계정N_아이디     퍼플 로그인 아이디 - 비우면 그 계정은 없는 것으로 봅니다")
     L.append("계정N_캐릭수     십의자리는 앞에서 비울 칸수, 일의자리는 캐릭 수")
     L.append("                 6 은 9칸 중 1번째부터 6개, 16 은 2번째부터 6개, 26 은 3번째부터 6개")

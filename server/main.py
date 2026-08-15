@@ -2901,8 +2901,9 @@ function acctRows(){
   const byBase = {};
   Object.values(state).forEach(p=>{
     const b = baseId(p.pc_id||''); if(!b) return;
-    const m = byBase[b] || (byBase[b] = {ids:{}, emails:{}, phones:{}});
-    [['acct_ids','ids'],['acct_emails','emails'],['acct_phones','phones']].forEach(([src,dst])=>{
+    const m = byBase[b] || (byBase[b] = {ids:{}, emails:{}, phones:{}, plats:{}});
+    [['acct_ids','ids'],['acct_emails','emails'],['acct_phones','phones'],
+     ['acct_platforms','plats']].forEach(([src,dst])=>{
       const o = p[src] || {};
       for(const k in o){ if(o[k] && !m[dst][k]) m[dst][k] = o[k]; }
     });
@@ -2912,9 +2913,9 @@ function acctRows(){
     const m = byBase[b];
     for(let n=1; n<=4; n++){
       const k = String(n);
-      const id = m.ids[k]||'', em = m.emails[k]||'', ph = m.phones[k]||'';
-      if(!id && !em && !ph) continue;      // 아무것도 안 적은 계정은 줄을 만들지 않는다
-      rows.push({pc:b, n, id, em, ph});
+      const id = m.ids[k]||'', em = m.emails[k]||'', ph = m.phones[k]||'', pl = m.plats[k]||'';
+      if(!id && !em && !ph && !pl) continue;   // 아무것도 안 적은 계정은 줄을 만들지 않는다
+      rows.push({pc:b, n, pl, id, em, ph});
     }
   });
   const num = s => { const mm = String(s).match(/(\d+)/); return mm ? parseInt(mm[1]) : 9999; };
@@ -2926,18 +2927,19 @@ function renderAcctTable(){
   const rows = acctRows(), el = document.getElementById('acct-table');
   if(!rows.length){
     el.innerHTML = '<div class="text-gray-500 py-8 text-center">아직 올라온 계정 정보가 없습니다.'
-      + '<br><span class="text-xs">각 PC의 info.txt 에 계정N_아이디 / 계정N_이메일 / 계정N_휴대폰 을 채우면 여기에 나옵니다.</span></div>';
+      + '<br><span class="text-xs">각 PC의 info.txt 에 계정N_플랫폼 / 계정N_아이디 / 계정N_이메일 / 계정N_휴대폰 을 채우면 여기에 나옵니다.</span></div>';
     return;
   }
   const dash = '<span class="text-gray-700">–</span>';
   el.innerHTML = '<table class="w-full text-left border-collapse"><thead>'
     + '<tr class="text-gray-500 text-xs border-b border-gray-700">'
     + '<th class="py-1.5 pr-3">PC</th><th class="py-1.5 pr-3">계정</th>'
-    + '<th class="py-1.5 pr-3">플랫폼 아이디</th><th class="py-1.5 pr-3">이메일</th>'
-    + '<th class="py-1.5">휴대폰</th></tr></thead><tbody>'
+    + '<th class="py-1.5 pr-3">플랫폼</th><th class="py-1.5 pr-3">아이디</th>'
+    + '<th class="py-1.5 pr-3">이메일</th><th class="py-1.5">휴대폰</th></tr></thead><tbody>'
     + rows.map(r=>'<tr class="border-b border-gray-800/70 hover:bg-gray-800/40">'
         + `<td class="py-1.5 pr-3 text-indigo-300 whitespace-nowrap">${esc(r.pc)}</td>`
         + `<td class="py-1.5 pr-3 text-purple-300">${r.n}</td>`
+        + `<td class="py-1.5 pr-3 text-teal-300 whitespace-nowrap">${esc(r.pl) || dash}</td>`
         + `<td class="py-1.5 pr-3 text-gray-200">${esc(r.id) || dash}</td>`
         + `<td class="py-1.5 pr-3 text-gray-300">${esc(r.em) || dash}</td>`
         + `<td class="py-1.5 text-gray-300">${esc(r.ph) || dash}</td></tr>`).join('')
@@ -2947,8 +2949,8 @@ function renderAcctTable(){
 function openAcctModal(){ renderAcctTable(); document.getElementById('acct-modal').classList.remove('hidden'); }
 function closeAcctModal(){ document.getElementById('acct-modal').classList.add('hidden'); }
 function copyAcctTable(){
-  const t = ['PC\t계정\t플랫폼 아이디\t이메일\t휴대폰']
-    .concat(acctRows().map(r=>[r.pc, r.n, r.id, r.em, r.ph].join('\t'))).join('\n');
+  const t = ['PC\t계정\t플랫폼\t아이디\t이메일\t휴대폰']
+    .concat(acctRows().map(r=>[r.pc, r.n, r.pl, r.id, r.em, r.ph].join('\t'))).join('\n');
   navigator.clipboard.writeText(t).then(
     ()=>showToast('📋 복사했습니다 — 엑셀에 그대로 붙여넣으세요'),
     ()=>showToast('복사 실패 — 브라우저가 클립보드를 막았습니다'));
