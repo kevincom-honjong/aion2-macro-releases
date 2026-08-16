@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.461",
+    "version": "1.1.462",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "2869f9bb67119150bf0161686583bed2376b8aa5a1109bef20a9cfe1b5d2634d",
+    "sha256": "dba8434c03ccdaa9cc51b812e1e71edca0edc0b76c76f62c4136b1798c186976",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -256,6 +256,7 @@
     "wp_exit_ok.png": "9d44b4f5e228f29c134b56952a1df517d5dc570c9e6529ffdcbf4d67d5069e72",
     "wp_exit_text.png": "6c7a0c9bc9c942ac8ac4b999ace761cc52e2981c7a3973b6dcbebc73a76e3cdd",
     "wp_host_card.png": "29a28674c86f6b69db0b78c9d4bf7dc98bc5c72dfbc12599887f54822216d145",
+    "wp_pin_prompt.png": "ea1869902a04bd61acbf89d039633fe8bd41c6aa38de6c80759dcba1db6cf709",
     "wp_run_game.png": "b3faf68f2fbf93b9ba8ea3030f8bdec58c5896e95c2930f1724232dda7b3ac35",
     "wp_start_game.png": "198b9a38f4400b3b858505e4b6584cf3d7fe844896fd610940d19c0564e896f6",
     "wp_streaming.png": "86e0255a5fee72587345b8515728cf9b63ed111b9c338ebfc2dd601811465a29",
@@ -288,11 +289,11 @@
     "sha256": "0ddfb847c9ae0feb3009a52aae592d09d90b4b8c6a4131942e31591c8e52b81b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260816172544",
-  "updated_at": "2026-08-16T17:25:44",
+  "images_version": "20260816174305",
+  "updated_at": "2026-08-16T17:43:05",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.461",
+    "version": "1.1.462",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
