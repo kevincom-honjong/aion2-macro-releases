@@ -1428,6 +1428,36 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
     background:rgba(var(--c,148,163,184),.08);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ── 계정 세부정보 표 (2026-08-16 재설계) ────────────────────────────────
+     20대×최대4계정 = 80줄이 쌓여도 읽히게: 머리줄 고정 + PC 단위 덩어리 +
+     빈 칸은 조용히. 값 칸은 ★클릭하면 그 값만 복사★(사용자 지시). */
+  .acct-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+  .acct-table thead th{position:sticky;top:0;z-index:2;background:#111827;
+    padding:9px 10px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;
+    letter-spacing:.04em;border-bottom:1px solid #374151}
+  .acct-td{padding:7px 10px;font-size:12.5px;vertical-align:middle;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    border-bottom:1px solid rgba(31,41,55,.55)}
+  /* PC가 바뀌는 첫 줄 위에만 선을 굵게 — 덩어리 경계 */
+  .acct-row.acct-group td{border-top:1px solid #374151}
+  .acct-row:hover td{background:rgba(31,41,55,.35)}
+  .acct-pc{color:#a5b4fc;font-weight:700}
+  .acct-n{text-align:center}
+  .acct-chip{display:inline-block;min-width:19px;padding:1px 6px;border-radius:6px;
+    background:rgba(167,139,250,.14);color:#c4b5fd;font-size:11px;font-weight:700}
+  .acct-plat{color:#5eead4}
+  .acct-id{color:#e5e7eb}
+  .acct-em,.acct-ph{color:#9ca3af}
+  .acct-ph{font-variant-numeric:tabular-nums}
+  /* 클릭 복사 가능한 칸 — 평소엔 조용하고 hover 때만 드러난다 */
+  .acct-cp{cursor:pointer;position:relative}
+  .acct-cp:hover .acct-val{border-bottom:1px dashed rgba(196,181,253,.6)}
+  .acct-cp:hover::after{content:'복사';position:absolute;right:6px;top:50%;
+    transform:translateY(-50%);font-size:9.5px;color:#c4b5fd;
+    background:rgba(17,24,39,.92);padding:1px 5px;border-radius:5px}
+  .acct-cp.acct-hit{background:rgba(52,211,153,.16)!important}
+  .acct-cp.acct-hit .acct-val{color:#6ee7b7}
   .cm-btn:hover{background:rgba(var(--c,148,163,184),.24);color:#fff;
     border-color:rgba(var(--c,148,163,184),.95);
     box-shadow:0 0 12px -3px rgba(var(--c,148,163,184),.65)}
@@ -1910,18 +1940,19 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
 <!-- 계정 세부정보(스프레드) — info.txt 계정N_* 를 PC×계정 표로 (2026-08-16) -->
 <div id="acct-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-3xl flex flex-col max-h-[85vh]">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-5xl flex flex-col max-h-[85vh]">
     <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 shrink-0">
-      <h2 class="font-bold text-violet-300">📇 계정 세부정보</h2>
+      <h2 class="font-bold text-violet-300">📇 계정 세부정보 <span id="acct-count" class="ml-2 text-xs font-normal text-gray-500"></span></h2>
       <div class="flex items-center gap-2">
-        <button onclick="copyAcctTable()" class="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg font-semibold transition-colors" title="엑셀에 그대로 붙여넣을 수 있게 복사">📋 복사</button>
+        <button onclick="copyAcctTable()" class="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg font-semibold transition-colors" title="표 전체를 엑셀에 그대로 붙여넣기">📋 표 전체</button>
         <button onclick="closeAcctModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none ml-1">✕</button>
       </div>
     </div>
-    <div class="px-5 py-2 text-xs text-gray-500 border-b border-gray-800 shrink-0">
-      각 PC의 <b class="text-gray-400">C:\auto\info.txt</b> 에 적힌 값입니다. 고치려면 그 PC의 info.txt 를 수정하세요.
+    <div class="px-5 py-2 text-xs text-gray-500 border-b border-gray-800 shrink-0 flex items-center justify-between gap-4">
+      <span>각 PC의 <b class="text-gray-400">C:&#92;auto&#92;info.txt</b> 에 적힌 값입니다. 고치려면 그 PC의 info.txt 를 수정하세요.</span>
+      <span class="shrink-0 text-violet-400/80">칸을 클릭하면 그 값만 복사됩니다</span>
     </div>
-    <div id="acct-table" class="flex-1 overflow-auto p-4 text-sm"></div>
+    <div id="acct-table" class="flex-1 overflow-auto text-sm"></div>
   </div>
 </div>
 
@@ -2923,28 +2954,59 @@ function acctRows(){
   return rows;
 }
 
+// ★칸 하나 = 클릭하면 그 값만 복사(2026-08-16 사용자 지시)★
+//   값을 인라인 onclick 에 넣으면 따옴표·역슬래시가 든 값에서 깨진다. data 속성 + 위임으로 받는다.
+function acctCell(val, cls, ph){
+  if(!val) return `<td class="acct-td ${cls} text-gray-700/70">${ph || '—'}</td>`;
+  return `<td class="acct-td acct-cp ${cls}" data-v="${esc(val)}" title="클릭하면 복사: ${esc(val)}">`
+       + `<span class="acct-val">${esc(val)}</span></td>`;
+}
+
 function renderAcctTable(){
   const rows = acctRows(), el = document.getElementById('acct-table');
+  const cnt = document.getElementById('acct-count');
   if(!rows.length){
-    el.innerHTML = '<div class="text-gray-500 py-8 text-center">아직 올라온 계정 정보가 없습니다.'
+    if(cnt) cnt.textContent = '';
+    el.innerHTML = '<div class="text-gray-500 py-10 text-center">아직 올라온 계정 정보가 없습니다.'
       + '<br><span class="text-xs">각 PC의 info.txt 에 계정N_플랫폼 / 계정N_아이디 / 계정N_이메일 / 계정N_휴대폰 을 채우면 여기에 나옵니다.</span></div>';
     return;
   }
-  const dash = '<span class="text-gray-700">–</span>';
-  el.innerHTML = '<table class="w-full text-left border-collapse"><thead>'
-    + '<tr class="text-gray-500 text-xs border-b border-gray-700">'
-    + '<th class="py-1.5 pr-3">PC</th><th class="py-1.5 pr-3">계정</th>'
-    + '<th class="py-1.5 pr-3">플랫폼</th><th class="py-1.5 pr-3">아이디</th>'
-    + '<th class="py-1.5 pr-3">이메일</th><th class="py-1.5">휴대폰</th></tr></thead><tbody>'
-    + rows.map(r=>'<tr class="border-b border-gray-800/70 hover:bg-gray-800/40">'
-        + `<td class="py-1.5 pr-3 text-indigo-300 whitespace-nowrap">${esc(r.pc)}</td>`
-        + `<td class="py-1.5 pr-3 text-purple-300">${r.n}</td>`
-        + `<td class="py-1.5 pr-3 text-teal-300 whitespace-nowrap">${esc(r.pl) || dash}</td>`
-        + `<td class="py-1.5 pr-3 text-gray-200">${esc(r.id) || dash}</td>`
-        + `<td class="py-1.5 pr-3 text-gray-300">${esc(r.em) || dash}</td>`
-        + `<td class="py-1.5 text-gray-300">${esc(r.ph) || dash}</td></tr>`).join('')
-    + '</tbody></table>';
+  const pcs = new Set(rows.map(r=>r.pc));
+  if(cnt) cnt.textContent = `${pcs.size}대 · 계정 ${rows.length}개`;
+
+  // PC가 바뀌는 줄에만 PC명을 찍고 위쪽에 구분선 — 20대가 쌓여도 덩어리로 읽힌다
+  let prev = null;
+  const body = rows.map(r=>{
+    const head = (r.pc !== prev); prev = r.pc;
+    return `<tr class="acct-row${head ? ' acct-group' : ''}">`
+      + `<td class="acct-td acct-pc">${head ? esc(r.pc) : ''}</td>`
+      + `<td class="acct-td acct-n"><span class="acct-chip">${r.n}</span></td>`
+      + acctCell(r.pl, 'acct-plat', '플랫폼?')
+      + acctCell(r.id, 'acct-id')
+      + acctCell(r.em, 'acct-em')
+      + acctCell(r.ph, 'acct-ph')
+      + '</tr>';
+  }).join('');
+
+  el.innerHTML = '<table class="acct-table"><colgroup>'
+    + '<col style="width:88px"><col style="width:52px"><col style="width:104px">'
+    + '<col style="width:auto"><col style="width:auto"><col style="width:132px"></colgroup><thead><tr>'
+    + '<th>PC</th><th>계정</th><th>플랫폼</th><th>아이디</th><th>이메일</th><th>휴대폰</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
 }
+
+// 위임 리스너 — 표를 다시 그려도 한 번만 붙는다
+document.addEventListener('click', function(e){
+  const td = e.target.closest && e.target.closest('#acct-table td.acct-cp');
+  if(!td) return;
+  const v = td.getAttribute('data-v') || '';
+  if(!v) return;
+  navigator.clipboard.writeText(v).then(()=>{
+    td.classList.add('acct-hit');
+    setTimeout(()=>td.classList.remove('acct-hit'), 600);
+    showToast('📋 ' + (v.length > 34 ? v.slice(0,34)+'…' : v));
+  }, ()=>showToast('복사 실패 — 브라우저가 클립보드를 막았습니다'));
+});
 
 function openAcctModal(){ renderAcctTable(); document.getElementById('acct-modal').classList.remove('hidden'); }
 function closeAcctModal(){ document.getElementById('acct-modal').classList.add('hidden'); }
