@@ -1585,7 +1585,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
     <button onclick="openAcctModal()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-violet-900/70 hover:bg-violet-700 text-violet-100 transition-colors whitespace-nowrap" title="계정 세부정보 — PC별 계정 아이디·이메일·휴대폰 (info.txt 에서 모아옵니다)">📇 계정정보</button>
-    <button id="rental-btn" onclick="openRentalModal()" class="hidden px-3 py-1 rounded-lg text-xs font-semibold bg-rose-900/70 hover:bg-rose-700 text-rose-100 transition-colors whitespace-nowrap" title="대여 계정 관리 — 이용 중지/재개 (킬스위치)">🛑 렌탈</button>
+<!-- ★[🛑 렌탈] 버튼 제거됨 (2026-08-16 사용자 지시 "렌탈 킬버튼은 없애라 이제")★
+     ★킬스위치 자체는 살아 있다★ — 서버 설정 rental_kill 은 그대로고 렌탈 테넌트는 계속
+     차단 상태다. 버튼(화면)만 뺀 것이지 차단을 푼 게 아니다.
+     되살리려면 아래 한 줄을 주석에서 꺼내면 된다 (openRentalModal·#rental-modal·
+     loadRentalTenants 는 전부 그대로 남아 있다. loadRentalTenants 는 btn 이 없으면
+     아무 것도 안 하도록 이미 가드가 있어 무해하다):
+  <button id="rental-btn" onclick="openRentalModal()" class="hidden px-3 py-1 rounded-lg text-xs font-semibold bg-rose-900/70 hover:bg-rose-700 text-rose-100 transition-colors whitespace-nowrap" title="대여 계정 관리 — 이용 중지/재개 (킬스위치)">🛑 렌탈</button>
+     화면 없이 차단을 켜고 끄려면: POST /setting/rental_kill  {"value":"친구A"} / 해제 {"value":""} -->
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
