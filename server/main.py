@@ -1560,6 +1560,103 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   button{transition:transform .15s ease,box-shadow .15s ease,background-color .15s,color .15s}
   button:hover{transform:translateY(-1px)}
   button:active{transform:translateY(0) scale(.97)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★커맨드 덱 테마 (2026-08-16)★ — 마지막에 오므로 위 규칙을 덮는다.
+   ★구조는 하나도 안 건드렸다★ — 카드 HTML에는 주인님이 지적하셨던 사고 수정이
+   여러 겹 들어 있다(이름 짤림·뱃지 두 줄·접미사 노출·드래그·우클릭). 마크업을 새로
+   짜면 그게 다 날아간다. 그래서 ★기존 클래스에 CSS만 입힌다★.
+   되돌리기: 이 블록만 지우면 예전 모습으로 완전 복귀한다.
+
+   언어: 차가운 잉크 바닥 + 따뜻한 앰버 액센트(한난 대비) / 숫자는 Bahnschrift +
+        tabular-nums / 판은 위 1px 하이라이트 + 색조 그림자 / 반경 한 체계.
+   ══════════════════════════════════════════════════════════════════════════ */
+  :root{
+    --dk-ink0:#05070d; --dk-ink1:#0c1120; --dk-ink2:#111829;
+    --dk-line:#1a2237; --dk-line2:#26314b;
+    --dk-t0:#eef2fa; --dk-t1:#9aa7c2; --dk-t2:#5c6b8a; --dk-t3:#3a4762;
+    --dk-gold:#f2b53c; --dk-gold-s:#ffd479;
+    --dk-mint:#3ddc9a; --dk-coral:#ff5d6e; --dk-cyan:#4fd3e8;
+    --dk-disp:"Bahnschrift","DIN Alternate","Segoe UI Variable Display","Pretendard",system-ui,sans-serif;
+  }
+  /* 바닥 — 기존 별밭 FX는 살리되 잉크 그라운드를 깐다 */
+  body.bg-gray-950{
+    background:
+      radial-gradient(1200px 520px at 18% -6%, #16233f 0%, transparent 62%),
+      radial-gradient(900px 420px at 92% -4%, #1d2033 0%, transparent 58%),
+      var(--dk-ink0)!important;
+  }
+  /* 숫자에 성격을 준다 — 값이 바뀌어도 자리가 안 흔들린다 */
+  .stat-num,.dk-num,#cnt-online,#cnt-completed{
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+
+  /* ── 전광판: 타일 박스 → 하이라인 스트립 ───────────────────────────── */
+  .stat-grid{
+    background:linear-gradient(160deg,#0e1526,#0a0f1c 60%,#080c17);
+    border:1px solid var(--dk-line);border-radius:18px;overflow:hidden;
+    box-shadow:0 22px 56px -30px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.05);
+    gap:0!important;position:relative;
+  }
+  .stat-grid::after{content:'';position:absolute;left:6%;top:-72%;width:48%;height:150%;
+    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.13),transparent)}
+  .stat-tile{
+    background:transparent!important;border:0!important;border-right:1px solid var(--dk-line)!important;
+    border-radius:0!important;box-shadow:none!important;padding:14px 16px!important;position:relative;z-index:1}
+  .stat-tile:last-child{border-right:0!important}
+  .stat-tile::before,.stat-tile::after{display:none!important}
+  .stat-icon{opacity:.34;font-size:13px!important}
+  .stat-num{font-size:25px!important;font-weight:700!important;line-height:1.05!important}
+  .stat-label{color:var(--dk-t3)!important;font-size:10px!important;letter-spacing:.09em;font-weight:600}
+
+  /* ── 명령 버튼줄: 묶음을 판으로 ─────────────────────────────────────── */
+  .cmd-group{background:rgba(255,255,255,.022)!important;border:1px solid var(--dk-line)!important;
+    border-radius:13px!important;box-shadow:none!important}
+  .cmd-legend{color:var(--dk-t3)!important;letter-spacing:.15em!important;font-weight:700}
+  .cmd-bar button{border-radius:9px!important}
+
+  /* ── 카드: 납작한 사각형 → 빛이 위에서 오는 판 ─────────────────────── */
+  #cards > div, .stack-wrap > div{border-radius:15px}
+  [id^="card-"]{
+    background:linear-gradient(178deg,var(--dk-ink1),#080b14)!important;
+    border-color:var(--dk-line)!important;border-radius:15px!important;
+    box-shadow:0 14px 34px -22px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.045)!important;
+    transition:border-color .18s,box-shadow .18s,transform .18s;
+  }
+  [id^="card-"]:hover{border-color:var(--dk-line2)!important;transform:translateY(-1px)}
+  /* ★이상 상태 = 테두리 대신 윗면에서 빛이 샌다★ — 20장이 액자처럼 안 보인다 */
+  [id^="card-"]::before{content:'';position:absolute;left:0;right:0;top:0;height:86px;
+    pointer-events:none;border-radius:15px 15px 0 0;opacity:0;transition:opacity .2s;
+    background:linear-gradient(180deg,var(--dk-bleed,transparent),transparent)}
+  [id^="card-"].bleed::before{opacity:1}
+  [id^="card-"].bleed::after{content:'';position:absolute;left:15px;right:15px;top:0;height:1px;
+    pointer-events:none;background:linear-gradient(90deg,transparent,var(--dk-edge),transparent);opacity:.9}
+  /* 선택 = 앰버 링 (기존 card-sel 위에 덧씌움) */
+  .card-sel{box-shadow:0 0 0 1px rgba(242,181,60,.55),0 14px 34px -22px rgba(0,0,0,.95),
+    inset 0 1px 0 rgba(255,255,255,.05)!important;border-color:rgba(242,181,60,.45)!important}
+  /* 카드 안 숫자·창고키나 */
+  [id^="card-"] .text-yellow-400{color:var(--dk-gold)!important}
+  /* 슬롯 버튼줄 — 캡슐 */
+  [id^="card-"] .slot-btn,[id^="card-"] [class*="slot"]{border-radius:7px}
+
+  /* ── 스프레드 / 모달 표 ─────────────────────────────────────────────── */
+  table thead th{background:#0d1322!important;color:var(--dk-t3)!important;
+    border-bottom:1px solid var(--dk-line2)!important;letter-spacing:.08em}
+  .acct-table thead th{background:#0d1322!important}
+  .acct-pc{color:var(--dk-t1)!important;font-family:var(--dk-disp)}
+  .acct-chip{background:rgba(242,181,60,.14)!important;color:var(--dk-gold)!important;
+    font-family:var(--dk-disp)}
+  .acct-plat{color:var(--dk-cyan)!important}
+  .acct-cp:hover .acct-val{border-bottom-color:rgba(242,181,60,.6)!important}
+  .acct-cp:hover::after{color:var(--dk-gold)!important;background:rgba(10,15,28,.94)!important}
+  .acct-cp.acct-hit{background:rgba(61,220,154,.16)!important}
+  .acct-cp.acct-hit .acct-val{color:var(--dk-mint)!important}
+
+  /* ── 섹션 헤더: 네온 밑줄 → 잉크 라인 ── */
+  main section h2::after{background:linear-gradient(90deg,var(--dk-line2),transparent)!important;
+    opacity:1!important;width:220px!important}
+
+  /* ── 상단바 버튼 ── */
+  header button,header a{border-radius:9px!important}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
@@ -2039,6 +2136,35 @@ const STATUS_CFG = {
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
+// ★커맨드 덱(2026-08-16)★ — '개입이 필요한 상태'만 카드 윗면에서 빛이 새게 한다.
+//   평상시(사냥·회랑·던전 등)는 아무 색도 안 준다 → 20장 중 문제 있는 놈만 눈에 띈다.
+//   ★상태 판정은 STATUS_CFG 를 안 건드리고 여기서만 한다★ — 라벨·뱃지·색은 그대로.
+const DK_BLEED = {
+  captcha:'#ff5d6e', dead:'#ff5d6e', error:'#ff5d6e', offline:'#ff5d6e',
+  awakening_wait:'#ff5d6e', nightmare_wait:'#ff5d6e',
+  reconnecting:'#f2b53c', paused:'#f2b53c', idle:'#f2b53c', selling:'#f2b53c',
+};
+function dkBleed(el, st){
+  if(!el) return;
+  const c = DK_BLEED[st];
+  if(c){
+    el.classList.add('bleed');
+    el.style.setProperty('--dk-bleed', c+'38');   // 22% 정도로 옅게 번지게
+    el.style.setProperty('--dk-edge', c);
+  }else{
+    el.classList.remove('bleed');
+    el.style.removeProperty('--dk-bleed'); el.style.removeProperty('--dk-edge');
+  }
+}
+// 카드가 다시 그려질 때마다 훑는다(렌더 경로가 여러 갈래라 한 곳에서 처리)
+function dkApplyBleed(){
+  document.querySelectorAll('[id^="card-"]').forEach(el=>{
+    const id = el.id.slice(5);
+    const st = ((state[id]||{}).status)||'offline';
+    dkBleed(el, st);
+  });
+}
+
 function fmtKina(n) { return (!n&&n!==0)?'–':'₭'+Number(n).toLocaleString('en-US'); }
 function fmtRate(n) { return (!n&&n!==0)?'–':'₭'+Number(n).toLocaleString('en-US')+'/hr'; }
 // 큰 키나 축약: 1천만↑ → X.X억, 1만↑ → X만 (카드 창고키나가 길고 작게 보이던 것 개선)
@@ -2429,6 +2555,7 @@ function renderCards() {
   document.getElementById('pc-count').textContent = `PC ${pcs.length}대`;
   setupDrag('grid-online',  DRAG_ORDER_KEY_ON);
   setupDrag('grid-offline', DRAG_ORDER_KEY_OFF);
+  try{ dkApplyBleed(); }catch(e){}   // 커맨드 덱: 이상 카드만 윗면 빛샘 (실패해도 화면은 멀쩡)
 }
 
 function fmtKinaKor(n) {
