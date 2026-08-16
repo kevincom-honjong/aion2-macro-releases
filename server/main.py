@@ -2414,11 +2414,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button class="cm-btn chip-amber" id="cm-bonview" style="margin-top:5px;width:100%;display:block"
           onclick="bonComViewFromMenu()"
           title="원격컴 크롬(CDP)이 파섹 웹으로 본컴에 붙어 3장 찍어 버그폴더에 올립니다. ★사냥 중이면 거부됩니다★ — 크롬 CDP가 아직 아니면 재기동이 필요해 게임이 끊기기 때문입니다. ■ 정지 후 누르세요">🖥 본컴 화면 받기</button>
-  <!-- ★본컴 런처 계정 전환(2026-08-16)★ — peer_id·파섹 비번은 ★서버가 채운다★.
-       여기서는 빈 args 로 쏘기만 한다(브라우저에 비번이 안 들어온다). -->
-  <button class="cm-btn chip-indigo" id="cm-swlauncher" style="margin-top:5px;width:100%;display:block"
-          onclick="switchLauncherFromMenu()"
-          title="원격컴 크롬이 파섹으로 본컴 런처에 붙어 계정을 갈아끼우고 게임을 실행합니다. ★게임을 먼저 끄고 누르세요★ (웹플레이 Quit Game). 파섹 아이디/비번은 ⚙ 설정에 한 번 넣어두면 됩니다">🔄 본컴 계정 전환</button>
+  <!-- ★[🔄 본컴 계정 전환] 제거(2026-08-16)★ — 위 ACTION 의 [계정 1~4] 가 같은 일을
+       ★더 정확하게★ 한다(목표 계정 번호를 알아 이메일 줄 템플릿으로 찾는다).
+       이 버튼은 '몇 번째 줄'만 물어봐서 acct_no 가 안 실렸고, 실제로 계정1 을 원하는데
+       계정2 로 가는 사고를 냈다(2026-08-16 로그: 대상=계정#1(계정None)). -->
   <div class="cm-sec">UPDATER · 프로세스</div>
   <div class="cm-grid4">
     <button class="cm-btn chip-green"  onclick="updaterCmd('start')" title="매크로 프로세스 시작 (크래시된 PC 살리기)">▶</button>
@@ -3668,23 +3667,8 @@ async function bonComViewFromMenu(){
 // ★본컴 계정 전환(2026-08-16)★ — args 를 ★비워서★ 보낸다.
 //   peer_id 와 파섹 아이디/비번은 ★서버가 배달 직전에 채운다★(enrich_cmd_args).
 //   그래서 이 브라우저는 비번을 모르고, 명령 이력에도 '***' 로만 남는다.
-async function switchLauncherFromMenu(){
-  const id=menuPcId; closeCardMenu();
-  const st=((state[id]||{}).status)||'';
-  if(st==='hunting' && !confirm(`${id} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return;
-  // ★어느 계정으로 갈지 물어본다(2026-08-16)★ — 런처 드롭다운의 '다른 계정' 목록에서
-  //   몇 번째 줄인가(1부터). 계정 2개면 1. ★3개 이상은 줄 간격이 아직 미실측★ 이라
-  //   경고를 띄운다(엉뚱한 줄을 눌러도 매크로가 '계정 안 바뀜'으로 잡아내긴 한다).
-  const raw=prompt(`${id} 의 본컴 런처에서 ★몇 번째 다른 계정★ 으로 전환할까요?\n\n`
-    +`계정이 2개면 그냥 1 (기본).\n3개 이상이면 목록 순서대로 2, 3…\n`
-    +`※3개 이상은 줄 간격이 미실측이라 빗나갈 수 있습니다 (실패로 잡힙니다)`, '1');
-  if(raw===null) return;
-  const idx=Math.max(1,parseInt(raw,10)||1);
-  if(!confirm(`${id} 의 ★본컴★ 런처를 ${idx}번째 다른 계정으로 전환하고 게임을 실행합니다.\n계속할까요?`)) return;
-  const ok=await sendCmd(id,'switch_launcher',{acct_index:idx, acct_label:`계정#${idx}`});
-  showToast(ok?`🔄 ${id} 본컴 계정 전환 지시 (${idx}번째) — 1~2분 (결과는 텔레그램)`
-              :`✗ ${id} 계정 전환 명령 실패`);
-}
+// ★switchLauncherFromMenu 제거(2026-08-16)★ — [계정 1~4] 가 대체.
+//   그 버튼은 '몇 번째 줄'만 물어 acct_no 가 안 실렸고 계정 오전환 사고를 냈다.
 
 // ★파섹 자격증명 저장(2026-08-16)★ — 서버 설정에 넣어두면 20대가 공용으로 쓴다.
 //   ★불러오지 않는다★ — 저장만 하고 화면에는 다시 안 띄운다(브라우저에 남기지 않으려고).
