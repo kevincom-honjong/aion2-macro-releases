@@ -2382,12 +2382,16 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="전 캐릭 준비 — 정산 → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">🧰 준비</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
     <button class="cm-btn chip-gray"   onclick="cardCmd('go_home')">⌂ 귀환</button>
-    <!-- ★계정 직행 버튼(2026-08-15 사용자: "계정 선언/전환 이런 건 필요없고 계정 1~4로
-         만들고, 있는 경우에만 활성화")★ — openCardMenu가 열 때마다 활성/비활성 갱신 -->
-    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)">계정 1</button>
-    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)">계정 2</button>
-    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)">계정 3</button>
-    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)">계정 4</button>
+    <!-- ★계정 버튼 = 본컴+원격컴 통짜 전환(2026-08-16 사용자 지시)★
+         "계정1 2 3 이거는 없애고, 본컴 전환하면 원격컴에 원격 계정도 바꾸게끔"
+         예전엔 원격컴 크롬만 바꾸는 switch_account 였는데, 본컴 런처가 그대로면
+         ★짝이 안 맞아 스트림이 영영 안 뜬다★. 이제 한 번 누르면
+         본컴 런처(파섹) → 원격컴 크롬 → 재시작 까지 이어서 간다.
+         openCardMenu 가 열 때마다 있는 계정만 활성화 -->
+    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="본컴 런처 + 원격컴 크롬을 계정 1로 (파섹 경유, 1~2분)">계정 1</button>
+    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="본컴 런처 + 원격컴 크롬을 계정 2로 (파섹 경유, 1~2분)">계정 2</button>
+    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="본컴 런처 + 원격컴 크롬을 계정 3으로 (파섹 경유, 1~2분)">계정 3</button>
+    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="본컴 런처 + 원격컴 크롬을 계정 4로 (파섹 경유, 1~2분)">계정 4</button>
     <button class="cm-btn chip-cyan cm-span2" onclick="chromeCdpFromMenu()" title="크롬을 제어 모드(CDP)로 재기동 — ★게임이 1회 끊겼다 자동 재접속됩니다★. 성공하면 이 PC는 자동전환·재연결개선·계정게이트가 실전 가동됩니다 (v1.1.413+)">🌐 크롬 제어모드 전환</button>
   </div>
   <div class="cm-sec">VIEW</div>
@@ -4918,9 +4922,19 @@ async function switchAccountDirect(n){
   // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
   const live = liveCardOf(base);
   const target = live ? live.pc_id : id;
-  if (!confirm(`${base} → 계정 ${n} 자동 전환\n(크롬 로그아웃→로그인→AION2 페이지까지, 매크로 재시작됨)`)) return;
-  const ok = await sendCmd(target, 'switch_account', {label: lab});
-  showToast(ok ? `🔁 ${base} 계정 ${n} 전환 시작` : '✗ 전송 실패');
+  // ★이미 그 계정이면 막는다★ — 본컴을 괜히 한 번 더 돌릴 이유가 없다
+  const curAcct = ((target.match(/([bcd])$/)||[])[1]) || 'a';
+  if (curAcct === lab) { showToast(`${target} 는 이미 계정 ${n} 입니다`); return; }
+  const st = ((state[target]||{}).status)||'';
+  if (st === 'hunting' && !confirm(`${target} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return;
+  if (!confirm(`${base} → 계정 ${n} 전환\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n1~2분 걸립니다. 진행할까요?`)) return;
+  // ★한 방에★ — 본컴(런처) 먼저, 성공하면 매크로가 이어서 원격컴 크롬까지 바꾼다.
+  //   peer_id·파섹 비번은 서버가 배달 직전에 채운다(enrich_cmd_args).
+  //   acct_index=1 : 런처 드롭다운의 '다른 계정' 첫 줄. 계정 2개면 항상 맞다.
+  //   ★3개 이상은 줄 간격 미실측★ — 빗나가면 매크로가 '계정 칩 안 바뀜'으로 잡아 실패 처리.
+  const ok = await sendCmd(target, 'switch_launcher',
+                           {acct_no: n, acct_index: 1, acct_label: `계정${n}`, chrome_label: lab});
+  showToast(ok ? `🔁 ${base} → 계정 ${n} 통짜 전환 시작 (본컴→원격컴, 결과는 텔레그램)` : '✗ 전송 실패');
   loadCmdHistory();
 }
 
