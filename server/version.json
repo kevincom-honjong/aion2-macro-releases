@@ -250,6 +250,11 @@
     "wardrobe_title.png": "493f612d349ff72a14326861c9f1f68cb5922380cc7b144a5d843a9010947e97",
     "wonjeong_title.png": "a0d046cc9cbc7fea757fa61849ebf6362fbdd1cc92c147395689c3b6bae23922",
     "world_market_menu.png": "1d5010387bcbc2ab06910fffd2c52933459ffd7a99b4ccd1ec41d08b479e288c",
+    "wp_bar_power.png": "de687ca272f207740ad23f27bc492b18f7577c691c82ae424489b50884e82e55",
+    "wp_exit_ok.png": "9d44b4f5e228f29c134b56952a1df517d5dc570c9e6529ffdcbf4d67d5069e72",
+    "wp_exit_text.png": "6c7a0c9bc9c942ac8ac4b999ace761cc52e2981c7a3973b6dcbebc73a76e3cdd",
+    "wp_host_card.png": "29a28674c86f6b69db0b78c9d4bf7dc98bc5c72dfbc12599887f54822216d145",
+    "wp_start_game.png": "198b9a38f4400b3b858505e4b6584cf3d7fe844896fd610940d19c0564e896f6",
     "검성.png": "b2719de87ad7c3b7af35df7323ca4d5ae949d4db9c1d2dae716f5d354b90a5b1",
     "대화입력.png": "d256cd28924330d641ec53592894b8f3055b2a63edfea59c7cbeeec9e6958f91",
     "데바인증.png": "e2ac5a7e1e0316fcac0f8ad9fa3cbc6cbc32e7f0fe3afa63a60f54f72e8cfdba",
@@ -279,8 +284,8 @@
     "sha256": "0ddfb847c9ae0feb3009a52aae592d09d90b4b8c6a4131942e31591c8e52b81b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260816130141",
-  "updated_at": "2026-08-16T13:02:36",
+  "images_version": "20260816132024",
+  "updated_at": "2026-08-16T13:20:24",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
     "version": "1.1.450",
