@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.463",
+    "version": "1.1.464",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "0f15711492d9e2900cea39b36f61e4bde9620f2da2ead44be6e245f1bb85b402",
+    "sha256": "233df9b71d5fb4acb85cca29fb043b9f0ee448907571862901b99446f3bddd3d",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -253,8 +253,8 @@
     "wonjeong_title.png": "a0d046cc9cbc7fea757fa61849ebf6362fbdd1cc92c147395689c3b6bae23922",
     "world_market_menu.png": "1d5010387bcbc2ab06910fffd2c52933459ffd7a99b4ccd1ec41d08b479e288c",
     "wp_bar_power.png": "de687ca272f207740ad23f27bc492b18f7577c691c82ae424489b50884e82e55",
-    "wp_exit_ok.png": "9d44b4f5e228f29c134b56952a1df517d5dc570c9e6529ffdcbf4d67d5069e72",
-    "wp_exit_text.png": "6c7a0c9bc9c942ac8ac4b999ace761cc52e2981c7a3973b6dcbebc73a76e3cdd",
+    "wp_exit_ok.png": "e315a96ffb16e8cb03f74e760eb575ab8c8feb2f9862bef3387021e49304d59e",
+    "wp_exit_text.png": "c0e99fd788524e5bdc4d50e001433f663ac947fe6372d8594f59fb7f14051a36",
     "wp_host_card.png": "29a28674c86f6b69db0b78c9d4bf7dc98bc5c72dfbc12599887f54822216d145",
     "wp_pin_prompt.png": "ea1869902a04bd61acbf89d039633fe8bd41c6aa38de6c80759dcba1db6cf709",
     "wp_run_game.png": "b3faf68f2fbf93b9ba8ea3030f8bdec58c5896e95c2930f1724232dda7b3ac35",
@@ -289,11 +289,11 @@
     "sha256": "0ddfb847c9ae0feb3009a52aae592d09d90b4b8c6a4131942e31591c8e52b81b",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260816174305",
-  "updated_at": "2026-08-16T18:04:22",
+  "images_version": "20260816181956",
+  "updated_at": "2026-08-16T18:19:56",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.463",
+    "version": "1.1.464",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
