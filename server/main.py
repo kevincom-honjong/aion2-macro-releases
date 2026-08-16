@@ -2392,6 +2392,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button class="cm-btn chip-amber" id="cm-bonview" style="margin-top:5px;width:100%;display:block"
           onclick="bonComViewFromMenu()"
           title="원격컴 크롬(CDP)이 파섹 웹으로 본컴에 붙어 3장 찍어 버그폴더에 올립니다. ★사냥 중이면 거부됩니다★ — 크롬 CDP가 아직 아니면 재기동이 필요해 게임이 끊기기 때문입니다. ■ 정지 후 누르세요">🖥 본컴 화면 받기</button>
+  <!-- ★본컴 런처 계정 전환(2026-08-16)★ — peer_id·파섹 비번은 ★서버가 채운다★.
+       여기서는 빈 args 로 쏘기만 한다(브라우저에 비번이 안 들어온다). -->
+  <button class="cm-btn chip-indigo" id="cm-swlauncher" style="margin-top:5px;width:100%;display:block"
+          onclick="switchLauncherFromMenu()"
+          title="원격컴 크롬이 파섹으로 본컴 런처에 붙어 계정을 갈아끼우고 게임을 실행합니다. ★게임을 먼저 끄고 누르세요★ (웹플레이 Quit Game). 파섹 아이디/비번은 ⚙ 설정에 한 번 넣어두면 됩니다">🔄 본컴 계정 전환</button>
   <div class="cm-sec">UPDATER · 프로세스</div>
   <div class="cm-grid4">
     <button class="cm-btn chip-green"  onclick="updaterCmd('start')" title="매크로 프로세스 시작 (크래시된 PC 살리기)">▶</button>
@@ -2506,6 +2511,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <label class="block mb-1 text-gray-400">톤 <span class="text-gray-600">낮게 ↔ 높게</span></label>
   <input id="tts-pitch" type="range" min="-30" max="30" step="2" oninput="onVoiceTune()" class="w-full mb-3">
   <button onclick="previewVoice()" class="w-full py-1.5 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-emerald-50 font-semibold">▶ 미리듣기</button>
+  <!-- ★파섹 계정(2026-08-16)★ — [🔄 본컴 계정 전환]이 쓴다. 전 PC 공용, 한 번만 넣으면 됨.
+       ★저장만 하고 다시 불러오지 않는다★ — 비번을 브라우저로 되돌리지 않기 위해서. -->
+  <div class="mt-4 pt-3 border-t border-gray-700/70">
+    <b class="block mb-2 text-gray-200">🔑 파섹 계정 <span class="text-gray-500 font-normal">(전 PC 공용)</span></b>
+    <input id="ps-id" type="text" autocomplete="off" placeholder="파섹 이메일"
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
+    <input id="ps-pw" type="password" autocomplete="new-password" placeholder="파섹 비밀번호"
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
+    <button onclick="saveParsecCreds()" class="w-full py-1.5 rounded-lg bg-indigo-700/80 hover:bg-indigo-600 text-indigo-50 font-semibold">저장</button>
+    <p class="mt-2 text-[10px] leading-relaxed text-gray-500">원격컴 크롬이 <b>본컴 런처</b>에 붙을 때 파섹 로그인 폼이 뜨면 이걸로 자동 입력합니다. 서버에만 저장되고 <b>화면으로 다시 불러오지 않습니다</b>. 명령 이력에도 <code>***</code> 로만 남습니다.</p>
+  </div>
   <p class="mt-3 text-[10px] leading-relaxed text-gray-500">기본은 <b>서버 사람 목소리</b>입니다. 서버가 음성을 못 만들면 브라우저 내장 음성으로 자동 전환되니 알림 자체는 끊기지 않습니다. 슬라이더를 내릴수록 낮고 느려집니다.</p>
 </div>
 
@@ -3617,6 +3633,33 @@ async function bonComViewFromMenu(){
     shots:3, gap:5, tag:'boncom', size:'1280,720'});
   showToast(ok?`🖥 ${id} → 본컴 화면 촬영 지시 (약 30초 뒤 🐞 버그에서 확인)`
               :`✗ ${id} 본컴 보기 명령 실패`);
+}
+
+// ★본컴 계정 전환(2026-08-16)★ — args 를 ★비워서★ 보낸다.
+//   peer_id 와 파섹 아이디/비번은 ★서버가 배달 직전에 채운다★(enrich_cmd_args).
+//   그래서 이 브라우저는 비번을 모르고, 명령 이력에도 '***' 로만 남는다.
+async function switchLauncherFromMenu(){
+  const id=menuPcId; closeCardMenu();
+  const st=((state[id]||{}).status)||'';
+  if(st==='hunting' && !confirm(`${id} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return;
+  if(!confirm(`${id} 의 ★본컴★ 런처 계정을 전환하고 게임을 실행합니다.\n계속할까요?`)) return;
+  const ok=await sendCmd(id,'switch_launcher',{});
+  showToast(ok?`🔄 ${id} 본컴 계정 전환 지시 — 1~2분 걸립니다 (결과는 텔레그램)`
+              :`✗ ${id} 계정 전환 명령 실패`);
+}
+
+// ★파섹 자격증명 저장(2026-08-16)★ — 서버 설정에 넣어두면 20대가 공용으로 쓴다.
+//   ★불러오지 않는다★ — 저장만 하고 화면에는 다시 안 띄운다(브라우저에 남기지 않으려고).
+async function saveParsecCreds(){
+  const idEl=document.getElementById('ps-id'), pwEl=document.getElementById('ps-pw');
+  const pid=(idEl.value||'').trim(), ppw=pwEl.value||'';
+  if(!pid && !ppw){ showToast('아이디/비번을 입력하세요'); return; }
+  try{
+    if(pid) await fetch('/setting/parsec_id',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:pid})});
+    if(ppw) await fetch('/setting/parsec_pw',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({value:ppw})});
+    pwEl.value='';                                  // 입력칸에서 즉시 지운다
+    showToast('✓ 파섹 계정 저장됨 (전 PC 공용)');
+  }catch(e){ showToast('✗ 저장 실패: '+e); }
 }
 
 // ─── 계정 세부정보 표 (2026-08-16) ────────────────────────────────────────────
@@ -5110,6 +5153,39 @@ async def get_live_meta(pc_id: str, request: Request):
                          **(f.get("meta") or {})})
 
 
+def _base_pc(pc_id: str) -> str:
+    """멀티계정 가상 id → 물리 PC id. 'PC-20b' → 'PC-20' (접미사 b/c/d)."""
+    s = pc_id.strip()
+    return s[:-1] if len(s) > 1 and s[-1] in "bcd" and s[-2].isdigit() else s
+
+
+async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> dict:
+    """★배달 직전에★ 비밀·주소록을 args 에 채운다. DB 에는 저장하지 않는다.
+
+    ★왜 '배달 직전'인가 (2026-08-16 자기 리뷰에서 잡음)★
+    처음엔 insert 할 때 한 번만 채우게 짰는데, 매크로는 WS 가 끊기면 ★HTTP 폴링★으로
+    같은 명령을 가져간다. 그 경로는 DB 행을 그대로 읽으므로 마스킹된 '***' 를 비번으로
+    받아 로그인에 실패한다. → WS·폴링 ★두 경로 모두★ 여기를 거치게 한다.
+
+    - parsec_id/parsec_pw : 서버 설정(대시보드 세션으로만 수정 가능)
+    - peer_id             : 파섹 주소록. ★매크로는 주소록을 조회하지 않는다★
+                            (매크로↔파섹 분리 — 매크로가 죽어도 주소록은 서버에 남는다)
+    """
+    if command != "switch_launcher":
+        return dict(args)
+    out = dict(args)
+    if not out.get("peer_id"):
+        pmap = await _get_parsec_map(tenant)
+        base = _base_pc(pc_id)
+        num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
+        out["peer_id"] = pmap.get(num) or pmap.get(base) or ""
+    for key in ("parsec_id", "parsec_pw"):
+        v = (await get_setting(ns(tenant, key))) or ""
+        if v:
+            out[key] = v
+    return out
+
+
 @app.post("/command/{pc_id}")
 async def send_command(pc_id: str, request: Request):
     # ★명령 '주입'은 대시보드 세션 전용(2026-07-27 보안감사 critical).
@@ -5126,9 +5202,23 @@ async def send_command(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="command 필드 필요")
     args = body.get("args", {})
     nspc = ns(tenant, pc_id)
+
+    # ★비밀은 서버가 끼워넣는다 (2026-08-16, switch_launcher)★
+    #   대시보드는 비번을 ★모른다★ — 브라우저에도, 명령 DB 행에도, 명령 이력 화면에도
+    #   안 남는다. 매크로로 나가는 그 순간에만 args 에 실린다.
+    #   ★매크로 API 키 경유로 만들면 안 되는 이유★: 그 키는 공개 exe·공개 저장소에 각인돼
+    #   있어(구조적) 누구나 꺼낼 수 있다. 여기는 대시보드 세션 전용 경로라 그게 막힌다.
+    #   peer_id 도 같은 원리로 서버가 채운다 — 매크로는 파섹 주소록을 조회하지 않는다
+    #   (매크로↔파섹 분리 원칙: 매크로가 죽어도 주소록은 서버에 남는다).
+    send_args = await enrich_cmd_args(tenant, pc_id, command, args)
+    if command == "switch_launcher":
+        # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
+        args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
+                "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
+
     cmd_id = await insert_command(nspc, command, args)
     # 매크로 WS 연결되어 있으면 즉시 전달
-    ws_sent = await send_command_to_macro(nspc, command, args, cmd_id)
+    ws_sent = await send_command_to_macro(nspc, command, send_args, cmd_id)
     # 브로드캐스트 (명령 내역 갱신용)
     await _push_cmd_history(tenant)
     return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent})
@@ -5402,7 +5492,10 @@ async def poll_command(pc_id: str, request: Request):
         raise HTTPException(status_code=403)
     cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
-        return JSONResponse({"command": cmd["command"], "args": cmd["args"], "id": cmd["id"]})
+        # ★WS 가 끊겨 폴링으로 받아가는 경로★ — DB 는 마스킹돼 있으므로 여기서 다시 채운다
+        # (안 채우면 매크로가 '***' 를 파섹 비번으로 입력해 로그인 실패)
+        cargs = await enrich_cmd_args(tenant, pc_id, cmd["command"], cmd["args"] or {})
+        return JSONResponse({"command": cmd["command"], "args": cargs, "id": cmd["id"]})
     return JSONResponse({"command": None})
 
 
