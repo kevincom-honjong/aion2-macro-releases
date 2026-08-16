@@ -1779,15 +1779,21 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     padding:20px 24px 18px;display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap}
   .dk-hero::after{content:'';position:absolute;left:7%;top:-72%;width:50%;height:150%;
     pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.14),transparent)}
-  .dk-hero-main{position:relative;z-index:1;min-width:220px}
+  .dk-hero-main{position:relative;z-index:1;min-width:260px;max-width:min(64ch,58%);
+    padding-left:16px}
+  /* 인용 표시 — 왼쪽 앰버 세로선. 따옴표 이미지를 안 쓰고 선 하나로 */
+  .dk-hero-main::before{content:'';position:absolute;left:0;top:3px;bottom:4px;width:2px;
+    border-radius:2px;background:linear-gradient(180deg,var(--dk-gold),transparent)}
   .dk-eyebrow{font-size:9.5px;letter-spacing:.2em;color:var(--dk-t3);font-weight:700}
-  .dk-hero-row{display:flex;align-items:baseline;gap:11px;margin-top:5px}
-  .dk-hero-n{font-family:var(--dk-disp);font-size:56px;font-weight:700;line-height:.86;
-    letter-spacing:-.03em;color:var(--dk-t0)}
-  .dk-hero-of{font-family:var(--dk-disp);font-size:18px;color:var(--dk-t3);font-weight:600}
-  .dk-hero-sub{margin-top:8px;font-size:12.5px;color:var(--dk-t1)}
-  .dk-hero-sub b{color:var(--dk-coral);font-weight:700}
-  .dk-hero-sub .ok{color:var(--dk-mint);font-weight:700}
+  /* ★오늘의 한마디★ — 이 칸의 주인공. 크고 또렷하게, 두 줄 넘지 않게. */
+  .dk-quote{
+    margin-top:9px;font-family:var(--dk-disp);font-size:27px;font-weight:700;
+    line-height:1.26;letter-spacing:-.015em;color:var(--dk-t0);
+    text-wrap:balance;word-break:keep-all}
+  .dk-quote em{font-style:normal;color:var(--dk-gold-s)}   /* 강조 단어 */
+  .dk-quote-by{margin-top:9px;font-size:11.5px;color:var(--dk-t3);letter-spacing:.04em}
+  .dk-quote-by b{color:var(--dk-t2);font-weight:600}
+  @media(max-width:1100px){.dk-hero-main{max-width:100%}.dk-quote{font-size:22px}}
   .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
   .dk-sm{text-align:right}
   .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
@@ -2137,12 +2143,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
        값은 renderCards 끝에서 dkHero()가 채운다 — 실패해도 화면은 멀쩡하다. -->
   <div class="dk-hero">
     <div class="dk-hero-main">
-      <div class="dk-eyebrow">FLEET STATUS</div>
-      <div class="dk-hero-row">
-        <span class="dk-hero-n" id="dk-h-on">–</span>
-        <span class="dk-hero-of" id="dk-h-of">/ – 가동</span>
-      </div>
-      <div class="dk-hero-sub" id="dk-h-sub">불러오는 중…</div>
+      <div class="dk-eyebrow" id="dk-q-day">오늘의 한마디</div>
+      <blockquote class="dk-quote" id="dk-q-text">…</blockquote>
+      <div class="dk-quote-by" id="dk-q-by"></div>
     </div>
     <div class="dk-hero-side">
       <div class="dk-sm"><div class="k">평균 효율</div><div class="v" id="dk-h-eff">–</div>
@@ -2578,27 +2581,64 @@ function dkBleed(el, st){
 // ★히어로 채우기(2026-08-16)★ — 전광판(숫자 7개) 위에 '지금 몇 대를 봐야 하나'를 크게.
 //   ★기존 집계 함수(refreshSummary)를 안 건드린다★ — 그쪽은 전광판 전용으로 그대로 두고
 //   여기서 state 를 직접 훑는다. 실패해도 renderCards 의 try/catch 가 삼켜 화면은 멀쩡.
+// ★오늘의 한마디(2026-08-16 사용자 요청)★ — 매일 하나씩 바뀐다.
+//   ★난수를 안 쓴다★ — 새로고침할 때마다 바뀌면 '오늘의' 가 아니게 되고, 화면을
+//   하루 종일 켜두는 관제화면에서 글자가 계속 갈아엎히면 산만하다. 날짜를 씨앗으로
+//   삼아 ★그날 하루는 무조건 같은 문장★이 나오게 한다(KST 기준, 새벽 5시 리셋과 무관).
+//   <em> 로 감싼 단어만 금색이 된다.
+const DK_QUOTES = [
+  ["끝까지 가는 놈이 <em>이긴다</em>.", "격언"],
+  ["오늘 흘린 땀은 <em>내일의 키나</em>다.", ""],
+  ["느려도 <em>멈추지만</em> 않으면 된다.", "공자"],
+  ["기회는 준비된 자에게 <em>온다</em>.", "파스퇴르"],
+  ["시작이 반이다. 나머지 반은 <em>버티는 것</em>.", ""],
+  ["가장 어두울 때가 <em>새벽 직전</em>이다.", ""],
+  ["매일 <em>1%</em>씩. 1년이면 37배다.", ""],
+  ["행운은 <em>꾸준함</em>의 다른 이름이다.", ""],
+  ["안 될 이유를 찾으면 <em>안 되고</em>, 될 방법을 찾으면 된다.", ""],
+  ["오늘 쉬면 내일도 <em>쉬고 싶어진다</em>.", ""],
+  ["큰 산도 <em>한 걸음</em>부터 넘는다.", ""],
+  ["실패는 <em>데이터</em>다. 버리지 마라.", ""],
+  ["남들이 잘 때 <em>한 캐릭</em> 더.", ""],
+  ["복리는 <em>시간</em>을 먹고 자란다.", ""],
+  ["완벽한 때는 없다. <em>지금</em>이 그때다.", ""],
+  ["버티는 것도 <em>실력</em>이다.", ""],
+  ["어제의 나보다 <em>한 뼘</em>만.", ""],
+  ["포기하면 그 순간이 <em>시합 종료</em>다.", "안 선생님"],
+  ["쉬운 길은 이미 <em>붐빈다</em>.", ""],
+  ["결국 <em>남는 놈</em>이 다 가져간다.", ""],
+  ["돌은 물방울이 <em>반복</em>해서 뚫는다.", ""],
+  ["티끌이 모여 <em>태산</em>이 된다.", ""],
+  ["오늘의 고생은 내일의 <em>여유</em>다.", ""],
+  ["누가 보든 안 보든 <em>제대로</em>.", ""],
+  ["운은 <em>준비</em>가 기회를 만났을 때 나는 소리다.", "세네카"],
+  ["한 번 더. 그 <em>한 번</em>이 차이를 만든다.", ""],
+  ["지치면 쉬어라. 다만 <em>돌아서지</em>는 마라.", ""],
+  ["목표가 없으면 <em>노력</em>도 방황이다.", ""],
+  ["천천히 가도 좋다. <em>방향</em>만 맞다면.", ""],
+  ["오늘도 <em>20대</em> 전부 살아 있다. 그거면 됐다.", ""],
+  ["잘하고 있다. <em>계속</em>해라.", ""],
+];
+function dkQuote(){
+  const $ = id => document.getElementById(id);
+  const el = $('dk-q-text'); if(!el) return;
+  // KST 기준 날짜 → 그날의 인덱스 (새로고침해도 안 바뀜)
+  const kst = new Date(Date.now() + (9*60 + new Date().getTimezoneOffset())*60000);
+  const days = Math.floor(Date.UTC(kst.getFullYear(), kst.getMonth(), kst.getDate())/86400000);
+  const [text, by] = DK_QUOTES[((days % DK_QUOTES.length) + DK_QUOTES.length) % DK_QUOTES.length];
+  el.innerHTML = text;
+  const byEl = $('dk-q-by');
+  if(byEl) byEl.innerHTML = by ? `— <b>${by}</b>` : '';
+  const dayEl = $('dk-q-day');
+  if(dayEl) dayEl.textContent =
+    `${kst.getMonth()+1}월 ${kst.getDate()}일 · 오늘의 한마디`;
+}
+
 function dkHero(){
   const $ = id => document.getElementById(id);
+  dkQuote();
   const pcs = Object.values(state||{});
   if(!pcs.length) return;
-  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
-  // 물리 PC 기준(부계정 카드는 같은 본체) — 전광판의 '캐릭 수'와 다른 축이라 헷갈리지 않는다
-  const bases = {}; pcs.forEach(p=>{ const b=baseId(p.pc_id||''); if(!b) return;
-    bases[b] = bases[b] || {on:false, att:false};
-    if(isOn(p)) bases[b].on = true;
-    const t = (DK_BLEED[p.status]||[])[1];
-    if(t==='act'||t==='warn') bases[b].att = true; });
-  const list = Object.entries(bases);
-  const on  = list.filter(([,v])=>v.on).length;
-  const attIds = list.filter(([,v])=>v.att).map(([b])=>b.replace('PC-',''));
-
-  $('dk-h-on').textContent = on;
-  $('dk-h-of').textContent = `/ ${list.length} 가동`;
-  $('dk-h-sub').innerHTML = attIds.length
-    ? `<b>${attIds.length}대</b>가 확인을 기다립니다 · ${attIds.slice(0,8).join(', ')}${attIds.length>8?' …':''}`
-    : `<span class="ok">전부 정상</span> 입니다`;
-
   const ef = pcs.filter(p=>p.efficiency);
   const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
   $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
