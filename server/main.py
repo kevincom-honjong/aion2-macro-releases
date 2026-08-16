@@ -956,37 +956,135 @@ HTML_LOGIN = """<!DOCTYPE html>
       repeating-linear-gradient(0deg,rgba(232,121,249,.36) 0 1px,transparent 1px 44px);
     animation:grid-run 3s linear infinite}
   @keyframes grid-run{to{transform:translateY(44px)}}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★로그인 — 커맨드 덱 (2026-08-16)★  대시보드와 같은 언어로 맞춘다.
+   차가운 잉크 바닥 + 따뜻한 앰버. 예전 보라/시안 그라데이션 글자는 걷어냈다
+   (대시보드와 안 맞고, 흔한 AI 화면 인상).
+   ★주의★ 이 블록 안에 절대 문자열 "</st"+"yle>" 를 쓰지 말 것 — HTML 파서가
+   거기서 스타일을 끊어 뒤쪽 CSS가 전부 죽고 본문에 글자로 쏟아진다(실사고).
+   ══════════════════════════════════════════════════════════════════════════ */
+  :root{
+    --lg-ink0:#05070d; --lg-ink1:#0c1120; --lg-line:#1a2237; --lg-line2:#26314b;
+    --lg-t0:#eef2fa; --lg-t1:#9aa7c2; --lg-t2:#5c6b8a; --lg-t3:#3a4762;
+    --lg-gold:#f2b53c; --lg-gold-s:#ffd479; --lg-coral:#ff5d6e; --lg-mint:#3ddc9a;
+    --lg-disp:"Bahnschrift","DIN Alternate","Segoe UI Variable Display","Pretendard",system-ui,sans-serif;
+  }
+  body{background:
+    radial-gradient(1000px 620px at 22% -10%, #16233f 0%, transparent 60%),
+    radial-gradient(760px 520px at 82% 108%, #2a1e0c 0%, transparent 58%),
+    var(--lg-ink0)!important}
+  /* 위쪽에서 내려오는 광원 하나만 — 예전 aurora 는 끈다 */
+  body::after{background:radial-gradient(closest-side,rgba(79,211,232,.16),transparent 70%)!important;
+    filter:blur(70px)!important;animation:aurora 18s ease-in-out infinite}
+  /* 지평선 격자는 살리되 색만 덱으로 */
+  #bg-fx .horizon{opacity:.32}
+  #bg-fx .horizon::before{
+    background:repeating-linear-gradient(90deg,rgba(79,211,232,.30) 0 1px,transparent 1px 64px),
+      repeating-linear-gradient(0deg,rgba(242,181,60,.22) 0 1px,transparent 1px 44px)!important}
+
+  .login-card{
+    position:relative;overflow:hidden;
+    background:linear-gradient(168deg,#101827 0%,#0a0f1c 58%,#080c17 100%)!important;
+    border:1px solid var(--lg-line)!important;
+    box-shadow:0 34px 80px -34px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.055)!important;
+    backdrop-filter:none!important}
+  /* 카드 윗면을 훑는 앰버 실선 — '전원이 들어온 판' */
+  .login-card::before{content:'';position:absolute;left:22px;right:22px;top:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--lg-gold),transparent);opacity:.75}
+
+  /* 인장(seal) — 예전 ⚔ 이모지 대신 금빛 젬 안에 넣는다 */
+  .seal{width:54px;height:54px;margin:0 auto;border-radius:15px;display:flex;
+    align-items:center;justify-content:center;font-size:25px;line-height:1;
+    background:linear-gradient(145deg,var(--lg-gold-s),var(--lg-gold) 45%,#8a5f10);
+    box-shadow:0 0 26px rgba(242,181,60,.34),inset 0 1px 0 rgba(255,255,255,.55);
+    animation:floaty 4s ease-in-out infinite}
+  .lg-title{font-family:var(--lg-disp);font-size:26px;font-weight:700;letter-spacing:.01em;
+    color:var(--lg-t0);background:none!important;-webkit-text-fill-color:currentColor!important;
+    animation:none!important}
+  .lg-sub{font-family:'Orbitron',var(--lg-disp);font-size:9.5px;letter-spacing:.32em;
+    color:var(--lg-gold);opacity:.78;margin-top:5px}
+  .lg-note{color:var(--lg-t3);font-size:11.5px;margin-top:11px;letter-spacing:.01em}
+
+  .lg-field{position:relative;margin-bottom:13px}
+  .lg-lab{display:block;font-size:10px;letter-spacing:.14em;color:var(--lg-t3);
+    font-weight:700;margin-bottom:7px}
+  #pw{
+    width:100%;background:#070b14!important;border:1px solid var(--lg-line2)!important;
+    border-radius:10px!important;padding:12px 14px!important;font-size:13.5px!important;
+    color:var(--lg-t0)!important;letter-spacing:.16em;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,.6);transition:border-color .16s,box-shadow .16s}
+  #pw::placeholder{color:var(--lg-t3);letter-spacing:.02em}
+  #pw:focus{border-color:rgba(242,181,60,.62)!important;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,.6),0 0 0 3px rgba(242,181,60,.14)!important}
+
+  .login-btn{
+    background:linear-gradient(180deg,var(--lg-gold-s),var(--lg-gold))!important;
+    background-size:auto!important;border:1px solid #c9922a!important;border-radius:10px!important;
+    color:#2a1c02!important;font-family:var(--lg-disp);font-size:14px!important;font-weight:700!important;
+    letter-spacing:.06em;box-shadow:0 10px 24px -12px rgba(242,181,60,.7)}
+  .login-btn:hover{background:linear-gradient(180deg,#ffdd8f,#f7bd46)!important;transform:translateY(-1px)}
+  .login-btn:active{transform:translateY(0) scale(.985)}
+  .login-btn[disabled]{opacity:.62;cursor:default;transform:none!important;
+    background:linear-gradient(180deg,#4a5163,#3a3f4d)!important;
+    border-color:#3a4250!important;color:#aab3c4!important;box-shadow:none}
+
+  #err{background:rgba(255,93,110,.1)!important;border:1px solid rgba(255,93,110,.34)!important;
+    color:#ffb3ba!important;border-radius:10px!important;font-size:12px!important;
+    letter-spacing:.01em;animation:shake .3s}
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+  @media (prefers-reduced-motion:reduce){
+    .seal,body::after,#bg-fx .horizon::before,#err{animation:none!important}}
 </style>
 </head>
 <body class="text-gray-100 flex items-center justify-center min-h-screen">
 <div id="bg-fx" aria-hidden="true"><div class="stars"></div><div class="horizon"></div></div>
 <div class="w-full max-w-sm">
   <div class="login-card rounded-2xl p-8">
-    <div class="text-center mb-8">
-      <div class="brand-emblem text-5xl mb-3">⚔</div>
-      <h1 class="brand-title text-2xl font-extrabold tracking-wide">혼종 사령부</h1>
-      <p class="brand-sub mt-1">HONJONG COMMAND</p>
-      <p class="text-gray-500 text-sm mt-3">AION2 매크로 관제 시스템</p>
+    <div class="text-center mb-7">
+      <div class="seal">⚔</div>
+      <h1 class="lg-title mt-4">혼종 사령부</h1>
+      <p class="lg-sub">HONJONG COMMAND</p>
+      <p class="lg-note">AION2 함대 관제</p>
     </div>
-    <div id="err" class="hidden bg-red-900/50 border border-red-700 text-red-300 rounded-lg px-4 py-2 text-sm mb-4"></div>
-    <input id="pw" type="password" placeholder="비밀번호"
-      class="w-full bg-gray-800/70 border border-gray-700 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 mb-4"
-      onkeydown="if(event.key==='Enter')login()">
-    <button onclick="login()"
-      class="login-btn w-full rounded-lg py-3 font-bold text-sm text-white">
-      로그인
+    <div id="err" class="hidden px-4 py-2.5 mb-4"></div>
+    <div class="lg-field">
+      <label class="lg-lab" for="pw">비밀번호</label>
+      <input id="pw" type="password" placeholder="••••••••" autofocus autocomplete="current-password"
+        onkeydown="if(event.key==='Enter')login()">
+    </div>
+    <button id="lg-btn" onclick="login()" class="login-btn w-full py-3">
+      들어가기
     </button>
   </div>
 </div>
 <script>
+// ★상태 전부 구현(2026-08-16)★ — 예전엔 누르고 나서 응답이 올 때까지 아무 반응이
+//   없어서 두 번 세 번 누르게 됐다(그만큼 잠금 카운터도 빨리 찬다). 누르는 즉시
+//   버튼을 잠그고 '확인 중'으로 바꾼다. 서버가 잠금(429)을 주면 그 문구를 그대로 보여준다.
 async function login() {
-  const pw = document.getElementById('pw').value;
-  const r = await fetch('/auth/login', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({password: pw})
-  });
-  if (r.ok) { location.href = '/'; }
-  else { const e=document.getElementById('err'); e.textContent='비밀번호가 틀렸습니다.'; e.classList.remove('hidden'); }
+  const btn = document.getElementById('lg-btn');
+  const e   = document.getElementById('err');
+  const pw  = document.getElementById('pw').value;
+  if (btn.disabled) return;
+  e.classList.add('hidden');
+  btn.disabled = true; btn.textContent = '확인 중…';
+  try {
+    const r = await fetch('/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    if (r.ok) { btn.textContent = '들어가는 중…'; location.href = '/'; return; }
+    let msg = '비밀번호가 틀렸습니다.';
+    try { const j = await r.json(); if (j && j.detail) msg = j.detail; } catch(_) {}
+    if (r.status === 429 && msg === '비밀번호가 틀렸습니다.') msg = '시도가 너무 많습니다. 잠시 후 다시 시도하세요.';
+    e.textContent = msg; e.classList.remove('hidden');
+  } catch(_) {
+    e.textContent = '서버에 연결할 수 없습니다.'; e.classList.remove('hidden');
+  } finally {
+    if (btn.textContent !== '들어가는 중…') { btn.disabled = false; btn.textContent = '들어가기'; }
+    const p = document.getElementById('pw'); p.value = ''; p.focus();
+  }
 }
 </script>
 </body></html>"""
