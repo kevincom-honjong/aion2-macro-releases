@@ -53,8 +53,20 @@ def _dash_pw() -> str:
     return pw
 
 
+LAN_PREFIX = "172.30."      # ★함대 내부망 대역 (실측 확정)★
+
+
 def _lan_ip() -> str:
-    """함대 내부망 대역(172.30.x) IP를 고른다. 없으면 기본 라우트 소스 IP."""
+    """★함대 내부망 대역(172.30.x) IP만★ 고른다. 없으면 빈 문자열.
+
+    ★★2026-08-16 실사고 — '아무 IP나 올리기'는 재앙이다★★
+    사용자: "또 내부망시드를 192. 이지랄하고잇네"
+    이 PC는 내부망 Wi-Fi(172.30.1.99)와 이더넷(192.168.1.12)을 둘 다 갖고 있다.
+    Wi-Fi 가 끊기자 옛 코드가 `cands[0]`(=이더넷 192.168.1.12)을 골라 lan_seed 로
+    올렸다. 함대는 172.30.1.x 라 그 주소에 영영 못 닿는다 →
+    ★20대가 전부 3초씩 헛기다린 뒤 GitHub 폴백★ (치명적이진 않지만 업데이트가 기어간다).
+    ★틀린 주소를 올리는 것은 아무것도 안 올리는 것보다 나쁘다★ — 그래서 추측하지 않는다.
+    """
     cands = []
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
@@ -71,9 +83,12 @@ def _lan_ip() -> str:
     except Exception:
         pass
     for ip in cands:
-        if ip.startswith("172.30."):     # 함대 내부망 대역 (실측 확정)
+        if ip.startswith(LAN_PREFIX):
             return ip
-    return cands[0] if cands else ""
+    if cands:
+        print(f"[시드] ⚠️ 내부망({LAN_PREFIX}x) IP 없음 — 가진 건 {sorted(set(cands))}. "
+              "내부망 Wi-Fi 연결을 확인하세요. ★엉뚱한 주소를 올리지 않습니다★", flush=True)
+    return ""
 
 
 def _auto_register_loop():
@@ -86,11 +101,24 @@ def _auto_register_loop():
         return
     import http.cookiejar
     last_pushed = None
+    miss = 0            # 내부망 IP 연속 미검출 횟수 (Wi-Fi 순간 끊김에 반응하지 않도록)
+    MISS_LIMIT = 3      # 이만큼 연속으로 없으면 서버 lan_seed 를 비운다 (= 전 함대 GitHub 복귀)
     while True:
         try:
             ip = _lan_ip()
             want = f"http://{ip}:{PORT}" if ip else ""
-            if want and want != last_pushed:
+            # ★내부망 IP 가 없으면 '비우기'가 정답★ — 죽은 주소를 남겨두면 함대 20대가
+            #   매번 3초씩 헛기다린다. 비우면 곧장 GitHub 로 간다(2026-08-16 실사고).
+            if not want:
+                miss += 1
+                if miss >= MISS_LIMIT and last_pushed != "":
+                    want = ""          # 아래 공통 경로로 내려가 빈 값을 POST 한다
+                else:
+                    time.sleep(CHECK_EVERY)
+                    continue
+            else:
+                miss = 0
+            if want != last_pushed:
                 cj = http.cookiejar.CookieJar()
                 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
                 # 로그인 → 세션 쿠키
@@ -110,7 +138,12 @@ def _auto_register_loop():
                         CONTROL_URL + "/setting/lan_seed",
                         data=json.dumps({"value": want}).encode(),
                         headers={"Content-Type": "application/json"}), timeout=10).read()
-                    print(f"[시드] 내부망 IP 등록 갱신: {cur or '(없음)'} -> {want}", flush=True)
+                    if want:
+                        print(f"[시드] 내부망 IP 등록 갱신: {cur or '(없음)'} -> {want}", flush=True)
+                    else:
+                        print(f"[시드] ⚠️ lan_seed 비움 ({cur} 였음) — 내부망 IP를 "
+                              f"{MISS_LIMIT}회 연속 못 찾았습니다. 함대는 GitHub 로 받습니다. "
+                              "내부망 Wi-Fi 를 다시 연결하면 자동 복구됩니다.", flush=True)
                 last_pushed = want
         except Exception as e:
             print(f"[시드] 자동 IP 등록 실패(재시도 예정): {e}", flush=True)
