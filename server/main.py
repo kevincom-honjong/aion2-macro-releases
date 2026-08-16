@@ -1707,7 +1707,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .stat-tile::before,.stat-tile::after{display:none!important}
   .stat-icon{opacity:.34;font-size:13px!important}
   .stat-num{font-size:25px!important;font-weight:700!important;line-height:1.05!important}
-  .stat-label{color:var(--dk-t3)!important;font-size:10px!important;letter-spacing:.09em;font-weight:600}
+  /* ★라벨 가독성(2026-08-16 사용자 지적: "숫자는 잘 보이는데 밑에 글자가 너무 안 보여")★
+     내가 --dk-t3(#3a4762) 를 10px 에 씌운 게 원인이다. 이 바탕(#0b1120)에서 대비가
+     2:1 남짓이라 사실상 안 읽힌다. --dk-t1 로 올리고 크기·굵기를 키운다(대비 ≈8:1).
+     ★숫자는 건드리지 않는다★ — 잘 보인다고 하셨다. */
+  .stat-label{color:var(--dk-t1)!important;font-size:11.5px!important;
+    letter-spacing:.06em;font-weight:700;margin-top:.35rem!important}
 
   /* ── 명령 버튼줄: 묶음을 판으로 ─────────────────────────────────────── */
   .cmd-group{background:rgba(255,255,255,.022)!important;border:1px solid var(--dk-line)!important;
