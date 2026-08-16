@@ -1391,7 +1391,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>tailwind.config={darkMode:'class'}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Orbitron=전광판 숫자 / Black Han Sans=오늘의 한마디(굵고 팍 치는 헤드라인체)
+     / Nanum Myeongjo=인용 출처(명조로 대비를 준다) -->
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Black+Han+Sans&family=Nanum+Myeongjo:wght@700;800&display=swap" rel="stylesheet">
 <style>
   @keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.5}}
   .pulse{animation:pulse-badge 1.5s infinite;box-shadow:0 0 9px 1px currentColor}
@@ -1776,24 +1779,35 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     border:1px solid var(--dk-line);
     background:linear-gradient(160deg,#0e1526 0%,#0a0f1c 58%,#080c17 100%);
     box-shadow:0 24px 60px -30px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.055);
-    padding:20px 24px 18px;display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap}
-  .dk-hero::after{content:'';position:absolute;left:7%;top:-72%;width:50%;height:150%;
-    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.14),transparent)}
-  .dk-hero-main{position:relative;z-index:1;min-width:260px;max-width:min(64ch,58%);
-    padding-left:16px}
-  /* 인용 표시 — 왼쪽 앰버 세로선. 따옴표 이미지를 안 쓰고 선 하나로 */
-  .dk-hero-main::before{content:'';position:absolute;left:0;top:3px;bottom:4px;width:2px;
-    border-radius:2px;background:linear-gradient(180deg,var(--dk-gold),transparent)}
-  .dk-eyebrow{font-size:9.5px;letter-spacing:.2em;color:var(--dk-t3);font-weight:700}
-  /* ★오늘의 한마디★ — 이 칸의 주인공. 크고 또렷하게, 두 줄 넘지 않게. */
+    padding:26px 24px 24px;display:flex;align-items:center;gap:30px;flex-wrap:wrap}
+  .dk-hero::after{content:'';position:absolute;left:14%;top:-90%;width:56%;height:190%;
+    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.15),transparent)}
+  /* ★2026-08-16 사용자 지시★ "오른쪽 요약을 제외하고 가운데쯤 위치하게 / 더 크게 /
+     좌우로 길게 / 글씨체 간지나는 걸로 팍팍"
+     → 왼쪽 세로선 인용 표시를 버리고, 남은 폭 전체를 차지하는 ★가운데 정렬 헤드라인★.
+       flex:1 이라 오른쪽 요약(dk-hero-side)이 가져간 폭을 뺀 나머지의 정중앙에 선다. */
+  .dk-hero-main{position:relative;z-index:1;flex:1 1 460px;min-width:280px;max-width:none;
+    text-align:center;padding:2px 4px}
+  .dk-eyebrow{font-size:9.5px;letter-spacing:.24em;color:var(--dk-t3);font-weight:700}
+  /* 눈썹 양옆 실선 — 가운데 정렬이 허전하지 않게 잡아준다 */
+  .dk-eyebrow{display:flex;align-items:center;justify-content:center;gap:12px}
+  .dk-eyebrow::before,.dk-eyebrow::after{content:'';height:1px;width:min(90px,12%);
+    background:linear-gradient(90deg,transparent,var(--dk-line-s,rgba(255,255,255,.16)),transparent)}
+  /* ★오늘의 한마디★ — 이 칸의 주인공. Black Han Sans = 굵고 각진 헤드라인체. */
   .dk-quote{
-    margin-top:9px;font-family:var(--dk-disp);font-size:27px;font-weight:700;
-    line-height:1.26;letter-spacing:-.015em;color:var(--dk-t0);
-    text-wrap:balance;word-break:keep-all}
-  .dk-quote em{font-style:normal;color:var(--dk-gold-s)}   /* 강조 단어 */
-  .dk-quote-by{margin-top:9px;font-size:11.5px;color:var(--dk-t3);letter-spacing:.04em}
-  .dk-quote-by b{color:var(--dk-t2);font-weight:600}
-  @media(max-width:1100px){.dk-hero-main{max-width:100%}.dk-quote{font-size:22px}}
+    margin:14px auto 0;font-family:'Black Han Sans',var(--dk-disp),sans-serif;
+    font-size:clamp(30px,3.7vw,56px);font-weight:400;
+    line-height:1.18;letter-spacing:-.012em;color:var(--dk-t0);
+    max-width:30ch;text-wrap:balance;word-break:keep-all;
+    text-shadow:0 3px 30px rgba(79,211,232,.12)}
+  /* 강조 단어 — ★nowrap★ 을 빼면 balance 가 "안 / 되고" 처럼 금색 구절을 반으로 쪼갠다 */
+  .dk-quote em{font-style:normal;color:var(--dk-gold-s);white-space:nowrap;
+    text-shadow:0 3px 26px rgba(242,181,60,.30)}
+  .dk-quote-by{margin-top:13px;font-family:'Nanum Myeongjo',serif;font-size:13px;
+    color:var(--dk-t3);letter-spacing:.03em}
+  .dk-quote-by b{color:var(--dk-t2);font-weight:700}
+  .dk-quote-by:empty{display:none}   /* 출처 없는 문장에서 빈 여백이 안 생기게 */
+  @media(max-width:1100px){.dk-quote{max-width:22ch}}
   .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
   .dk-sm{text-align:right}
   .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
@@ -2373,6 +2387,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-violet" id="cm-parsec-web" onclick="parsecWebFromMenu()" title="파섹 웹 — 새 탭으로 열립니다. ★탭을 여러 개 열면 여러 대를 동시에 볼 수 있습니다★ (설치 불필요, 크롬 전용, H.264). web.parsec.app 에 한 번 로그인해 두면 이후 자동 접속">🌐 파섹 웹</button>
     <button class="cm-btn chip-purple" id="cm-parsec-app" onclick="parsecAppFromMenu()" title="파섹 앱 — 이 브라우저를 띄운 PC(관제컴)에 설치된 파섹이 열립니다. 화질·지연이 웹보다 좋지만 ★창은 한 번에 하나★라 누를 때마다 그 창이 갈아탑니다">🎮 파섹 앱</button>
   </div>
+  <!-- ★본컴 보기(2026-08-16)★ — 위 두 버튼은 '관제컴이' 본컴에 붙지만, 이건 ★원격컴이★
+       자기 크롬으로 본컴에 붙어 그 화면을 찍어 올린다. 런처 계정전환 자동화의 눈이다. -->
+  <button class="cm-btn chip-amber" id="cm-bonview" style="margin-top:5px;width:100%;display:block"
+          onclick="bonComViewFromMenu()"
+          title="원격컴 크롬(CDP)이 파섹 웹으로 본컴에 붙어 3장 찍어 버그폴더에 올립니다. ★사냥 중이면 거부됩니다★ — 크롬 CDP가 아직 아니면 재기동이 필요해 게임이 끊기기 때문입니다. ■ 정지 후 누르세요">🖥 본컴 화면 받기</button>
   <div class="cm-sec">UPDATER · 프로세스</div>
   <div class="cm-grid4">
     <button class="cm-btn chip-green"  onclick="updaterCmd('start')" title="매크로 프로세스 시작 (크래시된 PC 살리기)">▶</button>
@@ -3536,7 +3555,7 @@ function parsecPeerOf(id){
 // 주소 없는 PC의 파섹 버튼은 흐리게 — 20대를 하나씩 눌러보게 만들지 않는다.
 function refreshParsecButtons(pc_id){
   const has = !!parsecPeerOf(pc_id);
-  for(const bid of ['cm-parsec-web','cm-parsec-app']){
+  for(const bid of ['cm-parsec-web','cm-parsec-app','cm-bonview']){
     const b=document.getElementById(bid);
     if(!b) continue;
     b.style.opacity = has ? '' : '0.35';
@@ -3558,6 +3577,25 @@ function parsecWebFromMenu(){
   //   경로를 끊는다(대시보드는 비번 로그인이라 피싱 표적이 된다). 반환값은 안 쓴다.
   window.open(`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,'_blank','noopener');
   showToast(`🌐 파섹 웹 → ${baseId(id)} (새 탭 — 탭을 닫으면 접속도 끝납니다)`);
+}
+
+// ★본컴 화면 받기(2026-08-16)★ — 위 [🌐 파섹 웹]과 ★주체가 다르다★.
+//   파섹 웹  : 이 브라우저(관제컴)가 본컴에 붙는다 → 사람이 본다.
+//   본컴 보기: ★원격컴의 크롬(CDP)★이 파섹 웹 탭을 열어 본컴에 붙고, CDP로 찍어
+//              버그폴더에 떨군다 → 업데이터가 1분 내 업로드 → 여기 [🐞]에서 보인다.
+//   후자가 런처 자동화의 진짜 경로다(조작 주체=원격컴, 본컴엔 설치 0).
+//   peer_id 는 서버가 카드에 실어준 parsec_peer_id 를 그대로 args 로 넘긴다 —
+//   매크로는 주소록을 조회하지 않는다(매크로↔파섹 분리 원칙).
+async function bonComViewFromMenu(){
+  const id=menuPcId; closeCardMenu();
+  const pid=_parsecPeerOrWarn(id); if(!pid) return;
+  const st=((state[id]||{}).status)||'';
+  if(st==='hunting' && !confirm(`${id} 는 지금 사냥 중입니다.\n매크로가 거부할 수 있습니다. 그래도 보낼까요?`)) return;
+  const ok=await sendCmd(id,'chrome_view',{
+    url:`https://web.parsec.app/?peer_id=${encodeURIComponent(pid)}`,
+    shots:3, gap:5, tag:'boncom', size:'1280,720'});
+  showToast(ok?`🖥 ${id} → 본컴 화면 촬영 지시 (약 30초 뒤 🐞 버그에서 확인)`
+              :`✗ ${id} 본컴 보기 명령 실패`);
 }
 
 // ─── 계정 세부정보 표 (2026-08-16) ────────────────────────────────────────────
