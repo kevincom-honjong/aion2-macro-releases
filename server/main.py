@@ -1767,6 +1767,38 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   [id^="card-"].bleed::after{opacity:var(--dk-edge-o,.9)}
 
 /* ══════════════════════════════════════════════════════════════════════════
+   ★히어로(2026-08-16)★ — 사용자: "아무리봐도 아까 사진처럼 나온 것 같진 않은데"
+   맞는 지적이었다. 앞 단계는 팔레트·재질만 옮겼고, 미리보기의 인상을 만들던
+   ★큰 요약 한 덩어리★가 빠져 있었다. 전광판을 갈아엎지 않고 그 위에 얹는다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  .dk-hero{
+    position:relative;overflow:hidden;border-radius:18px;
+    border:1px solid var(--dk-line);
+    background:linear-gradient(160deg,#0e1526 0%,#0a0f1c 58%,#080c17 100%);
+    box-shadow:0 24px 60px -30px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.055);
+    padding:20px 24px 18px;display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap}
+  .dk-hero::after{content:'';position:absolute;left:7%;top:-72%;width:50%;height:150%;
+    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.14),transparent)}
+  .dk-hero-main{position:relative;z-index:1;min-width:220px}
+  .dk-eyebrow{font-size:9.5px;letter-spacing:.2em;color:var(--dk-t3);font-weight:700}
+  .dk-hero-row{display:flex;align-items:baseline;gap:11px;margin-top:5px}
+  .dk-hero-n{font-family:var(--dk-disp);font-size:56px;font-weight:700;line-height:.86;
+    letter-spacing:-.03em;color:var(--dk-t0)}
+  .dk-hero-of{font-family:var(--dk-disp);font-size:18px;color:var(--dk-t3);font-weight:600}
+  .dk-hero-sub{margin-top:8px;font-size:12.5px;color:var(--dk-t1)}
+  .dk-hero-sub b{color:var(--dk-coral);font-weight:700}
+  .dk-hero-sub .ok{color:var(--dk-mint);font-weight:700}
+  .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
+  .dk-sm{text-align:right}
+  .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
+  .dk-sm .v{font-family:var(--dk-disp);font-variant-numeric:tabular-nums;
+    font-size:24px;font-weight:700;margin-top:3px;line-height:1;color:var(--dk-t0)}
+  .dk-sm .v i{font-size:12px;color:var(--dk-t2);font-style:normal;margin-left:2px}
+  .dk-sm.gold .v{color:var(--dk-gold)}
+  @media(max-width:760px){.dk-hero{gap:16px}.dk-hero-side{margin-left:0;gap:16px}
+    .dk-hero-n{font-size:44px}}
+
+/* ══════════════════════════════════════════════════════════════════════════
    ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
    마크업·onclick·정렬 함수는 하나도 안 건드렸다. 전부 CSS 덮어쓰기다.
    근거가 되는 마크업(고치면 아래 선택자가 죽는다):
@@ -2098,6 +2130,27 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 </div>
 
 <main class="p-4 sm:p-6 space-y-6">
+
+  <!-- ★히어로(2026-08-16)★ — 전광판은 '숫자 7개'라 무엇부터 봐야 할지 안 알려준다.
+       그 위에 ★지금 손봐야 할 게 몇 대인지★를 제일 크게 얹는다. 기존 전광판은
+       그대로 두고(id 하나도 안 건드림) 위에 얹기만 하므로 되돌리기 쉽다.
+       값은 renderCards 끝에서 dkHero()가 채운다 — 실패해도 화면은 멀쩡하다. -->
+  <div class="dk-hero">
+    <div class="dk-hero-main">
+      <div class="dk-eyebrow">FLEET STATUS</div>
+      <div class="dk-hero-row">
+        <span class="dk-hero-n" id="dk-h-on">–</span>
+        <span class="dk-hero-of" id="dk-h-of">/ – 가동</span>
+      </div>
+      <div class="dk-hero-sub" id="dk-h-sub">불러오는 중…</div>
+    </div>
+    <div class="dk-hero-side">
+      <div class="dk-sm"><div class="k">평균 효율</div><div class="v" id="dk-h-eff">–</div>
+        <svg width="104" height="26" id="dk-spark" aria-hidden="true"></svg></div>
+      <div class="dk-sm gold"><div class="k">창고 키나</div><div class="v" id="dk-h-kina">–</div></div>
+      <div class="dk-sm"><div class="k">완료 캐릭</div><div class="v" id="dk-h-done">–</div></div>
+    </div>
+  </div>
 
   <!-- 전광판 (순서: 온라인 → 완료 → 오드에너지 → 각성전 → 일일던전 → 거래키나 → 창고키나)
        — 열 폭은 .stat-grid(숫자 긴 오드에너지/거래키나/창고키나=3fr, 나머지=2fr) -->
@@ -2522,6 +2575,49 @@ function dkBleed(el, st){
       .forEach(p => el.style.removeProperty(p));
   }
 }
+// ★히어로 채우기(2026-08-16)★ — 전광판(숫자 7개) 위에 '지금 몇 대를 봐야 하나'를 크게.
+//   ★기존 집계 함수(refreshSummary)를 안 건드린다★ — 그쪽은 전광판 전용으로 그대로 두고
+//   여기서 state 를 직접 훑는다. 실패해도 renderCards 의 try/catch 가 삼켜 화면은 멀쩡.
+function dkHero(){
+  const $ = id => document.getElementById(id);
+  const pcs = Object.values(state||{});
+  if(!pcs.length) return;
+  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
+  // 물리 PC 기준(부계정 카드는 같은 본체) — 전광판의 '캐릭 수'와 다른 축이라 헷갈리지 않는다
+  const bases = {}; pcs.forEach(p=>{ const b=baseId(p.pc_id||''); if(!b) return;
+    bases[b] = bases[b] || {on:false, att:false};
+    if(isOn(p)) bases[b].on = true;
+    const t = (DK_BLEED[p.status]||[])[1];
+    if(t==='act'||t==='warn') bases[b].att = true; });
+  const list = Object.entries(bases);
+  const on  = list.filter(([,v])=>v.on).length;
+  const attIds = list.filter(([,v])=>v.att).map(([b])=>b.replace('PC-',''));
+
+  $('dk-h-on').textContent = on;
+  $('dk-h-of').textContent = `/ ${list.length} 가동`;
+  $('dk-h-sub').innerHTML = attIds.length
+    ? `<b>${attIds.length}대</b>가 확인을 기다립니다 · ${attIds.slice(0,8).join(', ')}${attIds.length>8?' …':''}`
+    : `<span class="ok">전부 정상</span> 입니다`;
+
+  const ef = pcs.filter(p=>p.efficiency);
+  const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
+  $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
+  $('dk-h-kina').textContent = fmtKinaShort(pcs.reduce((a,p)=>a+(p._total_kina||0),0));
+  const done = pcs.reduce((a,p)=>a+((p.daily_progress||[]).filter(c=>c.completed).length),0);
+  const tot  = pcs.reduce((a,p)=>a+((p.chars||[]).length),0);
+  $('dk-h-done').innerHTML = done+`<i>/${tot||'–'}</i>`;
+
+  // 스파크라인 — 각 PC 효율을 이어 그린 실제 데이터(장식 아님)
+  const vs = ef.map(p=>p.efficiency);
+  const sp = $('dk-spark');
+  if(sp && vs.length>1){
+    const mx=Math.max(...vs), mn=Math.min(...vs), sc=Math.max(1,mx-mn);
+    sp.innerHTML = `<polyline points="${vs.map((v,i)=>
+      [i/(vs.length-1)*102+1, 24-((v-mn)/sc)*21].map(n=>n.toFixed(1)).join(',')).join(' ')}"
+      fill="none" stroke="#3ddc9a" stroke-width="1.6" stroke-linejoin="round" opacity=".85"/>`;
+  }
+}
+
 // 카드가 다시 그려질 때마다 훑는다(렌더 경로가 여러 갈래라 한 곳에서 처리)
 function dkApplyBleed(){
   document.querySelectorAll('[id^="card-"]').forEach(el=>{
@@ -2922,6 +3018,7 @@ function renderCards() {
   setupDrag('grid-online',  DRAG_ORDER_KEY_ON);
   setupDrag('grid-offline', DRAG_ORDER_KEY_OFF);
   try{ dkApplyBleed(); }catch(e){}   // 커맨드 덱: 이상 카드만 윗면 빛샘 (실패해도 화면은 멀쩡)
+  try{ dkHero(); }catch(e){}         // 커맨드 덱: 히어로 요약 (기존 전광판은 그대로)
 }
 
 function fmtKinaKor(n) {
