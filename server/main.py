@@ -2567,19 +2567,40 @@ const DK_TIER = {
   warn: {a:'38', h:'86px', o:'.9'},
   ok:   {a:'1e', h:'40px', o:'.38'},
 };
+// ★★색은 상태마다 다르다, 등급은 급한 정도다 (2026-08-16 사용자 지적으로 재설계)★★
+//   사용자 원문: "왜 대기가 노란색이야 헷갈리게. 각 상태들은 색깔이 달라야지"
+//   ★내가 만든 문제★ — 첫 판에서 색을 코랄/앰버/민트 ★3개★로 뭉갰다. 그래서
+//   대기·일시정지·재연결·판매 넷이 전부 같은 앰버가 됐다(성격이 다 다른데).
+//   STATUS_CFG 는 원래 상태마다 색이 다른데(대기=회색) 빛샘만 뭉개서 서로 어긋났다.
+//   → ★색 = STATUS_CFG 와 같은 계열로 상태마다 하나씩★ / ★등급 = 급한 정도★ 로 분리.
+//     등급은 알파·높이·모서리선을 바꾸므로, 색이 20가지여도 정상(ok, 40px)은 옅게 깔리고
+//     개입(act, 86px)은 여전히 먼저 눈에 들어온다 — 원래 의도가 안 깨진다.
 const DK_BLEED = {
-  // 개입 — 코랄
-  captcha:['#ff5d6e','act'], dead:['#ff5d6e','act'], error:['#ff5d6e','act'],
-  offline:['#ff5d6e','act'], awakening_wait:['#ff5d6e','act'], nightmare_wait:['#ff5d6e','act'],
-  // 주의 — 앰버
-  reconnecting:['#f2b53c','warn'], paused:['#f2b53c','warn'],
-  idle:['#f2b53c','warn'], selling:['#f2b53c','warn'],
-  // 정상 가동 — 민트. ★hunting 과 moving 은 라벨이 둘 다 '사냥 중'★ 이라 반드시 같이
-  // 넣어야 한다(하나만 넣으면 같은 글자인데 카드가 깜빡이며 색이 붙었다 떨어진다).
-  hunting:['#3ddc9a','ok'], moving:['#3ddc9a','ok'],
-  abyss:['#3ddc9a','ok'], corridor:['#3ddc9a','ok'], dungeon:['#3ddc9a','ok'],
-  nightmare:['#3ddc9a','ok'], awakening:['#3ddc9a','ok'], subquest:['#3ddc9a','ok'],
-  collecting:['#3ddc9a','ok'], switching:['#3ddc9a','ok'],
+  // ── 개입(act) : 사람이 지금 손대야 한다 ─────────────────────────────────
+  captcha:       ['#ff4fa3','act'],   // 핫핑크
+  dead:          ['#ff5a4d','act'],   // 주홍빨강 — ★게임 안에서 죽음★ (매크로는 멀쩡)
+  error:         ['#e0234a','act'],   // 진홍(크림슨) — ★매크로 자체 고장★ (성격이 다르다)
+  awakening_wait:['#ff7a45','act'],   // 주홍 — 고장이 아니라 '눌러줘야 함'
+  nightmare_wait:['#ff7a45','act'],
+  offline:       ['#8fa3bd','act'],   // ★차가운 회청★ — 꺼진 건 경보색이 아니라 '부재'다.
+                                      //   등급은 act 라 크게 새어 눈에는 띈다.
+  // ── 주의(warn) : 곧 손이 필요하다. ★앰버는 '일시정지' 하나뿐★ ──────────
+  paused:        ['#f2b53c','warn'],  // 앰버
+  reconnecting:  ['#fb923c','warn'],  // 주황
+  idle:          ['#94a3b8','warn'],  // ★회색 — STATUS_CFG 의 대기 색과 일치★
+  // ── 정상 가동(ok) : 옅게만 ─────────────────────────────────────────────
+  // ★hunting 과 moving 은 라벨이 둘 다 '사냥 중'★ 이라 반드시 같이 넣어야 한다
+  // (하나만 넣으면 같은 글자인데 카드가 깜빡이며 색이 붙었다 떨어진다).
+  hunting:   ['#3ddc9a','ok'], moving:    ['#3ddc9a','ok'],   // 민트
+  selling:   ['#4a9eff','ok'],                                 // 파랑 — 판매는 정상 작업이다
+  abyss:     ['#e879f9','ok'],                                 // 자홍
+  corridor:  ['#38bdf8','ok'],                                 // 하늘
+  dungeon:   ['#a78bfa','ok'],                                 // 보라
+  nightmare: ['#f472b6','ok'],                                 // 분홍
+  awakening: ['#818cf8','ok'],                                 // 남보라
+  subquest:  ['#a3e635','ok'],                                 // 라임
+  collecting:['#22d3ee','ok'],                                 // 시안
+  switching: ['#c084fc','ok'],                                 // 자보라
 };
 function dkBleed(el, st){
   if(!el) return;
