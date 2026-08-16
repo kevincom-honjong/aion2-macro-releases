@@ -2073,7 +2073,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
     <button id="tts-btn" onclick="toggleTts()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors whitespace-nowrap">🔇 음성 꺼짐</button>
-    <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="목소리 고르기">⚙</button>
+    <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="설정 — 파섹 계정 · 목소리">⚙ 설정</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
     <button onclick="openAcctModal()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-violet-900/70 hover:bg-violet-700 text-violet-100 transition-colors whitespace-nowrap" title="계정 세부정보 — PC별 계정 아이디·이메일·휴대폰 (info.txt 에서 모아옵니다)">📇 계정정보</button>
@@ -2506,9 +2506,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <div id="alert-stack" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-auto"></div>
 <div id="voice-panel" class="hidden fixed top-14 right-4 z-50 w-72 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl p-4 text-xs text-gray-300">
   <div class="flex items-center justify-between mb-3">
-    <b class="text-sm text-gray-100">🎙 목소리 설정</b>
+    <b class="text-sm text-gray-100">⚙ 설정</b>
     <button onclick="toggleVoicePanel()" class="text-gray-500 hover:text-gray-200">✕</button>
   </div>
+  <!-- ★파섹 계정을 맨 위로(2026-08-16)★ — 사용자: "파섹 아이디 비번 넣는거 대시보드에 없잖아".
+       실제로는 있었는데 ★'목소리 설정' 패널 맨 아래★ 였다. 파섹 비번을 목소리 설정에서
+       찾을 사람은 없다 — 내 배치 실수. 제일 위로 올리고 패널 이름도 '설정'으로 바꾼다. -->
+  <div class="mb-4 pb-3 border-b border-gray-700/70">
+    <b class="block mb-2 text-gray-200">🔑 파섹 계정 <span class="text-gray-500 font-normal">(전 PC 공용 · 한 번만)</span></b>
+    <input id="ps-id" type="text" autocomplete="off" placeholder="파섹 이메일"
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
+    <input id="ps-pw" type="password" autocomplete="new-password" placeholder="파섹 비밀번호"
+           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
+    <button onclick="saveParsecCreds()" class="w-full py-1.5 rounded-lg bg-indigo-700/80 hover:bg-indigo-600 text-indigo-50 font-semibold">저장</button>
+    <p class="mt-2 text-[10px] leading-relaxed text-gray-500">카드 메뉴 <b>[🔄 본컴 계정 전환]</b>이 씁니다. 원격컴 크롬이 본컴 런처에 붙을 때 파섹 로그인 폼이 뜨면 이걸로 자동 입력합니다. 서버에만 저장되고 <b>화면으로 다시 불러오지 않습니다</b>. 명령 이력에도 <code>***</code> 로만 남습니다.</p>
+  </div>
+  <b class="block mb-2 text-gray-200">🎙 목소리</b>
   <label class="block mb-1 text-gray-400">목소리 (⭐ = 가장 자연스러움)</label>
   <select id="tts-voice" onchange="onVoiceChange()" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-3 text-gray-200"></select>
   <label class="block mb-1 text-gray-400">속도 <span class="text-gray-600">느리게 ↔ 빠르게</span></label>
@@ -2516,17 +2529,6 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <label class="block mb-1 text-gray-400">톤 <span class="text-gray-600">낮게 ↔ 높게</span></label>
   <input id="tts-pitch" type="range" min="-30" max="30" step="2" oninput="onVoiceTune()" class="w-full mb-3">
   <button onclick="previewVoice()" class="w-full py-1.5 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-emerald-50 font-semibold">▶ 미리듣기</button>
-  <!-- ★파섹 계정(2026-08-16)★ — [🔄 본컴 계정 전환]이 쓴다. 전 PC 공용, 한 번만 넣으면 됨.
-       ★저장만 하고 다시 불러오지 않는다★ — 비번을 브라우저로 되돌리지 않기 위해서. -->
-  <div class="mt-4 pt-3 border-t border-gray-700/70">
-    <b class="block mb-2 text-gray-200">🔑 파섹 계정 <span class="text-gray-500 font-normal">(전 PC 공용)</span></b>
-    <input id="ps-id" type="text" autocomplete="off" placeholder="파섹 이메일"
-           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
-    <input id="ps-pw" type="password" autocomplete="new-password" placeholder="파섹 비밀번호"
-           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 mb-2 text-gray-200">
-    <button onclick="saveParsecCreds()" class="w-full py-1.5 rounded-lg bg-indigo-700/80 hover:bg-indigo-600 text-indigo-50 font-semibold">저장</button>
-    <p class="mt-2 text-[10px] leading-relaxed text-gray-500">원격컴 크롬이 <b>본컴 런처</b>에 붙을 때 파섹 로그인 폼이 뜨면 이걸로 자동 입력합니다. 서버에만 저장되고 <b>화면으로 다시 불러오지 않습니다</b>. 명령 이력에도 <code>***</code> 로만 남습니다.</p>
-  </div>
   <p class="mt-3 text-[10px] leading-relaxed text-gray-500">기본은 <b>서버 사람 목소리</b>입니다. 서버가 음성을 못 만들면 브라우저 내장 음성으로 자동 전환되니 알림 자체는 끊기지 않습니다. 슬라이더를 내릴수록 낮고 느려집니다.</p>
 </div>
 
