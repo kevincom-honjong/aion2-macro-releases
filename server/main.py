@@ -1657,6 +1657,246 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
   /* ── 상단바 버튼 ── */
   header button,header a{border-radius:9px!important}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★빛샘 3등급 (2026-08-16 사용자 요청 "사냥중도 초록색 느낌")★
+   위 .bleed 규칙은 손대지 않고 변수 두 개만 덧씌운다(원복하기 쉽게).
+   높이·모서리선 세기를 JS(DK_TIER)가 넣어 주고, 없으면 예전 값(86px/.9)으로 돈다.
+   ★알파만 바꾸지 말 것★ — 정상(초록) 카드가 15장이라 높이까지 같이 줄여야
+   빨강 카드가 여전히 먼저 눈에 들어온다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  [id^="card-"].bleed::before{height:var(--dk-bleed-h,86px)}
+  [id^="card-"].bleed::after{opacity:var(--dk-edge-o,.9)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
+   마크업·onclick·정렬 함수는 하나도 안 건드렸다. 전부 CSS 덮어쓰기다.
+   근거가 되는 마크업(고치면 아래 선택자가 죽는다):
+     · 판  : <section class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+     · 표틀: #char-table-wrap > div.overflow-x-auto > table
+     · PC 그룹 헤더줄 : <tr class="bg-gray-700/80 cursor-pointer" onclick=togglePcGroup>
+       → CSS 에선 슬래시를 이스케이프해서 .bg-gray-700\/80 으로 잡는다.
+     · 그룹마다 반복되는 열이름줄 : <tr data-pc=".."> 안이 <th>
+     · 실제 데이터줄             : <tr data-pc=".."> 안이 <td>
+       (renderCharTable 이 renderRow 결과에 data-pc 를 끼워 넣는다)
+     · 경고줄 = .bg-red-950\/40 / 줄무늬 = .bg-gray-900, .bg-gray-800\/50
+   되돌리기: 이 주석부터 스타일 블록 끝까지만 지우면 어제 모습으로 돌아간다.
+   ★주의★ CSS 주석 안에도 스타일 닫는 태그를 절대 쓰지 말 것 — HTML 파서가 그 자리에서
+   스타일을 끝내 버려서 뒤쪽 CSS 전부가 본문에 글자로 쏟아진다(이 블록 작성 중 실제 발생).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── 표를 담은 판 (캐릭터 현황 + 최근 명령 내역 둘 다) ───────────────── */
+  main section.bg-gray-900{
+    background:linear-gradient(178deg,var(--dk-ink1),#080b14)!important;
+    border-color:var(--dk-line)!important;border-radius:15px!important;
+    box-shadow:0 18px 44px -30px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.045)!important}
+  main section.bg-gray-900 h2{color:var(--dk-t2)!important;letter-spacing:.13em}
+  main section.bg-gray-900 h2:hover{color:var(--dk-t1)!important}
+  #char-table-arrow{display:inline-block;width:11px;color:var(--dk-gold);font-size:10px}
+  #char-table-count{color:var(--dk-t3)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+  /* 우상단 도구 버튼(새로고침·전체열기·인쇄) — 무채색, 손대면 앰버 */
+  main section.bg-gray-900 button.bg-gray-800{
+    background:rgba(255,255,255,.04)!important;border:1px solid var(--dk-line);
+    border-radius:8px!important;color:var(--dk-t2)!important;font-weight:600}
+  main section.bg-gray-900 button.bg-gray-800:hover{
+    background:rgba(242,181,60,.10)!important;border-color:rgba(242,181,60,.42);
+    color:var(--dk-gold-s)!important}
+  /* 검색칸 */
+  #char-filter{background:rgba(255,255,255,.035)!important;border:1px solid var(--dk-line)!important;
+    border-radius:9px!important;color:var(--dk-t0)!important}
+  #char-filter::placeholder{color:var(--dk-t3)}
+  #char-filter:focus{border-color:rgba(242,181,60,.55)!important;
+    box-shadow:0 0 0 3px rgba(242,181,60,.10)}
+  #cmd-history{color:var(--dk-t2)!important}
+
+  /* ── 표틀: 잉크 접시 하나로 묶고 세로 스크롤을 준다 ───────────────────
+     ★행동 변화 1건★ — thead 에는 원래 sticky top-0 이 붙어 있었지만 감싼 div 에
+     높이가 없어 실제로는 고정되지 않았다. max-height 를 줘서 표 안에서 스크롤되게
+     하면 비로소 머리줄이 붙는다. 예전처럼 페이지 전체 스크롤로 돌리려면
+     아래 max-height/overflow-y 두 줄만 지우면 된다. */
+  #char-table-wrap > .overflow-x-auto{
+    max-height:min(74vh,900px);overflow-y:auto;
+    border:1px solid var(--dk-line);border-radius:12px;background:var(--dk-ink0);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar{width:9px;height:9px}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-track{background:transparent}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-thumb{
+    background:var(--dk-line2);border-radius:6px;border:2px solid var(--dk-ink0)}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-thumb:hover{background:#46567a}
+
+  /* ── 머리줄: 잉크 배경 + 실제로 붙는 sticky ── */
+  #char-table-wrap thead th{
+    position:sticky;top:0;z-index:4;
+    background:#0b1018!important;color:var(--dk-t2)!important;
+    font-weight:600;letter-spacing:.05em;
+    border-bottom:1px solid var(--dk-line2)!important;
+    box-shadow:0 1px 0 rgba(0,0,0,.6)}
+  #char-table-wrap thead th[onclick]{cursor:pointer}
+  #char-table-wrap thead th:hover{color:var(--dk-gold-s)!important}
+
+  /* ── PC 그룹 헤더: 덩어리의 뚜껑 ───────────────────────────────────── */
+  #char-tbody tr.bg-gray-700\/80 > td{
+    background:linear-gradient(90deg,#17203a,#121a2c 55%,#0e1424)!important;
+    border-top:1px solid var(--dk-line2)!important;
+    border-bottom:1px solid var(--dk-line)!important;
+    box-shadow:inset 3px 0 0 var(--dk-gold);
+    padding-top:.5rem!important;padding-bottom:.5rem!important;
+    color:var(--dk-t0)!important}
+  #char-tbody tr.bg-gray-700\/80:hover > td{
+    background:linear-gradient(90deg,#1c2748,#141d33 55%,#101728)!important}
+  #char-tbody [id^="pc-arrow-"]{display:inline-block;width:11px;font-size:10px;color:var(--dk-gold)}
+  /* 뚜껑에 달린 꼬리표들 — 버튼(중첩 div 안)은 안 건드리도록 > span 으로만 잡는다 */
+  #char-tbody tr.bg-gray-700\/80 > td > div > span{
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-purple-300{color:var(--dk-t2)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-gray-500{color:var(--dk-t3)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-cyan-400{color:var(--dk-t2)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-yellow-300{color:var(--dk-gold)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-red-400{color:var(--dk-coral)!important;font-weight:700}
+  /* 버튼 묶음 사이의 '|' 구분자 — 버튼 div 안에 있으므로 따로 잡는다 */
+  #char-tbody tr.bg-gray-700\/80 > td > div > div > span.text-gray-600{color:var(--dk-line2)!important}
+  /* ★뚜껑의 명령 버튼 14개 — 바탕만 무채색으로 눕히고 글자색(의미)은 그대로 둔다★
+     20개 그룹이 펼쳐지면 색 버튼 300개가 표를 덮어서 정작 봐야 할 수치가 안 읽혔다. */
+  #char-tbody tr.bg-gray-700\/80 button{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2);
+    border-radius:7px!important;font-weight:600}
+  #char-tbody tr.bg-gray-700\/80 button:hover{
+    background:rgba(255,255,255,.13)!important;border-color:var(--dk-t3)}
+
+  /* ── 그룹마다 반복되는 열이름줄 (tr[data-pc] 안의 th) ── */
+  #char-tbody tr[data-pc] th{
+    background:#0a0f1b!important;color:var(--dk-t3)!important;font-weight:600;
+    letter-spacing:.05em;border-bottom:1px solid var(--dk-line)!important}
+
+  /* ── 데이터줄 ──────────────────────────────────────────────────────── */
+  #char-tbody tr{border-color:var(--dk-line)!important}
+  #char-tbody tr.bg-gray-900{background:transparent!important}
+  #char-tbody tr.bg-gray-800\/50{background:rgba(255,255,255,.022)!important}
+  /* 개입 필요줄 — 빨간 판때기 대신 왼쪽에 코랄 한 줄 + 아주 옅은 틴트 */
+  #char-tbody tr.bg-red-950\/40{background:rgba(255,93,110,.07)!important}
+  #char-tbody tr.bg-red-950\/40 > td:first-child{box-shadow:inset 2px 0 0 var(--dk-coral)}
+  #char-tbody tr[data-pc]:hover > td{background:rgba(242,181,60,.07)}
+  #char-tbody tr[data-pc] > td{border-bottom:1px solid rgba(26,34,55,.5)}
+
+  /* 숫자 열만 표시체 + 자릿수 고정 (이름·직업·정기추출·아르카나·장비는 제외) */
+  #char-tbody tr[data-pc] > td:nth-child(1),#char-tbody tr[data-pc] > td:nth-child(2),
+  #char-tbody tr[data-pc] > td:nth-child(6),#char-tbody tr[data-pc] > td:nth-child(7),
+  #char-tbody tr[data-pc] > td:nth-child(8),#char-tbody tr[data-pc] > td:nth-child(9),
+  #char-tbody tr[data-pc] > td:nth-child(10),#char-tbody tr[data-pc] > td:nth-child(11),
+  #char-tbody tr[data-pc] > td:nth-child(12),#char-tbody tr[data-pc] > td:nth-child(13),
+  #char-tbody tr[data-pc] > td:nth-child(14),#char-tbody tr[data-pc] > td:nth-child(18),
+  #char-tbody tr[data-pc] > td:nth-child(19),#char-tbody tr[data-pc] > td:nth-child(20),
+  #char-tbody tr[data-pc] > td:nth-child(21),#char-tbody tr[data-pc] > td:nth-child(22),
+  #char-tbody tr[data-pc] > td:nth-child(23){
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+  /* 평상시는 무채색 — 색이 정보를 나를 때만 남긴다.
+     ★열 번호로 잡는 이유★ — 4열(직업)의 classColors 가 궁성=green-400 / 검성=orange-400 /
+     마도성=cyan-400 … 로 수치 열과 ★같은 Tailwind 클래스★를 쓴다. .text-cyan-400 처럼
+     클래스만 보고 칠하면 직업 색까지 같이 죽는다(작업 중 실제로 그랬다). 그래서 열 번호로
+     한정하고 4열(직업)·15열(정기추출)은 손대지 않는다. */
+  #char-tbody tr[data-pc] > td:nth-child(2){color:var(--dk-t2)!important}   /* # */
+  #char-tbody tr[data-pc] > td:nth-child(3){color:var(--dk-t0)!important;font-weight:600} /* 이름 */
+  #char-tbody tr[data-pc] > td:nth-child(6){color:var(--dk-t1)!important}   /* 장비전투력 */
+  #char-tbody tr[data-pc] > td:nth-child(7){color:var(--dk-t0)!important}   /* 파워전투력 */
+  #char-tbody tr[data-pc] > td:nth-child(8){color:var(--dk-t1)!important}   /* 오드에너지 */
+  #char-tbody tr[data-pc] > td:nth-child(18),
+  #char-tbody tr[data-pc] > td:nth-child(19){color:var(--dk-t1)!important}  /* 각인·거래키나 */
+  #char-tbody tr[data-pc] > td:nth-child(21),
+  #char-tbody tr[data-pc] > td:nth-child(22){color:var(--dk-t2)!important}  /* 어비스 */
+  /* 돈의 총합 한 줄만 앰버 / 완료는 민트 / 개입은 코랄 */
+  #char-tbody tr[data-pc] > td:nth-child(20){color:var(--dk-gold)!important}          /* 창고키나 */
+  #char-tbody tr[data-pc] > td:nth-child(23).text-sky-300{color:var(--dk-t2)!important}   /* 회랑 미완 */
+  #char-tbody tr[data-pc] > td:nth-child(23).text-green-400{color:var(--dk-mint)!important}/* 회랑 완주 */
+  #char-tbody tr[data-pc] > td .text-red-400{color:var(--dk-coral)!important}
+  #char-tbody tr[data-pc] > td .text-pink-400{color:var(--dk-t2)!important}
+  #char-tbody input[type="checkbox"]{accent-color:var(--dk-mint)}
+  /* 줄 안의 작은 것들: 📡 수집 버튼 / 보기 링크 */
+  #char-tbody tr[data-pc] > td button{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2);
+    border-radius:7px!important;color:var(--dk-t2)!important}
+  #char-tbody tr[data-pc] > td button:hover{
+    background:rgba(79,211,232,.16)!important;color:var(--dk-cyan)!important}
+  #char-tbody tr[data-pc] > td a{color:var(--dk-t2)!important;
+    text-decoration-color:var(--dk-t3)}
+  #char-tbody tr[data-pc] > td a:hover{color:var(--dk-gold-s)!important;
+    text-decoration-color:var(--dk-gold)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★덱 테마 3단계 — 모달 (2026-08-16)★
+   겉모습만. id·onclick·열고닫는 JS(classList hidden) 전부 그대로다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  /* 마스크: 검은 장막 → 짙은 잉크 + 블러 */
+  #log-modal,#vietnam-modal,#bug-modal,#liveModal,#rental-modal,#acct-modal,#info-modal{
+    background:rgba(4,6,12,.72)!important;
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  /* 판: 위 1px 하이라이트 + 깊은 그림자 */
+  #log-modal > div,#vietnam-modal > div,#bug-modal > div,#liveModal > div,
+  #rental-modal > div,#acct-modal > div,#info-modal > div,#voice-panel{
+    background:linear-gradient(178deg,var(--dk-ink1),#070a12)!important;
+    border-color:var(--dk-line)!important;
+    box-shadow:0 40px 90px -42px rgba(0,0,0,1),
+               inset 0 1px 0 rgba(255,255,255,.05)!important}
+  /* 가운데 뜨는 판은 카드와 같은 반경 / 옆에서 나오는 서랍은 각지게 둔다 */
+  #vietnam-modal > div,#bug-modal > div,#liveModal > div,
+  #rental-modal > div,#acct-modal > div{border-radius:15px!important}
+  #voice-panel{border-radius:13px!important}
+  /* 머리줄·바닥줄 구분선 */
+  #log-modal .border-b,#vietnam-modal .border-b,#bug-modal .border-b,#liveModal .border-b,
+  #rental-modal .border-b,#acct-modal .border-b,#info-modal .border-b{
+    border-bottom-color:var(--dk-line)!important}
+  #log-modal .border-t,#liveModal .border-t,#info-modal .border-t{
+    border-top-color:var(--dk-line)!important}
+  /* 제목: 알록달록한 색 이름표 → 무채색. 단 버그 모달만 코랄(개입 신호) */
+  #log-modal h2,#vietnam-modal h2,#liveModal h2,#acct-modal h2,#info-modal h2{
+    color:var(--dk-t0)!important;font-weight:700;letter-spacing:.01em}
+  #bug-modal h2,#rental-modal h2{color:var(--dk-coral)!important;font-weight:700}
+  #acct-count{color:var(--dk-t3)!important;font-family:var(--dk-disp)}
+  /* 모달 안 버튼: 반경 한 체계 + 무채색 바탕(글자색=의미는 유지) */
+  #log-modal button,#vietnam-modal button,#bug-modal button,#liveModal button,
+  #rental-modal button,#acct-modal button,#info-modal button,#voice-panel button{
+    border-radius:8px!important}
+  #log-modal [class*="bg-gray-7"],#bug-modal [class*="bg-gray-7"],
+  #acct-modal button[class*="bg-gray-7"],#info-modal button[class*="bg-gray-7"]{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2)}
+
+  /* ── 계정 세부정보 표 ── */
+  .acct-table thead th{color:var(--dk-t3)!important;letter-spacing:.06em;
+    border-bottom:1px solid var(--dk-line2)!important}
+  .acct-td{border-bottom:1px solid rgba(26,34,55,.6)!important}
+  .acct-row.acct-group td{border-top:1px solid var(--dk-line2)!important}
+  .acct-row:hover td{background:rgba(242,181,60,.055)!important}
+  .acct-id{color:var(--dk-t0)!important}
+  .acct-em,.acct-ph{color:var(--dk-t2)!important}
+  .acct-ph,.acct-n{font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+
+  /* ── 캐릭터 세부정보(서랍) ── */
+  #info-content > div{
+    background:linear-gradient(180deg,#101627,#0a0f1a)!important;
+    border-color:var(--dk-line)!important;border-radius:13px!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04)!important}
+  #info-content .bg-gray-750{background:rgba(255,255,255,.035)!important}
+  #info-content .border-gray-700,#info-content .border-gray-800\/60{
+    border-color:var(--dk-line)!important}
+  #info-content .text-indigo-400{color:var(--dk-gold)!important;
+    font-family:var(--dk-disp)}
+  #info-content .text-gray-500{color:var(--dk-t3)!important}
+  #info-content .text-gray-100{color:var(--dk-t0)!important}
+  #info-content .text-gray-200{color:var(--dk-t0)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+  #info-content .text-yellow-300{color:var(--dk-gold)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  #info-collected-at{color:var(--dk-t3)!important;font-family:var(--dk-disp)}
+
+  /* ── 버그 스크린샷 목록 ── */
+  #bug-list > div{background:rgba(255,255,255,.035)!important;
+    border-color:var(--dk-line)!important;border-radius:11px!important}
+  #bug-list .font-mono{color:var(--dk-t2)!important}
+  #bug-list .text-gray-600{color:var(--dk-t3)!important}
+  #bug-clear-btn{background:rgba(255,93,110,.12)!important;
+    border:1px solid rgba(255,93,110,.35);color:var(--dk-coral)!important}
+  #bug-clear-btn:hover{background:rgba(255,93,110,.22)!important}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
@@ -2136,24 +2376,52 @@ const STATUS_CFG = {
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
-// ★커맨드 덱(2026-08-16)★ — '개입이 필요한 상태'만 카드 윗면에서 빛이 새게 한다.
-//   평상시(사냥·회랑·던전 등)는 아무 색도 안 준다 → 20장 중 문제 있는 놈만 눈에 띈다.
+// ★커맨드 덱(2026-08-16)★ — 카드 윗면에서 상태색이 새어 나온다.
 //   ★상태 판정은 STATUS_CFG 를 안 건드리고 여기서만 한다★ — 라벨·뱃지·색은 그대로.
+//
+//   ★세기를 3등급으로 나눈 이유(2026-08-16 사용자 요청 "사냥중도 초록색 느낌")★
+//   함대 20대 중 15대가 사냥중이다. 초록을 개입색과 같은 세기로 주면 화면이 초록 잔치가
+//   되고 빨강/앰버가 묻힌다 — 이 디자인의 목적(문제 있는 놈만 눈에 띄기)이 죽는다.
+//   그래서 색만 다른 게 아니라 ★알파·높이·모서리선 세기까지 3등급★으로 벌려 놓았다.
+//     ok   민트 알파 1e(≈12%) · 높이 40px · 모서리선 .38  ← 잘 돌고 있음(대다수)
+//     warn 앰버 알파 38(≈22%) · 높이 86px · 모서리선 .9   ← 손이 곧 필요함
+//     act  코랄 알파 44(≈27%) · 높이 86px · 모서리선 1    ← 지금 개입
+//   카드 바탕(#0c1120) 위에서 민트는 +(6,24,14), 코랄은 +(65,20,21) 만큼 밀린다.
+//   밀림 폭이 3배 차이 나는 데다 높이도 2배라 초록이 15장 깔려도 빨강이 먼저 보인다.
+//   세기를 바꾸려면 DK_TIER 한 곳만 고치면 된다.
+const DK_TIER = {
+  act:  {a:'44', h:'86px', o:'1'},
+  warn: {a:'38', h:'86px', o:'.9'},
+  ok:   {a:'1e', h:'40px', o:'.38'},
+};
 const DK_BLEED = {
-  captcha:'#ff5d6e', dead:'#ff5d6e', error:'#ff5d6e', offline:'#ff5d6e',
-  awakening_wait:'#ff5d6e', nightmare_wait:'#ff5d6e',
-  reconnecting:'#f2b53c', paused:'#f2b53c', idle:'#f2b53c', selling:'#f2b53c',
+  // 개입 — 코랄
+  captcha:['#ff5d6e','act'], dead:['#ff5d6e','act'], error:['#ff5d6e','act'],
+  offline:['#ff5d6e','act'], awakening_wait:['#ff5d6e','act'], nightmare_wait:['#ff5d6e','act'],
+  // 주의 — 앰버
+  reconnecting:['#f2b53c','warn'], paused:['#f2b53c','warn'],
+  idle:['#f2b53c','warn'], selling:['#f2b53c','warn'],
+  // 정상 가동 — 민트. ★hunting 과 moving 은 라벨이 둘 다 '사냥 중'★ 이라 반드시 같이
+  // 넣어야 한다(하나만 넣으면 같은 글자인데 카드가 깜빡이며 색이 붙었다 떨어진다).
+  hunting:['#3ddc9a','ok'], moving:['#3ddc9a','ok'],
+  abyss:['#3ddc9a','ok'], corridor:['#3ddc9a','ok'], dungeon:['#3ddc9a','ok'],
+  nightmare:['#3ddc9a','ok'], awakening:['#3ddc9a','ok'], subquest:['#3ddc9a','ok'],
+  collecting:['#3ddc9a','ok'], switching:['#3ddc9a','ok'],
 };
 function dkBleed(el, st){
   if(!el) return;
-  const c = DK_BLEED[st];
-  if(c){
+  const b = DK_BLEED[st];
+  if(b){
+    const t = DK_TIER[b[1]] || DK_TIER.warn;
     el.classList.add('bleed');
-    el.style.setProperty('--dk-bleed', c+'38');   // 22% 정도로 옅게 번지게
-    el.style.setProperty('--dk-edge', c);
+    el.style.setProperty('--dk-bleed', b[0]+t.a);
+    el.style.setProperty('--dk-edge', b[0]);
+    el.style.setProperty('--dk-bleed-h', t.h);
+    el.style.setProperty('--dk-edge-o', t.o);
   }else{
     el.classList.remove('bleed');
-    el.style.removeProperty('--dk-bleed'); el.style.removeProperty('--dk-edge');
+    ['--dk-bleed','--dk-edge','--dk-bleed-h','--dk-edge-o']
+      .forEach(p => el.style.removeProperty(p));
   }
 }
 // 카드가 다시 그려질 때마다 훑는다(렌더 경로가 여러 갈래라 한 곳에서 처리)
