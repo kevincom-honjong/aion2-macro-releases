@@ -3655,9 +3655,17 @@ async function switchLauncherFromMenu(){
   const id=menuPcId; closeCardMenu();
   const st=((state[id]||{}).status)||'';
   if(st==='hunting' && !confirm(`${id} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return;
-  if(!confirm(`${id} 의 ★본컴★ 런처 계정을 전환하고 게임을 실행합니다.\n계속할까요?`)) return;
-  const ok=await sendCmd(id,'switch_launcher',{});
-  showToast(ok?`🔄 ${id} 본컴 계정 전환 지시 — 1~2분 걸립니다 (결과는 텔레그램)`
+  // ★어느 계정으로 갈지 물어본다(2026-08-16)★ — 런처 드롭다운의 '다른 계정' 목록에서
+  //   몇 번째 줄인가(1부터). 계정 2개면 1. ★3개 이상은 줄 간격이 아직 미실측★ 이라
+  //   경고를 띄운다(엉뚱한 줄을 눌러도 매크로가 '계정 안 바뀜'으로 잡아내긴 한다).
+  const raw=prompt(`${id} 의 본컴 런처에서 ★몇 번째 다른 계정★ 으로 전환할까요?\n\n`
+    +`계정이 2개면 그냥 1 (기본).\n3개 이상이면 목록 순서대로 2, 3…\n`
+    +`※3개 이상은 줄 간격이 미실측이라 빗나갈 수 있습니다 (실패로 잡힙니다)`, '1');
+  if(raw===null) return;
+  const idx=Math.max(1,parseInt(raw,10)||1);
+  if(!confirm(`${id} 의 ★본컴★ 런처를 ${idx}번째 다른 계정으로 전환하고 게임을 실행합니다.\n계속할까요?`)) return;
+  const ok=await sendCmd(id,'switch_launcher',{acct_index:idx, acct_label:`계정#${idx}`});
+  showToast(ok?`🔄 ${id} 본컴 계정 전환 지시 (${idx}번째) — 1~2분 (결과는 텔레그램)`
               :`✗ ${id} 계정 전환 명령 실패`);
 }
 
