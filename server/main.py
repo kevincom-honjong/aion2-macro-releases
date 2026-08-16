@@ -1230,10 +1230,23 @@ LICENSE_SECRET = os.getenv("LICENSE_SECRET", "aion2-license-v1-7f3a")
 
 
 # ─── 전역 설정 KV (각성 난이도 프리셋 등, 2026-07-26) — 테넌트 스코프 ────────
+# ★비밀 설정은 API 키로 못 읽는다 (2026-08-16)★
+#   매크로 API 키는 ★공개 exe·공개 저장소에 각인★돼 있어(구조적) 유출을 전제해야 한다.
+#   그런데 /setting/{key} 는 API 키 조회를 허용하므로, 여기에 비번을 넣으면
+#   ★exe 받은 사람 누구나 꺼낼 수 있다★ — 내가 "대시보드 세션 전용이라 막힌다"고
+#   설명했는데 이 엔드포인트를 못 봐서 틀린 말이었다(사용자 확인 중 발견).
+#   매크로가 실제로 읽는 설정은 awakening_preset / sale_price 둘뿐이라(실측) 무해하다.
+#   parsec_pw 는 명령 args 로만 배달된다(enrich_cmd_args) — 매크로는 조회할 필요가 없다.
+SECRET_SETTINGS = {"parsec_pw", "parsec_id"}
+
+
 @app.get("/setting/{key}")
 async def get_setting_ep(key: str, request: Request):
-    """매크로(X-Api-Key)와 대시보드(세션) 양쪽 조회 허용."""
-    tenant = check_api_key(request) or check_session(request)
+    """매크로(X-Api-Key)와 대시보드(세션) 양쪽 조회 허용 — ★비밀 키는 세션만★."""
+    if key in SECRET_SETTINGS:
+        tenant = check_session(request)          # API 키로는 못 읽는다
+    else:
+        tenant = check_api_key(request) or check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
     val = await get_setting(ns(tenant, key))
