@@ -3263,7 +3263,7 @@ function refreshSummary(pcs) {
     // ★캐릭터 수 집계(2026-08-07)★ — 전광판은 대수가 아니라 캐릭터 수를 보여준다.
     //   캐릭 수는 daily_progress 길이(=슬롯 수)가 정본, 아직 없으면 chars 목록으로 보완.
     const nChars = dp.length || ((p.chars && p.chars.length) || 0);
-    if(isOnline) c.onlineChars += nChars;
+    if(isOnline) c.onlineChars += nChars;   // ↓ 아래에서 '뒷카드 포함'으로 다시 계산한다
     c.completedChars += dp.filter(d=>d.completed).length;
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
@@ -3271,6 +3271,30 @@ function refreshSummary(pcs) {
       c.totalKina += p._total_kina;
     }
   });
+  // ★★온라인 캐릭터 수는 '뒷카드까지' 센다 (2026-08-18 사용자 지적)★★
+  //   "온라인 캐릭터 갯수가 안맞네? 뒤에카드까지포함해서 갯수맞춰야지"
+  //   멀티계정 PC 는 활성 계정 카드만 online 이고, 나머지 계정 카드는 status=
+  //   'other_account'(online:false) 라 캐릭터 집계에서 통째로 빠졌다. 하지만 그 PC 는
+  //   켜져 있고 그 계정들의 캐릭터도 오늘 돌 대상이다 — 자리(PC)가 하나면 캐릭터도
+  //   묶음 전체를 세야 숫자가 맞는다.
+  //   → PC 묶음(baseId) 중 ★하나라도 온라인이면★ 그 묶음의 전 계정 캐릭터를 더한다.
+  {
+    const grp = {};
+    pcs.forEach(p => {
+      const b = baseId(p.pc_id || '');
+      (grp[b] = grp[b] || []).push(p);
+    });
+    let n = 0;
+    Object.values(grp).forEach(list => {
+      const anyOn = list.some(p => (STATUS_CFG[p.status || 'offline'] || STATUS_CFG.offline).online);
+      if (!anyOn) return;
+      list.forEach(p => {
+        const dp = p.daily_progress || [];
+        n += dp.length || ((p.chars && p.chars.length) || 0);
+      });
+    });
+    c.onlineChars = n;
+  }
   // 오드에너지 + 각성전 티켓 + 거래키나 합산 (charTableData 기준, 거래키나는 캐릭터별 소지라 전 캐릭 합산)
   let totalOdd = 0, totalAwaken = 0, awakenSeen = false, totalTrade = 0, tradeSeen = false;
   charTableData.forEach(r => {
