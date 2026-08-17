@@ -3035,19 +3035,27 @@ function saveOrder(key, ids) {
 //     지금 안 보이는 카드의 자리는 그대로 두고, 보이는 카드끼리만 자리를 재배치한다.
 const DRAG_ORDER_KEY = 'card_order_v2';
 
+// ★★순서의 키는 '계정' 이 아니라 '★PC★' 다 (2026-08-18 사용자 지적)★★
+//   "지금 카드겹쳐잇는것때문에 그런가? 자리 안바뀌는거 고쳐봐" — 맞았다.
+//   겹친 카드(멀티계정 스택)는 ★지금 활성인 계정 카드★ 를 대표로 세운다. 그래서
+//   계정을 전환하면 대표 id 가 PC-20 → PC-20b 로 바뀐다. 순서를 그 id 로 저장하면
+//   전환할 때마다 ★처음 보는 카드★ 가 돼 맨 뒤로 밀린다 — 자리가 안 지켜지는 이유.
+//   → baseId(PC-20b → PC-20) 를 키로 쓴다. 계정이 뭐든 스택의 자리는 하나다.
 function sortByOrder(pcs, key) {
   const order = loadOrder(DRAG_ORDER_KEY);
   const idx = {};
   order.forEach((id,i) => idx[id] = i);
-  const known = pcs.filter(p => idx[p.pc_id] !== undefined).sort((a,b) => idx[a.pc_id] - idx[b.pc_id]);
-  const fresh = pcs.filter(p => idx[p.pc_id] === undefined).sort((a,b) => (a.pc_id||'').localeCompare(b.pc_id||''));
+  const k = p => baseId(p.pc_id || '');
+  const known = pcs.filter(p => idx[k(p)] !== undefined).sort((a,b) => idx[k(a)] - idx[k(b)]);
+  const fresh = pcs.filter(p => idx[k(p)] === undefined).sort((a,b) => k(a).localeCompare(k(b)));
   return [...known, ...fresh];
 }
 
 function saveCurrentOrder(gridId, key) {
+  const seenB = {};
   const visible = [...document.getElementById(gridId).children]
-    .map(el => el.id?.replace('card-',''))
-    .filter(Boolean);
+    .map(el => baseId((el.id || '').replace('card-','')))
+    .filter(id => id && !seenB[id] && (seenB[id] = 1));
   if (!visible.length) return;
   const stored = loadOrder(DRAG_ORDER_KEY);
   const merged = stored.slice();
@@ -3063,16 +3071,25 @@ function saveCurrentOrder(gridId, key) {
 }
 
 // 옛 두 목록(card_order_online / card_order_offline)을 한 번만 합쳐 옮긴다
-(function migrateOrder(){
+//   ★즉시 실행하지 않는다★ — baseId 는 한참 아래에 정의돼 있어 호이스팅에만 기대게 된다.
+//   블록이 쪼개지는 순간 조용히 깨지므로, 첫 렌더 때 renderCards 가 부른다.
+let _orderMigrated = false;
+function migrateOrder(){
+  if (_orderMigrated) return;
+  _orderMigrated = true;
   try {
     if (localStorage.getItem(DRAG_ORDER_KEY)) return;
     const a = JSON.parse(localStorage.getItem('card_order_online')  || '[]') || [];
     const b = JSON.parse(localStorage.getItem('card_order_offline') || '[]') || [];
     const seen = {}, out = [];
-    [...a, ...b].forEach(id => { if (id && !seen[id]) { seen[id] = 1; out.push(id); } });
+    // ★옛 목록엔 계정 id(PC-20b)가 섞여 있다 — base 로 정규화하며 합친다★
+    [...a, ...b].forEach(id => {
+      const k = baseId(id || '');
+      if (k && !seen[k]) { seen[k] = 1; out.push(k); }
+    });
     if (out.length) saveOrder(DRAG_ORDER_KEY, out);
   } catch(e) {}
-})();
+}
 
 function setupDrag(gridId, orderKey) {
   const grid = document.getElementById(gridId);
@@ -3156,6 +3173,7 @@ function buildStack(s){
 }
 
 function renderCards() {
+  migrateOrder();          // 옛 순서 목록 1회 이관(baseId 정의 뒤에 안전하게)
   const pcs = Object.values(state).sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
   const groups = {};
   pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
