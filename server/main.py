@@ -2125,7 +2125,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="selCmd('exit')" class="chip chip-red">✕ 종료</button>
     <button onclick="selUpdaterCmd('update')" class="chip chip-cyan">↑ 업데이트+재시작</button>
     <button onclick="switchAccountSelected()" class="chip chip-purple"
-            title="선택한 PC들을 한꺼번에 지정 계정(1~4)으로 자동 전환 — 각 PC가 크롬 로그아웃→로그인→게임 진입 (물리 PC당 1건, 온라인 카드로 전송)">🔁 계정전환</button>
+            title="선택한 PC들을 한꺼번에 지정 계정(1~4)으로 통짜 전환 — 각 PC가 ★본컴 런처(파섹) → 원격컴 크롬 → 매크로 재시작★ 까지 (물리 PC당 1건, 이미 그 계정인 PC는 제외, 대당 1~2분)">🔁 계정전환</button>
   </div>
 
   <!-- 그룹 3: 콘텐츠 -->
@@ -3518,22 +3518,39 @@ async function selCmd(command, args={}) {
 // ★물리 PC당 1건★ — 같은 PC의 계정 카드가 여러 장 선택돼도(PC-03 + PC-03b) 매크로는
 // 한 대뿐이다. 온라인 카드가 곧 수신자이므로 base별로 온라인 카드를 골라 거기로만 보낸다.
 // (오프라인 카드로 보내면 아무도 안 가져가는 고아 명령 — selUpdaterCmd의 dedup과 같은 이유)
+// ★2026-08-18: 다중선택 계정전환도 통짜★ — 예전엔 switch_account(원격컴 크롬만)라
+//   본컴 런처가 옛 계정 그대로 남았다. 짝이 안 맞으면 스트림이 영영 안 뜬다.
+//   → switch_launcher 로 통일(본컴 → 원격컴 → 재시작). peer_id·파섹 비번은 서버가 채운다.
 async function switchAccountSelected() {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const v = normAcct(prompt(
     `선택 PC들을 전환할 계정 번호 (1~4)\n1 = 본계정 / 2,3,4 = 부계정\n` +
-    `각 PC가 크롬 로그아웃→로그인→게임 진입까지 자동 (info.txt 계정N_아이디/비번 필요)`));
+    `★본컴 런처 → 원격컴 크롬 → 매크로 재시작★ 까지 각 PC가 자동으로 합니다\n` +
+    `(info.txt 계정N_아이디/비번 + 파섹 주소록 peer_id 필요)`));
   if(!v) return;
+  const n = acctNum(v);
   const byBase = {};
   for (const id of selectedPcs) {
     const b = baseId(id);
     const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
-  const targets = Object.values(byBase).map(x=>x.id);
-  if(!confirm(`${targets.length}대 → 계정 ${acctNum(v)} 자동 전환\n(각 PC 재시작됨, 게임 세션 끊김)`))return;
-  await Promise.all(targets.map(id=>sendCmd(id,'switch_account',{label:v})));
-  showToast(`🔁 ${targets.length}대 계정 ${acctNum(v)} 전환 시작 (선택 해제됨)`);
+  // ★이미 그 계정인 PC는 뺀다★ — 본컴을 괜히 한 번 더 돌리면 게임만 끊긴다
+  const targets = [], already = [];
+  for (const x of Object.values(byBase)) {
+    const live = liveCardOf(baseId(x.id));
+    const t = live ? live.pc_id : x.id;
+    if ((((t.match(/([bcd])$/)||[])[1]) || 'a') === v) { already.push(baseId(t)); continue; }
+    targets.push(t);
+  }
+  if(!targets.length){ showToast(`선택한 PC는 이미 전부 계정 ${n} 입니다`); clearSelection(); return; }
+  if(!confirm(`${targets.length}대 → 계정 ${n} 통짜 전환` +
+              (already.length ? `\n(이미 계정 ${n} 인 ${already.length}대는 제외)` : '') +
+              `\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n` +
+              `★대당 1~2분, 게임 세션 끊김★. 진행할까요?`))return;
+  await Promise.all(targets.map(id=>sendCmd(id,'switch_launcher',
+        {acct_no:n, acct_index:1, acct_label:`계정${n}`, chrome_label:v})));
+  showToast(`🔁 ${targets.length}대 계정 ${n} 통짜 전환 시작 (결과는 텔레그램)`);
   loadCmdHistory();
   clearSelection();
 }
@@ -5007,25 +5024,35 @@ function refreshAcctButtons(pc_id){
     b.style.cursor = b.disabled ? 'not-allowed' : '';
     b.textContent = (n===cur ? '✓ 계정 ' : '계정 ') + n;
     b.title = !has ? 'info.txt에 이 계정의 아이디/비번이 없습니다'
-            : (n===cur ? '현재 접속 중인 계정' : `계정 ${n}로 자동 전환 (로그아웃→로그인→AION2 페이지, 재시작)`);
+            : (n===cur ? '현재 접속 중인 계정' : `계정 ${n}로 통짜 전환 (본컴 런처 → 원격컴 크롬 → 재시작)`);
   }
 }
 async function switchAccountDirect(n){
   const id = menuPcId;
   closeCardMenu();
-  if (!id) return;
+  await fullAccountSwitch(id, n);
+}
+// ★계정전환의 유일한 경로 (2026-08-18 사용자 지시)★
+//   "이제 계정전환하면 본컴도 바뀌게" — 예전엔 진입점이 둘로 갈려 있었다:
+//     · 카드메뉴 [계정 N]      → switch_launcher (본컴+원격컴) ✅
+//     · 카드메뉴 [계정 자동전환] → switch_account  (원격컴만)  ❌
+//     · 다중선택 [계정전환]     → switch_account  (원격컴만)  ❌
+//   본컴 런처가 계정1인데 원격컴 크롬만 계정2가 되면 ★짝이 안 맞아 스트림이 영영 안 뜬다★.
+//   → 세 진입점 전부 여기로 모은다. 명령은 switch_launcher 하나.
+async function fullAccountSwitch(id, n){
+  if (!id) return false;
   const base = baseId(id);
   const lab = {1:'a',2:'b',3:'c',4:'d'}[n];
-  if (!lab) return;
+  if (!lab) return false;
   // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
   const live = liveCardOf(base);
   const target = live ? live.pc_id : id;
   // ★이미 그 계정이면 막는다★ — 본컴을 괜히 한 번 더 돌릴 이유가 없다
   const curAcct = ((target.match(/([bcd])$/)||[])[1]) || 'a';
-  if (curAcct === lab) { showToast(`${target} 는 이미 계정 ${n} 입니다`); return; }
+  if (curAcct === lab) { showToast(`${target} 는 이미 계정 ${n} 입니다`); return false; }
   const st = ((state[target]||{}).status)||'';
-  if (st === 'hunting' && !confirm(`${target} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return;
-  if (!confirm(`${base} → 계정 ${n} 전환\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n1~2분 걸립니다. 진행할까요?`)) return;
+  if (st === 'hunting' && !confirm(`${target} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return false;
+  if (!confirm(`${base} → 계정 ${n} 전환\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n1~2분 걸립니다. 진행할까요?`)) return false;
   // ★한 방에★ — 본컴(런처) 먼저, 성공하면 매크로가 이어서 원격컴 크롬까지 바꾼다.
   //   peer_id·파섹 비번은 서버가 배달 직전에 채운다(enrich_cmd_args).
   //   acct_index=1 : 런처 드롭다운의 '다른 계정' 첫 줄. 계정 2개면 항상 맞다.
@@ -5034,6 +5061,7 @@ async function switchAccountDirect(n){
                            {acct_no: n, acct_index: 1, acct_label: `계정${n}`, chrome_label: lab});
   showToast(ok ? `🔁 ${base} → 계정 ${n} 통짜 전환 시작 (본컴→원격컴, 결과는 텔레그램)` : '✗ 전송 실패');
   loadCmdHistory();
+  return ok;
 }
 
 // ★계정 순회(2026-08-17)★ — 있는 계정 전부를 1→2→3→4 순으로 돌며 작업 1개씩.
@@ -5057,21 +5085,9 @@ async function acctTourFromMenu(){
   loadCmdHistory();
 }
 
-async function switchAccountFromMenu() {
-  const id = menuPcId;
-  closeCardMenu();
-  if (!id) return;
-  const v = normAcct(prompt(`${id} — 자동 전환할 계정 번호 (1~4)\n` +
-                    `매크로가 크롬 로그아웃→로그인→게임 진입까지 자동으로 합니다\n` +
-                    `(info.txt에 계정N_아이디/비번이 있어야 동작)`));
-  if (!v) return;
-  if (!confirm(`${id} → 계정 ${acctNum(v)} 자동 전환 (로그인+재시작)`)) return;
-  // ★매크로 명령이라 '지금 켜진 그 카드' pc_id로 보낸다(업데이터 명령만 base). 물리 PC엔
-  //   한 계정 매크로만 돌므로 온라인 카드가 곧 수신자다.
-  const ok = await sendCmd(id, 'switch_account', {label: v});
-  showToast(ok ? `🔁 ${id} 계정 ${acctNum(v)} 자동 전환 시작` : '✗ 전송 실패');
-  loadCmdHistory();
-}
+// (옛 switchAccountFromMenu 는 2026-08-18 제거 — 카드메뉴에서 이미 [계정 1~4] 버튼으로
+//  대체돼 어디서도 안 불리는 죽은 코드였고, 이름 때문에 '계정전환의 정본' 으로 오해를 샀다.
+//  계정전환의 유일한 경로는 위 fullAccountSwitch 다.)
 
 // 크롬 CDP 전환(v1.1.413) — 실측·전환 기반. 게임 1회 끊김을 confirm으로 고지.
 async function chromeCdpFromMenu() {
@@ -5341,8 +5357,14 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     ★acct_tour 도 같은 대접(2026-08-17)★
     계정 순회는 내부에서 switch_launcher 를 계정 수만큼 돌린다. peer_id 를 안 채우면
     acct_tour.start() 가 "peer_id 가 없다"로 ★시작조차 안 한다★. 여기 한 줄이 린치핀.
+
+    ★switch_account 도 같은 대접 (2026-08-18 사용자 지시)★
+    "이제 계정전환하면 본컴도 바뀌게" — switch_account 는 오랫동안 ★원격컴 크롬만★
+    갈아끼웠다. 이제 매크로가 본컴(파섹→런처)부터 바꾸는 통짜 경로로 승격됐는데,
+    peer_id 가 없으면 본컴에 갈 주소가 없어 예전처럼 원격컴만 하고 만다.
+    → 여기 목록에 넣는 것이 그 승격의 린치핀이다(switch_launcher 와 같은 이유).
     """
-    if command not in ("switch_launcher", "acct_tour"):
+    if command not in ("switch_launcher", "acct_tour", "switch_account"):
         return dict(args)
     out = dict(args)
     if not out.get("peer_id"):
@@ -5391,7 +5413,7 @@ async def send_command(pc_id: str, request: Request):
         args = {"kv": {k: ("***" if ("비번" in k or "PIN" in k) else v)
                        for k, v in _kv.items()},
                 "_note": f"{len(_kv)}칸"}
-    elif command in ("switch_launcher", "acct_tour"):
+    elif command in ("switch_launcher", "acct_tour", "switch_account"):
         # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
                 "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
