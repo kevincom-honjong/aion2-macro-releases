@@ -6480,7 +6480,30 @@ def _load_version_json() -> dict:
                 _version_cache["ts"] = now
                 return data
     except Exception as e:
-        print(f"[version] raw 조회 실패 → 로컬 사본 사용: {e.__class__.__name__}: {e}")
+        print(f"[version] raw 조회 실패: {e.__class__.__name__}: {e}")
+    # ★1.5차: GitHub API (api.github.com) — raw 가 죽어도 여긴 산다 (2026-08-18)★
+    #   raw 는 간헐적으로 통째로 안 된다(503/타임아웃). 그때 바로 '구워진 사본'으로
+    #   떨어지는데 그건 ★마지막 서버 재배포 시점★ 이라 몇 버전씩 낡았다.
+    #   실제 피해: 1.1.499 를 릴리스했는데 /check 가 1.1.495 를 계속 내보냈고,
+    #   그대로 업데이트를 쏘면 함대가 ★다운그레이드★ 될 뻔했다. 6분을 헛기다렸다.
+    #   호스트가 다르면 같이 죽을 확률이 확 떨어진다. (미인증 60회/시, 5분 캐시라 여유)
+    try:
+        import base64 as _b64
+        import httpx as _hx2
+        r = _hx2.get("https://api.github.com/repos/kevincom-honjong/"
+                     "aion2-macro-releases/contents/server/version.json?ref=main",
+                     headers={"Accept": "application/vnd.github+json"},
+                     timeout=8.0, follow_redirects=True)
+        if r.status_code == 200:
+            data = json.loads(_b64.b64decode(r.json().get("content", "")).decode("utf-8"))
+            if data.get("exe", {}).get("version"):
+                _version_cache["data"] = data
+                _version_cache["ts"] = now
+                print(f"[version] GitHub API 로 조회 성공 (raw 대체) "
+                      f"— exe {data['exe']['version']}")
+                return data
+    except Exception as e:
+        print(f"[version] API 조회도 실패 → 로컬 사본: {e.__class__.__name__}: {e}")
     # 2차: 이미지에 구워진 로컬 사본 (raw 장애 시 함대가 멈추지 않게)
     for vpath in [
         os.path.join(os.path.dirname(__file__), "version.json"),
