@@ -2393,6 +2393,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="본컴 런처 + 원격컴 크롬을 계정 3으로 (파섹 경유, 1~2분)">계정 3</button>
     <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="본컴 런처 + 원격컴 크롬을 계정 4로 (파섹 경유, 1~2분)">계정 4</button>
     <button class="cm-btn chip-cyan cm-span2" onclick="chromeCdpFromMenu()" title="크롬을 제어 모드(CDP)로 재기동 — ★게임이 1회 끊겼다 자동 재접속됩니다★. 성공하면 이 PC는 자동전환·재연결개선·계정게이트가 실전 가동됩니다 (v1.1.413+)">🌐 크롬 제어모드 전환</button>
+    <!-- ★계정 순회(2026-08-17)★ — 계정을 바꾸면 매크로가 재시작되므로 순회는 한 프로세스
+         안에 못 둔다. 매크로가 C:\auto\acct_tour.json 에 진행도를 남기고 부팅 때 이어받는다.
+         그래서 이 버튼은 '시작 신호' 하나만 보내고, 진행은 텔레그램으로 온다. -->
+    <button class="cm-btn chip-purple cm-span2" onclick="acctTourFromMenu()" title="계정 1→2→3→4 를 한 바퀴 돌며 각 계정에서 정보수집. 계정마다 본컴 런처+원격컴 크롬 전환+매크로 재시작이 들어가 ★20~40분★ 걸립니다. 중단은 ■정지">🔄 계정 순회 (정보수집)</button>
   </div>
   <div class="cm-sec">VIEW</div>
   <div class="cm-grid3">
@@ -4922,6 +4926,27 @@ async function switchAccountDirect(n){
   loadCmdHistory();
 }
 
+// ★계정 순회(2026-08-17)★ — 있는 계정 전부를 1→2→3→4 순으로 돌며 작업 1개씩.
+//   ★현재 계정도 순서에 포함★한다: 매크로는 '목표 == 현재'면 전환을 건너뛰고 바로 작업한다.
+//   peer_id 는 여기서 안 붙인다 — 서버가 배달 직전에 채운다(enrich_cmd_args).
+//   진행 상황은 텔레그램으로만 온다(계정마다 매크로가 재시작돼 WS 가 끊기므로 화면 추적 불가).
+async function acctTourFromMenu(){
+  const id = menuPcId;
+  closeCardMenu();
+  if (!id) return;
+  const base = baseId(id);
+  const nums = [...acctAvail(base)].sort((a,b)=>a-b);
+  if (nums.length < 2) { showToast(`${base} 는 순회할 계정이 1개뿐입니다 (info.txt 확인)`); return; }
+  const live = liveCardOf(base);
+  if (!live) { showToast(`${base} 매크로가 오프라인입니다 — 순회는 매크로가 받아야 시작됩니다`); return; }
+  const st = live.status||'';
+  if (st === 'hunting' && !confirm(`${live.pc_id} 는 지금 사냥 중입니다.\n순회는 계정마다 게임을 껐다 켭니다.\n그래도 시작할까요?`)) return;
+  if (!confirm(`${base} 계정 순회 — ${nums.join('→')}\n\n각 계정에서 정보수집을 1회씩 합니다.\n계정마다 본컴 런처 전환 + 원격컴 크롬 전환 + 매크로 재시작이 들어갑니다.\n\n★${nums.length*8}~${nums.length*12}분쯤 걸립니다★ (중단은 ■정지)\n결과는 텔레그램으로 옵니다. 시작할까요?`)) return;
+  const ok = await sendCmd(live.pc_id, 'acct_tour', {accounts: nums, task: 'collect'});
+  showToast(ok ? `🔄 ${base} 계정 순회 시작 (${nums.join('→')}, 결과는 텔레그램)` : '✗ 전송 실패');
+  loadCmdHistory();
+}
+
 async function switchAccountFromMenu() {
   const id = menuPcId;
   closeCardMenu();
@@ -5202,8 +5227,12 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     - parsec_id/parsec_pw : 서버 설정(대시보드 세션으로만 수정 가능)
     - peer_id             : 파섹 주소록. ★매크로는 주소록을 조회하지 않는다★
                             (매크로↔파섹 분리 — 매크로가 죽어도 주소록은 서버에 남는다)
+
+    ★acct_tour 도 같은 대접(2026-08-17)★
+    계정 순회는 내부에서 switch_launcher 를 계정 수만큼 돌린다. peer_id 를 안 채우면
+    acct_tour.start() 가 "peer_id 가 없다"로 ★시작조차 안 한다★. 여기 한 줄이 린치핀.
     """
-    if command != "switch_launcher":
+    if command not in ("switch_launcher", "acct_tour"):
         return dict(args)
     out = dict(args)
     if not out.get("peer_id"):
@@ -5243,7 +5272,7 @@ async def send_command(pc_id: str, request: Request):
     #   peer_id 도 같은 원리로 서버가 채운다 — 매크로는 파섹 주소록을 조회하지 않는다
     #   (매크로↔파섹 분리 원칙: 매크로가 죽어도 주소록은 서버에 남는다).
     send_args = await enrich_cmd_args(tenant, pc_id, command, args)
-    if command == "switch_launcher":
+    if command in ("switch_launcher", "acct_tour"):
         # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
                 "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
