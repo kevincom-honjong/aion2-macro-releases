@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.4"
+UPDATER_VERSION  = "3.1.5"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -416,7 +416,23 @@ def start_macro() -> bool:
 
 
 def stop_macro():
+    """매크로를 죽인다. ★죽이기 전에 '되살리지 마라' 표시를 남긴다 (3.1.5)★
+
+    ★왜 (2026-08-17 리뷰 M3)★
+      매크로가 계정 순회 중이면 powershell 부활 예약(Wait-Process→Start-Process)이
+      걸려 있다. 그 상태에서 [업데이트]를 누르면 stop_macro 가 taskkill 한 뒤
+      ★3초 뒤 구버전이 되살아나 exe 파일을 잠근다★ → 새 exe 로 덮어쓰기 실패 →
+      이어지는 start_macro 는 '이미 실행 중' 으로 건너뛴다 = 업데이트가 조용히 실패.
+      표시를 먼저 남기면 powershell 쪽이 되살리기를 스스로 포기한다.
+      (표시는 매크로가 다음 부팅 때 지운다 — 일회용)
+    """
     global macro_proc
+    try:
+        with open(NO_RESTART_PATH, "w", encoding="utf-8") as f:
+            f.write("updater stop_macro")
+        log("[매크로] 되살림 금지 표시 남김 (업데이터가 의도적으로 끄는 중)")
+    except Exception as e:
+        err(f"[매크로] 되살림 금지 표시 실패(무시): {e}")
     with _state_lock:
         proc = macro_proc
         macro_proc = None
@@ -913,14 +929,17 @@ def _auto_revive(ret):
         log(f"[되살림] 1시간에 {REVIVE_MAX}회를 넘었다 — 폭주로 보고 멈춘다 "
             f"(매크로가 부팅 직후 죽는 중일 수 있음)")
         return
-    _revive_times.append(now)
-    log(f"[되살림] {REVIVE_DELAY:.0f}초 뒤 매크로를 다시 띄운다 "
-        f"(returncode={ret}, {len(_revive_times)}/{REVIVE_MAX}회째)")
+    log(f"[되살림] {REVIVE_DELAY:.0f}초 뒤 매크로를 다시 띄운다 (returncode={ret})")
     time.sleep(REVIVE_DELAY)
     if _macro_running_anywhere():
         log("[되살림] 이미 떠 있다(매크로 자체 예약이 먼저 살렸음) — 생략")
         _set_state("running")
         return
+    # ★크레딧은 '실제로 띄울 때만' 센다 (리뷰 M2 부수)★
+    #   전에는 이 함수 초입에서 세어, 정상 계정 전환 4회만으로 시간당 8회 상한의
+    #   절반을 태웠다. 정작 폭주(부팅 직후 죽음)를 막아야 할 때 크레딧이 없었다.
+    _revive_times.append(now)
+    log(f"[되살림] {len(_revive_times)}/{REVIVE_MAX}회째")
     if start_macro():
         log("[되살림] 매크로 재기동 완료")
     else:
@@ -943,6 +962,18 @@ def _crash_check_thread():
                         macro_proc = None
                     _set_state("crashed")
                     _auto_revive(ret)
+            elif proc is None and state == "running":
+                # ★★핸들이 없어도 감시한다 (3.1.5, 2026-08-17 리뷰 M2)★★
+                #   계정 전환으로 매크로가 ★스스로★ 되살아나면(powershell 재기동)
+                #   macro_proc 은 None 인데 start_macro 의 '외부 기동 감지' 가
+                #   state 를 running 으로 세운다. 그러면 위 분기가 영영 안 돌아
+                #   ★그 뒤로는 진짜 크래시가 나도 되살리지 않는다★ — 3.1.4 를 만든
+                #   바로 그 시나리오(4계정 순회)에서 기능이 죽어 있었다.
+                #   → 핸들 대신 ★프로세스 존재★ 로 판정한다.
+                if not _macro_running_anywhere():
+                    log("[크래시감지] 매크로 프로세스가 사라짐 (핸들 없음 경로)")
+                    _set_state("crashed")
+                    _auto_revive("no-handle")
         except Exception as e:
             err(f"[크래시감지] 에러: {e}")
         time.sleep(CRASH_CHECK_INT)
