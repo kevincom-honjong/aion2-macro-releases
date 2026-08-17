@@ -6497,6 +6497,46 @@ def _load_version_json() -> dict:
             pass
     return _version_cache.get("data", {})
 
+_IMG_PROXY_CACHE: dict = {}          # fname -> bytes (프로세스 메모리, 최대 80장)
+
+
+@app.get("/img/{fname}")
+async def serve_image(fname: str):
+    """이미지 중계 — ★서버가 GitHub 에서 받아 함대에 넘겨준다★ (2026-08-18 신설)
+
+    ★왜 필요했나★ 함대가 이미지를 받을 통로가 둘 다 죽었다:
+      · jsDelivr — 이 레포를 통째로 못 가져온다("Failed to fetch ... from GitHub").
+        새 파일뿐 아니라 ★기존 파일까지★ 503/404 였다.
+      · raw.githubusercontent.com — 서버(Railway)에서는 되는데 ★함대에서는 안 된다★.
+        exe(GitHub Releases)는 멀쩡히 받으므로 인터넷 자체 문제가 아니다.
+        현지 ISP 가 raw 를 막는 것으로 보인다(개발 PC 에서도 503/타임아웃).
+    증상은 조용했다: 새 템플릿 ps_login_logo.png 하나가 안 내려가
+    '이미지 로드 완료 (216/217)' 로 뜨고, 그걸 쓰는 파섹 로그인 감지가 통째로 죽었다.
+    ★함대가 확실히 닿는 유일한 곳은 이 서버다.★ 그래서 여기서 중계한다.
+
+    무결성은 그대로 — 업데이터가 version.json 의 sha256 을 받아 검증한다.
+    """
+    import re as _re2
+    if not _re2.fullmatch(r"[^/\\\x00]{1,120}\.png", fname):
+        raise HTTPException(status_code=404)
+    data = _IMG_PROXY_CACHE.get(fname)
+    if data is None:
+        try:
+            import httpx as _hx
+            r = _hx.get(f"{_GH_RAW}/images2/{_urlparse.quote(fname)}",
+                        timeout=15.0, follow_redirects=True)
+        except Exception:
+            raise HTTPException(status_code=502, detail="upstream error")
+        if r.status_code != 200:
+            raise HTTPException(status_code=404)
+        data = r.content
+        if len(_IMG_PROXY_CACHE) > 80:
+            _IMG_PROXY_CACHE.clear()
+        _IMG_PROXY_CACHE[fname] = data
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
 @app.post("/check")
 async def updater_check(request: Request):
     """updater.exe가 호출 — exe/이미지/updater 업데이트 필요 여부 응답"""
@@ -6556,6 +6596,8 @@ async def updater_check(request: Request):
         }
 
     # 이미지 업데이트 체크
+    # ★배포처는 이 서버 자신 (/img 중계) — jsDelivr 사망 + 함대에서 raw 차단★
+    _img_base = str(request.base_url).rstrip('/')
     server_images = ver.get("images", {})
     images_to_update = []
     for fname, server_hash in server_images.items():
@@ -6566,7 +6608,7 @@ async def updater_check(request: Request):
             images_to_update.append({
                 "filename":     fname,
                 "sha256":       server_hash,
-                "download_url": f"{_GH_CDN}/images2/{_urlparse.quote(fname)}",
+                "download_url": f"{_img_base}/img/{_urlparse.quote(fname)}",
             })
     if images_to_update:
         result["images_update"] = images_to_update
