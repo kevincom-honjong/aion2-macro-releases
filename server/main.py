@@ -6432,7 +6432,18 @@ _GH_RAW = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releas
 # jsDelivr CDN 베이스 (raw rate limit(429) 우회용 — 작은 파일=이미지 배포에 사용)
 # raw는 IP당 요청수 제한이 빡세서 13PC×이미지150개 동시 다운로드 시 429남.
 # jsDelivr는 GitHub 미러 CDN이라 rate limit 사실상 없음. (exe는 용량때문에 jsDelivr 불가 → Releases)
-_GH_CDN = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-releases@main"
+_GH_CDN_JSDELIVR = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-releases@main"
+# ★2026-08-18: 이미지 배포를 raw 로 되돌렸다★
+#   jsDelivr 가 이 레포를 통째로 못 가져온다 — 본문이 그대로
+#   "Failed to fetch kevincom-honjong/aion2-macro-releases@main from GitHub." 였고
+#   ★기존 파일(ps_login_title.png)까지 503/404★ 였다. 새 파일만의 캐시 문제가 아니다.
+#   (레포에 75MB exe 가 여러 개라 jsDelivr 패키지 한도에 걸린 것으로 보인다.)
+#   실제 피해: 새 템플릿 ps_login_logo.png 가 함대에 안 내려가 매크로가
+#   '로드 스킵(파일 없음) 216/217' 로 떴고, 파섹 로그인 화면 감지가 통째로 죽었다.
+#   ★raw 429 걱정★ 은 '13PC × 이미지 150개 첫 동기화' 시나리오였다. 지금은 서버가
+#   ★해시가 다른 것만★ 목록에 넣으므로 평상시 0~수 개다. 대량 재동기화가 필요하면
+#   그때 _GH_CDN_JSDELIVR 로 되돌리거나 내부망 시드를 쓴다.
+_GH_CDN = _GH_RAW
 
 _version_cache = {"data": {}, "ts": 0}
 
