@@ -3051,10 +3051,19 @@ function sortByOrder(pcs, key) {
   return [...known, ...fresh];
 }
 
+// grid 의 직계 자식 하나 = PC 묶음 하나. 그 자식에서 정렬 키(PC base)를 뽑는다.
+//   겹친 카드 → <div id="stack-PC-20">, 한 장짜리 → <div id="card-PC-07">
+function gridKeyOf(el) {
+  const id = (el && el.id) || '';
+  if (id.indexOf('stack-') === 0) return id.slice(6);
+  if (id.indexOf('card-') === 0) return baseId(id.slice(5));
+  return '';
+}
+
 function saveCurrentOrder(gridId, key) {
   const seenB = {};
   const visible = [...document.getElementById(gridId).children]
-    .map(el => baseId((el.id || '').replace('card-','')))
+    .map(gridKeyOf)
     .filter(id => id && !seenB[id] && (seenB[id] = 1));
   if (!visible.length) return;
   const stored = loadOrder(DRAG_ORDER_KEY);
@@ -3094,7 +3103,10 @@ function migrateOrder(){
 function setupDrag(gridId, orderKey) {
   const grid = document.getElementById(gridId);
   if (!grid) return;
-  grid.querySelectorAll('[id^="card-"]').forEach(card => {
+  // ★grid 의 ★직계 자식★ 을 끈다 — 겹친 카드는 wrapper 가 자식이다 (2026-08-18)★
+  //   예전엔 [id^="card-"] 로 찾아서 스택 안쪽 '앞 카드'만 집혔다. 그래서 앞장만
+  //   빠져나가는 것처럼 보이고, 저장 때 wrapper 의 id 가 비어 아무것도 안 남았다.
+  [...grid.children].forEach(card => {
     const handle = card.querySelector('.drag-handle');
     if (!handle) return;
     card.setAttribute('draggable','false');
@@ -3102,7 +3114,7 @@ function setupDrag(gridId, orderKey) {
     handle.addEventListener('mousedown', e => {
       e.stopPropagation();
       card.setAttribute('draggable','true');
-      dragSrcId = card.id.replace('card-','');
+      dragSrcId = gridKeyOf(card);
       dragSection = orderKey;
     });
     handle.addEventListener('click', e => e.stopPropagation());
@@ -3130,9 +3142,10 @@ function setupDrag(gridId, orderKey) {
       e.preventDefault();
       card.classList.remove('card-dragover');
       const fromId = e.dataTransfer.getData('text/plain');
-      const toId = card.id.replace('card-','');
-      if (fromId===toId) return;
-      const fromEl = document.getElementById('card-'+fromId);
+      const toId = gridKeyOf(card);
+      if (!fromId || fromId===toId) return;
+      // 끌려온 묶음의 ★직계 자식★ 을 찾는다(스택이면 wrapper, 한 장이면 카드)
+      const fromEl = [...grid.children].find(el => gridKeyOf(el) === fromId);
       if (!fromEl) return;
       const rect = card.getBoundingClientRect();
       const after = e.clientY > rect.top + rect.height/2;
@@ -3168,7 +3181,12 @@ function buildStack(s){
       ${g?`onclick="stackShow('${s.base}','${g.pc_id}')" title="클릭하면 이 계정 카드를 앞으로"`:''}>
       <div class="px-3 flex items-center" style="height:${LH-2}px;font-size:10px">${lab}</div></div>`;
   }
-  return `<div class="relative" style="padding-top:${LH*(s.n-1)}px">${layers}
+  // ★wrapper 에 id 를 준다 (2026-08-18)★ — 없으면 드래그가 wrapper 가 아니라
+  //   ★안쪽 앞 카드★ 를 집어 옮긴다(앞장만 움직이는 것처럼 보이고, 저장 때
+  //   grid.children 의 id 가 빈 값이라 아무것도 안 남아 원래대로 돌아온다).
+  //   사용자 실측: "겹친거 통째로넘어가는것처럼안보이고 제일앞에거만 넘아가는것처럼
+  //   보이면서 다시 원래대로 돌아옴"
+  return `<div id="stack-${s.base}" class="relative" style="padding-top:${LH*(s.n-1)}px">${layers}
     <div class="relative" style="z-index:6">${buildCard(s.top)}</div></div>`;
 }
 
