@@ -2868,8 +2868,15 @@ function acctTagSpread(pcid){
   if (!isSub && !st.acct_id && !isMultiAcct(pcid)) return '';
   const n = acctNumOf(pcid);
   // 자기 카드에 없으면 전 계정 지도에서 — 접속 안 한 계정도 아이디가 나온다
-  const id = st.acct_id || groupAcctMaps(baseId(pcid)).ids[n] || '';
-  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}${id?` · ${esc(id)}`:''}</span>`;
+  // ★아이디는 여기서 안 붙인다 (2026-08-18 사용자 지시: '서버 돈 아이디 순')★
+  //   순서를 바꾸려면 조각이 나뉘어 있어야 한다 — 태그는 '계정 N' 만 책임진다.
+  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}</span>`;
+}
+// 계정 아이디만 따로 — 스프레드 헤더에서 ★서버·돈 다음★에 놓는다 (2026-08-18 사용자 지시)
+function acctIdTag(pcid){
+  const st = state[pcid] || {};
+  const id = st.acct_id || groupAcctMaps(baseId(pcid)).ids[acctNumOf(pcid)] || '';
+  return id ? ` <span class="text-purple-300 text-xs font-normal ml-1">${esc(id)}</span>` : '';
 }
 // ★전 계정 지도(v1.1.424)★ — 살아있는 매크로가 info.txt의 전 계정 아이디/서버를 통째로
 // 보고(acct_ids/acct_servers, 키="1".."4")하므로, 접속한 적 없는 계정 카드도 표기 가능
@@ -4723,8 +4730,8 @@ function renderCharTable() {
           <span id="pc-arrow-${pc}">▶</span>
           <span>${baseId(pc)}</span><!-- ★접미사(PC-20b) 노출 금지(사용자) — 계정은 태그가 말한다★ -->
           ${acctTagSpread(pc)}
-          <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>
-          ${serverTag}${kinaTag}${redBadge}
+          ${serverTag}${kinaTag}${acctIdTag(pc)}
+          <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
           <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
             <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
             <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
