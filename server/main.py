@@ -1355,6 +1355,10 @@ async def health(request: Request):
         # ★경로 추측이 아니라 실측: 지난 부팅의 마커가 살아남았는지로 판정(_probe_volume)★
         #   false면 재시작마다 DB·스샷이 전부 사라진다 → Railway 볼륨을 마운트해야 한다.
         "disk_persisted": VOLUME_PERSISTED,
+        # ★어느 빌드가 떠 있는지 밖에서 보이게 (2026-08-18)★
+        #   이미지 배포처를 raw 로 바꿔 놓고 재배포를 30분 기다렸는데, 배포가 됐는지
+        #   안 됐는지 확인할 방법이 없어 /check 응답만 계속 찔러 봤다. 값을 내보내면 끝난다.
+        "img_base": _GH_CDN.split("//", 1)[-1][:28],
     }
     if _detail:
         out.update({
