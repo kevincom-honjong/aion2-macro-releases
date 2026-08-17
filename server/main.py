@@ -3020,20 +3020,59 @@ function loadOrder(key) {
 function saveOrder(key, ids) {
   localStorage.setItem(key, JSON.stringify(ids));
 }
+// ★★카드 순서가 제멋대로 날아가던 이유 (2026-08-18 사용자 지적)★★
+//   "카드위치조정하는거 뭐 왜 지멋대로 되냐? 내가 수정해도 지멋대로 날아가는데?"
+//
+//   원인 두 개가 겹쳐 있었다:
+//     ① 순서를 ★온라인/오프라인 두 목록으로 따로★ 저장했다.
+//     ② saveCurrentOrder 가 ★그 순간 그 칸에 보이는 카드만★ 담아 통째로 덮어썼다.
+//   PC 하나가 오프라인이 되면 오프라인 칸으로 옮겨간다. 그 뒤 온라인 칸에서 카드를
+//   한 번만 끌면, 저장된 온라인 순서에서 ★그 PC 가 통째로 지워진다.★ 다시 온라인이
+//   되면 '처음 보는 카드'라 맨 뒤에 이름순으로 붙는다.
+//   계정 카드(PC-20b/c/d)는 전환마다 온·오프를 오가므로 특히 심했다.
+//
+//   → ★목록을 하나로 합치고, 저장은 '덮어쓰기'가 아니라 '병합'으로 바꾼다.★
+//     지금 안 보이는 카드의 자리는 그대로 두고, 보이는 카드끼리만 자리를 재배치한다.
+const DRAG_ORDER_KEY = 'card_order_v2';
+
 function sortByOrder(pcs, key) {
-  const order = loadOrder(key);
+  const order = loadOrder(DRAG_ORDER_KEY);
   const idx = {};
   order.forEach((id,i) => idx[id] = i);
   const known = pcs.filter(p => idx[p.pc_id] !== undefined).sort((a,b) => idx[a.pc_id] - idx[b.pc_id]);
   const fresh = pcs.filter(p => idx[p.pc_id] === undefined).sort((a,b) => (a.pc_id||'').localeCompare(b.pc_id||''));
   return [...known, ...fresh];
 }
+
 function saveCurrentOrder(gridId, key) {
-  const ids = [...document.getElementById(gridId).children]
+  const visible = [...document.getElementById(gridId).children]
     .map(el => el.id?.replace('card-',''))
     .filter(Boolean);
-  saveOrder(key, ids);
+  if (!visible.length) return;
+  const stored = loadOrder(DRAG_ORDER_KEY);
+  const merged = stored.slice();
+  const slots = [];
+  merged.forEach((id,i) => { if (visible.indexOf(id) >= 0) slots.push(i); });
+  // 저장된 적 없는 카드는 뒤에 자리를 새로 만든다
+  visible.forEach(id => {
+    if (merged.indexOf(id) < 0) { merged.push(id); slots.push(merged.length - 1); }
+  });
+  slots.sort((a,b) => a - b);
+  slots.forEach((slot,k) => { merged[slot] = visible[k]; });
+  saveOrder(DRAG_ORDER_KEY, merged);
 }
+
+// 옛 두 목록(card_order_online / card_order_offline)을 한 번만 합쳐 옮긴다
+(function migrateOrder(){
+  try {
+    if (localStorage.getItem(DRAG_ORDER_KEY)) return;
+    const a = JSON.parse(localStorage.getItem('card_order_online')  || '[]') || [];
+    const b = JSON.parse(localStorage.getItem('card_order_offline') || '[]') || [];
+    const seen = {}, out = [];
+    [...a, ...b].forEach(id => { if (id && !seen[id]) { seen[id] = 1; out.push(id); } });
+    if (out.length) saveOrder(DRAG_ORDER_KEY, out);
+  } catch(e) {}
+})();
 
 function setupDrag(gridId, orderKey) {
   const grid = document.getElementById(gridId);
