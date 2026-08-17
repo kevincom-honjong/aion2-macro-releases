@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.510",
+    "version": "1.1.511",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "5a7a70b34dbdcdc16352c5af7cdf8d55d6fd497200b30d548289b34c85557882",
+    "sha256": "94b4eda110a6ca40ae5306ba9b427b5375b08c6e131add5b73cabc219ed466c0",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -141,6 +141,7 @@
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
     "mode.png": "fb69263c7f2548f66e10ce06383555be1a10fc4268b8a0aae6e98eee774193c8",
     "muui_map_title.png": "6079b7d05e5f55e9e01c8e95b860980aab3b8370a489d55721081547a0cc3916",
+    "net_err_router.png": "948e120e078d27385d6bf295a8d6bdf42ce84854450e01a89cdc9732b5478513",
     "new.png": "78a8f30bddf7ddd24ddb56adfb567983b89bff9e4b6e6b50a5cd130d5c8621a4",
     "nightmare_boss_check.png": "17b71d5223750157e5ba00893f0afd16ef2e46f08747fd94d544a68a9c9ab56d",
     "nightmare_challenge.png": "c2469b54a015daf082f5b48d184088fc77c7fb97a65ef0995796f7c8807d4145",
@@ -307,11 +308,11 @@
     "sha256": "bcf527bbc63c5f9d4864c1a812e6a1fc6de261bfd402601d1df0b3630aed1788",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260817212029",
-  "updated_at": "2026-08-17T21:20:29",
+  "images_version": "20260817223009",
+  "updated_at": "2026-08-17T22:30:09",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.510",
+    "version": "1.1.511",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
