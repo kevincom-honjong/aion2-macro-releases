@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.3"
+UPDATER_VERSION  = "3.1.4"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -869,6 +869,64 @@ def _status_thread():
 # ==================================================
 # 스레드: 크래시 감지 (5s)
 # ==================================================
+# ★★죽은 매크로를 되살린다 (3.1.4, 2026-08-17)★★
+#
+# 사용자: "아니 왜 매크로가 크래쉬되는거야" / "그냥 프로그램이 전체 4계정을 관리한다는
+#          느낌으로 가야지"
+#
+# ★그동안 왜 안 돌아왔나★
+#   여기(크래시감지)는 죽은 걸 ★알아채고 _set_state("crashed") 로 표시만★ 했다.
+#   되살리는 코드가 아예 없었다. 매크로 쪽 재기동 예약(powershell Wait-Process)에만
+#   의존했는데, 그건 ★계정 전환이 끝까지 성공한 경우에만★ 걸린다.
+#   그래서 계정 순회 도중 매크로가 종료되면 함대에서 그 PC 가 통째로 빠졌다
+#   (실측 2026-08-17: 17:32:31 '프로그램 종료' 이후 12분+ 무응답).
+#
+#   ★계정 전환은 '종료'가 정상 경로다★ — 계정을 바꾸면 pc_id 가 바뀌어 프로세스를
+#   갈아끼우는 설계다(정체성 불변 원칙). 즉 이 종료는 사고가 아니라 일상이다.
+#   그렇다면 되살리는 주체가 반드시 있어야 하고, 그건 ★항상 살아 있는 업데이터★다.
+#
+# ★사용자가 일부러 끈 것은 되살리지 않는다★
+#   매크로가 종료 명령(exit)/PageDown 으로 끝날 때 C:\auto\no_restart 를 남긴다.
+#   그게 있으면 여기서 손대지 않는다. 없으면 되살린다.
+#   (매크로는 부팅 때 이 파일을 지운다 — 한 번 쓰고 마는 일회용 표시)
+#
+# ★폭주 방지★ 부팅 직후 바로 죽는 매크로를 무한히 띄우면 PC 가 마비된다.
+#   1시간에 REVIVE_MAX 회까지만.
+NO_RESTART_PATH = r"C:\auto\no_restart"
+REVIVE_MAX      = 8       # 1시간당 최대 되살림 횟수
+REVIVE_WINDOW   = 3600.0
+REVIVE_DELAY    = 4.0     # 싱글턴 뮤텍스 해제 여유 (매크로 쪽 예약과 같은 취지)
+_revive_times: list = []
+
+
+def _auto_revive(ret):
+    """매크로가 사라졌다 → 되살린다. (사용자가 끈 것/폭주는 제외)"""
+    try:
+        if os.path.exists(NO_RESTART_PATH):
+            log("[되살림] no_restart 표시 있음 — 사용자가 끈 것이므로 두고 본다")
+            return
+    except Exception:
+        pass
+    now = time.time()
+    _revive_times[:] = [t for t in _revive_times if now - t < REVIVE_WINDOW]
+    if len(_revive_times) >= REVIVE_MAX:
+        log(f"[되살림] 1시간에 {REVIVE_MAX}회를 넘었다 — 폭주로 보고 멈춘다 "
+            f"(매크로가 부팅 직후 죽는 중일 수 있음)")
+        return
+    _revive_times.append(now)
+    log(f"[되살림] {REVIVE_DELAY:.0f}초 뒤 매크로를 다시 띄운다 "
+        f"(returncode={ret}, {len(_revive_times)}/{REVIVE_MAX}회째)")
+    time.sleep(REVIVE_DELAY)
+    if _macro_running_anywhere():
+        log("[되살림] 이미 떠 있다(매크로 자체 예약이 먼저 살렸음) — 생략")
+        _set_state("running")
+        return
+    if start_macro():
+        log("[되살림] 매크로 재기동 완료")
+    else:
+        err("[되살림] 매크로 재기동 실패")
+
+
 def _crash_check_thread():
     global macro_proc
     log("[크래시감지] 시작")
@@ -880,10 +938,11 @@ def _crash_check_thread():
             if proc is not None and state == "running":
                 ret = proc.poll()
                 if ret is not None:
-                    log(f"[크래시감지] 매크로 예기치 않게 종료됨 (returncode={ret})")
+                    log(f"[크래시감지] 매크로 종료됨 (returncode={ret})")
                     with _state_lock:
                         macro_proc = None
                     _set_state("crashed")
+                    _auto_revive(ret)
         except Exception as e:
             err(f"[크래시감지] 에러: {e}")
         time.sleep(CRASH_CHECK_INT)
