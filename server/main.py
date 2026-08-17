@@ -5272,7 +5272,16 @@ async def send_command(pc_id: str, request: Request):
     #   peer_id 도 같은 원리로 서버가 채운다 — 매크로는 파섹 주소록을 조회하지 않는다
     #   (매크로↔파섹 분리 원칙: 매크로가 죽어도 주소록은 서버에 남는다).
     send_args = await enrich_cmd_args(tenant, pc_id, command, args)
-    if command in ("switch_launcher", "acct_tour"):
+    if command == "set_info":
+        # ★계정 비번을 이력에 남기지 않는다 (2026-08-17)★
+        #   set_info 는 info.txt 의 계정 칸(아이디·비번·PIN…)을 채우는 명령이라
+        #   args 를 그대로 저장하면 ★21대치 비밀번호가 명령 이력에 평문으로 쌓인다.★
+        #   매크로로 나가는 send_args 는 원본 그대로, DB·화면에는 마스킹본만.
+        _kv = (args.get("kv") or {})
+        args = {"kv": {k: ("***" if ("비번" in k or "PIN" in k) else v)
+                       for k, v in _kv.items()},
+                "_note": f"{len(_kv)}칸"}
+    elif command in ("switch_launcher", "acct_tour"):
         # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
                 "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
