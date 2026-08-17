@@ -157,6 +157,18 @@ def ns_of(key: str) -> str:
 # 프로세스 시작마다 고유 — 대시보드가 /ping으로 폴링해 값이 바뀌면 "서버 재시작"으로 보고 자동 새로고침.
 SERVER_BOOT_ID     = uuid.uuid4().hex
 SERVER_BOOT_TS     = time.time()   # /health 업타임 계산용 (자발 재시작 원인 추적, 2026-07-25)
+# ★★어느 '코드'가 떠 있는지 (2026-08-18)★★ — boot/uptime 으로는 알 수 없다.
+#   실사고: 서버 커밋 2개(스프레드 헤더·계정전환 통합)를 푸시하고 재배포를 기다렸는데
+#   Railway 가 안 받았다. uptime 은 계속 흘러서 '살아 있음' 으로만 보였고, 결국
+#   ★서빙되는 HTML 에서 함수 이름을 grep★ 해서야 옛 빌드인 걸 알았다.
+#   → 자기 소스의 sha256 앞 8자리를 내보낸다. 로컬에서 같은 값을 계산해 대조하면
+#     "내 코드가 떠 있나?" 가 curl 한 방으로 끝난다. 수동 관리가 필요 없다(자동 계산).
+#   로컬 대조:  python -c "import hashlib;print(hashlib.sha256(open(r'server/main.py','rb').read()).hexdigest()[:8])"
+try:
+    with open(os.path.abspath(__file__), "rb") as _cf:
+        SERVER_CODE_ID = hashlib.sha256(_cf.read()).hexdigest()[:8]
+except Exception:
+    SERVER_CODE_ID = "unknown"
 # 세션 서명키.
 #   Railway env SESSION_SECRET(랜덤 문자열)을 설정하면 재배포 후에도 쿠키 유효 → 재로그인 불필요.
 #   미설정 시 부팅마다 랜덤 → 자동 새로고침은 동작하되 재시작 후 1회 재로그인.
@@ -1351,6 +1363,9 @@ async def health(request: Request):
         pass
     out = {
         "boot": SERVER_BOOT_ID[:8],
+        # ★떠 있는 코드의 지문★ — 로컬 server/main.py 의 sha256[:8] 과 같으면 내 빌드다.
+        #   uptime 은 '살아 있나'만 알려주지 '무엇이 떠 있나'는 못 알려준다(2026-08-18 실사고).
+        "code": SERVER_CODE_ID,
         "uptime_s": int(time.time() - SERVER_BOOT_TS),
         # ★경로 추측이 아니라 실측: 지난 부팅의 마커가 살아남았는지로 판정(_probe_volume)★
         #   false면 재시작마다 DB·스샷이 전부 사라진다 → Railway 볼륨을 마운트해야 한다.
