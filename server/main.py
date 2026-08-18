@@ -2415,6 +2415,11 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <!-- ★계정 순회(2026-08-17)★ — 계정을 바꾸면 매크로가 재시작되므로 순회는 한 프로세스
          안에 못 둔다. 매크로가 C:\auto\acct_tour.json 에 진행도를 남기고 부팅 때 이어받는다.
          그래서 이 버튼은 '시작 신호' 하나만 보내고, 진행은 텔레그램으로 온다. -->
+    <!-- ★본컴 계정 찾기(2026-08-18)★ — 직원이 아무 계정이나 켜두면 원격컴은 어느 계정으로
+         붙어야 할지 모른다. 이건 ★본컴을 건드리지 않고★ 원격컴 크롬 로비 계정 메뉴로만
+         갈아타며 "호스트가 살아있는 계정"을 찾아 스트리밍 직전에서 멈춘다(계정당 20~30초).
+         계정 순회(위)와 혼동 금지 — 저건 본컴 런처 교체+재시작이라 20~40분이다. -->
+    <button class="cm-btn chip-amber cm-span2" onclick="findHostFromMenu()" title="본PC가 지금 어느 계정으로 켜져 있는지 원격컴 크롬만으로 찾습니다(1~2분). 찾으면 ★스트리밍 직전★ 상태로 세워두고 멈춥니다. 본PC 런처는 건드리지 않습니다.">🔎 본컴 계정 찾기</button>
     <button class="cm-btn chip-purple cm-span2" onclick="acctTourFromMenu()" title="계정 1→2→3→4 를 한 바퀴 돌며 각 계정에서 정보수집. 계정마다 본컴 런처+원격컴 크롬 전환+매크로 재시작이 들어가 ★20~40분★ 걸립니다. 중단은 ■정지">🔄 계정 순회 (정보수집)</button>
   </div>
   <div class="cm-sec">VIEW</div>
@@ -5237,6 +5242,19 @@ async function fullAccountSwitch(id, n){
 //   ★현재 계정도 순서에 포함★한다: 매크로는 '목표 == 현재'면 전환을 건너뛰고 바로 작업한다.
 //   peer_id 는 여기서 안 붙인다 — 서버가 배달 직전에 채운다(enrich_cmd_args).
 //   진행 상황은 텔레그램으로만 온다(계정마다 매크로가 재시작돼 WS 가 끊기므로 화면 추적 불가).
+async function findHostFromMenu(){
+  // ★기본은 '찾기만'★ — 정체성 전환은 매크로 재시작을 부르는 별개의 일이라 따로 묻는다.
+  //   (사용자 요구 원문: "스트리밍 하기전 상태까지 갖다놓는게 필요하긴할듯")
+  const live = cmTarget(); if(!live) return;
+  const adopt = confirm(
+    "본PC가 어느 계정으로 켜져 있는지 찾습니다 (1~2분, 본PC는 건드리지 않음).\n\n" +
+    "[확인] 찾은 계정으로 ★전환까지★ (본컴 런처 + 매크로 재시작 포함, 추가 1~2분)\n" +
+    "[취소] 찾아서 ★스트리밍 직전★ 상태로 세워두기만");
+  const ok = await sendCmd(live.pc_id, 'find_host', adopt ? {adopt: true} : {});
+  if(ok) toast(adopt ? '본컴 계정 찾기 → 전환까지 진행합니다'
+                     : '본컴 계정 찾기 시작 — 결과는 텔레그램/로그로 옵니다');
+}
+
 async function acctTourFromMenu(){
   const id = menuPcId;
   closeCardMenu();
@@ -5538,8 +5556,13 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     갈아끼웠다. 이제 매크로가 본컴(파섹→런처)부터 바꾸는 통짜 경로로 승격됐는데,
     peer_id 가 없으면 본컴에 갈 주소가 없어 예전처럼 원격컴만 하고 만다.
     → 여기 목록에 넣는 것이 그 승격의 린치핀이다(switch_launcher 와 같은 이유).
+
+    ★find_host 도 같은 대접 (2026-08-18)★
+    본컴이 어느 계정으로 켜졌는지 찾는 명령. 기본은 원격컴 크롬만 훑으므로 peer_id 가
+    필요 없지만, adopt=true 로 보내면 찾은 계정으로 ★정식 전환★(switch_account)까지
+    이어진다. 그때 peer_id 가 없으면 본컴이 안 바뀌어 반쪽이 된다.
     """
-    if command not in ("switch_launcher", "acct_tour", "switch_account"):
+    if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
         return dict(args)
     out = dict(args)
     if not out.get("peer_id"):
@@ -5588,7 +5611,7 @@ async def send_command(pc_id: str, request: Request):
         args = {"kv": {k: ("***" if ("비번" in k or "PIN" in k) else v)
                        for k, v in _kv.items()},
                 "_note": f"{len(_kv)}칸"}
-    elif command in ("switch_launcher", "acct_tour", "switch_account"):
+    elif command in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
         # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
                 "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
