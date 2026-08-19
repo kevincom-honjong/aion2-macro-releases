@@ -12,7 +12,7 @@ jobs:
   update-version:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # version.json 커밋 권한
+      contents: write   # version.json 커밋 + 릴리스 생성 권한
 
     steps:
       - name: Checkout repository
@@ -30,6 +30,62 @@ jobs:
 
       - name: Sync to server/version.json
         run: cp version.json server/version.json
+
+      # ─────────────────────────────────────────────────────────────────
+      # ★★릴리스를 먼저 올리고, 성공했을 때만 version.json 을 커밋한다★★
+      #
+      #   ★왜 이 순서인가 (2026-08-19 실사고)★
+      #   예전엔 이 워크플로가 version.json 만 올리고 ★릴리스 에셋은 사람이 따로★
+      #   release.sh 로 올려야 했다. 그래서 그 한 단계를 빼먹은 날, version.json 은
+      #   1.1.554 를 광고하는데 릴리스가 없어 ★전 함대가 404 로 업데이트 실패★ 했다
+      #   (내부망 시드도 version mismatch 로 같이 실패 → 백업 복구).
+      #   사용자: "맨날 문제잇어" / "기본설계가 ㅈ병신이라 그런거지" — 맞는 지적이다.
+      #   기억으로 때울 일이 아니라 ★빼먹는 것이 불가능한 구조★ 여야 한다.
+      #
+      #   원칙: ★광고하기 전에 실제로 받을 수 있어야 한다.★
+      #   그래서 ①릴리스 생성 ②에셋 업로드 ③다운로드 검증 까지 끝난 뒤에야
+      #   version.json 을 커밋한다. 업로드가 실패하면 커밋이 안 되므로,
+      #   함대는 ★옛 버전 그대로 멀쩡히 돌고★ 404 를 보지 않는다.
+      # ─────────────────────────────────────────────────────────────────
+      - name: Read version
+        id: ver
+        run: |
+          V=$(python -c "import json;print(json.load(open('version.json',encoding='utf-8'))['exe']['version'])")
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          echo "버전: $V"
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.ver.outputs.v }}
+        run: |
+          set -e
+          TAG="v$V"
+          # 이미 있으면 재사용(재실행 안전), 없으면 생성
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "auto-release by CI (version.json bump)"
+          fi
+          # 에셋 이름 고정 — 서버 /check 가 이 이름으로 URL 을 만든다
+          cp "exe/혼종_통합_자동.exe" "macro-$V.exe"
+          gh release upload "$TAG" "macro-$V.exe" --clobber
+          if [ -f "exe/혼종_렌탈.exe" ]; then
+            cp "exe/혼종_렌탈.exe" "rental-$V.exe"
+            gh release upload "$TAG" "rental-$V.exe" --clobber
+          fi
+
+      - name: Verify assets are downloadable
+        env:
+          V: ${{ steps.ver.outputs.v }}
+        run: |
+          set -e
+          URL="https://github.com/${{ github.repository }}/releases/download/v$V/macro-$V.exe"
+          CODE=$(curl -sL -o /dev/null -w "%{http_code}" -r 0-1023 "$URL")
+          echo "macro-$V.exe → $CODE"
+          # 206(Partial) 또는 200 이면 받을 수 있는 상태
+          if [ "$CODE" != "206" ] && [ "$CODE" != "200" ]; then
+            echo "★에셋을 받을 수 없다 — version.json 커밋을 중단한다 (함대는 옛 버전 유지)★"
+            exit 1
+          fi
 
       - name: Commit updated version.json
         run: |
