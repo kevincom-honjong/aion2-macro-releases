@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.545",
+    "version": "1.1.546",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "26c65e9a1e45223dbfce8ae9c8e887295e5c1eb528edc670da63acf64d2b4597",
+    "sha256": "732afc4e5414ca4bd4077ba83964c0f808521d894ffd06f0c3e0a218e8dad0b3",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -135,7 +135,7 @@
     "lobby.png": "f6752038a856576c3c05b95c2e8cf7857ac347836681a821af0ccf7bbf27979b",
     "locked_slot.png": "7d32b99fb3b8d42e255dd0223a52ad316b45fc8c287f37a1c4ef7e20d65e9b6b",
     "login_redirect.png": "d45b1e4f4221ead39af176081ed53afb7a400a9840b43277cb7b2fcc60965c2b",
-    "loot.png": "7497bd2335e9e20d3e8c7aa7483cf8d63918e8da3d7e07069808f96539971204",
+    "loot.png": "2c07c023d716f74134072c3b0ff532b7df4e07a7e5e984aea7db64fe3b25db6c",
     "madosung.png": "6bd8b43830b15ddf64e68a7fc70a220923dcf07434face23356d8a93750bd5bf",
     "mania_new.png": "89d233edcf4ada060121db0b981cade04d3d5d5adc21ecd6b49c098723d64916",
     "market_menu.png": "12b4ad8566e41d3544560a03cc2267fcd9441f81c871066f12d8a1e231775a8a",
@@ -311,11 +311,11 @@
     "sha256": "bcf527bbc63c5f9d4864c1a812e6a1fc6de261bfd402601d1df0b3630aed1788",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260818160607",
-  "updated_at": "2026-08-19T06:08:16",
+  "images_version": "20260819071511",
+  "updated_at": "2026-08-19T07:15:11",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.545",
+    "version": "1.1.546",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
