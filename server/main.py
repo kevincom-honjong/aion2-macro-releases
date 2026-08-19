@@ -5811,6 +5811,64 @@ async def telegram_status(request: Request):
     return JSONResponse({"enabled": bool(tg_enabled() and tenant_chat_id(tenant))})
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# PC별 텔레그램 음소거 (2026-08-20 사용자 요청)
+#
+#   사용자: "pc 22, 23 이랑 저거 텔레그램 메세지 안오게 5시간만 안오게해"
+#
+# ★왜 서버에 두나★ 텔레그램은 두 곳에서 나간다 — ①매크로 자신(핀/사망/전환실패…)
+#   ②스카우터(운영 스크립트). manned.txt 는 ②만 막는다. ★여기가 둘의 공통 출구★ 라
+#   한 자리에서 막힌다. 그리고 매크로 재배포 없이 즉시 먹는다.
+# ★반드시 만료가 있다★ — 무기한 음소거는 잊혀지고, 잊혀진 음소거는 사고를 가린다.
+#   (manned.txt 가 08-18 줄을 이틀간 달고 있어 멀쩡한 6대가 감시에서 빠져 있었다)
+_TG_MUTE: dict[str, float] = {}      # pc_id(접미사 제거) → 만료 epoch
+
+
+def _tg_muted(pc_id: str) -> float:
+    """음소거 중이면 남은 초, 아니면 0. 만료된 항목은 즉시 청소한다."""
+    base = _base_pc(clean_pc_id(pc_id) or "")
+    now = time.time()
+    for k in [k for k, v in _TG_MUTE.items() if v <= now]:
+        _TG_MUTE.pop(k, None)
+    return max(0.0, _TG_MUTE.get(base, 0.0) - now)
+
+
+@app.post("/telegram/mute/{pc_id}")
+async def telegram_mute(pc_id: str, request: Request):
+    """PC 텔레그램 음소거. body: {"hours": 5}  / hours<=0 이면 해제.
+
+    대시보드 세션 전용 — 알림을 끄는 일이라 사람이 눌러야 한다.
+    """
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    hours = float(body.get("hours") or 0)
+    base = _base_pc(clean_pc_id(pc_id) or "")
+    if not base:
+        raise HTTPException(status_code=400, detail="pc_id 이상")
+    if hours <= 0:
+        _TG_MUTE.pop(base, None)
+        return JSONResponse({"ok": True, "pc": base, "muted": False})
+    hours = min(hours, 24.0)                  # 하루 넘는 음소거는 만들지 않는다
+    _TG_MUTE[base] = time.time() + hours * 3600.0
+    return JSONResponse({"ok": True, "pc": base, "muted": True,
+                         "hours": hours,
+                         "until": time.strftime("%H:%M", time.localtime(_TG_MUTE[base]))})
+
+
+@app.get("/telegram/mute")
+async def telegram_mute_list(request: Request):
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    now = time.time()
+    return JSONResponse({"muted": {k: round((v - now) / 60.0, 1)
+                                   for k, v in _TG_MUTE.items() if v > now}})
+
+
 @app.post("/telegram/send/{pc_id}")
 async def telegram_send(pc_id: str, request: Request):
     """매크로 → 텔레그램 텍스트 중계. 매크로에 봇 토큰이 없어도 알림이 간다."""
@@ -5865,6 +5923,14 @@ async def telegram_send(pc_id: str, request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="text 없음")
     name = clean_pc_id(pc_id)
+    # ★음소거 확인 (2026-08-20)★ — 조용히 삼키지 않고 ok:true + muted 로 알려준다.
+    #   매크로는 실패로 재시도하지 않고, 나중에 로그를 보면 왜 안 왔는지 알 수 있다.
+    _left = _tg_muted(pc_id)
+    if _left > 0:
+        print(f"[tg-mute] {name} 음소거 중({_left/60:.0f}분 남음) — 전송 생략: {text[:60]}",
+              flush=True)
+        return JSONResponse({"ok": True, "muted": True,
+                             "minutes_left": round(_left / 60.0, 1)})
     mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
