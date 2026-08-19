@@ -6866,7 +6866,7 @@ async def serve_image(fname: str):
     무결성은 그대로 — 업데이터가 version.json 의 sha256 을 받아 검증한다.
     """
     import re as _re2
-    if not _re2.fullmatch(r"[^/\\\x00]{1,120}\.png", fname):
+    if not _re2.fullmatch(r"(?i)[^/\\\x00]{1,120}\.png", fname):
         raise HTTPException(status_code=404)
     data = _IMG_PROXY_CACHE.get(fname)
     if data is None:
