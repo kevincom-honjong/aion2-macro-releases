@@ -5565,11 +5565,23 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
         return dict(args)
     out = dict(args)
-    if not out.get("peer_id"):
-        pmap = await _get_parsec_map(tenant)
-        base = _base_pc(pc_id)
-        num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
-        out["peer_id"] = pmap.get(num) or pmap.get(base) or ""
+    # ★★peer_id 는 ★무조건★ 주소록으로 덮어쓴다 (2026-08-19 실사고, PC-21)★★
+    #   예전 조건은 `if not out.get("peer_id")` 였다. 그런데 DB 에 저장되는 args 는
+    #   ★마스킹본("3Hx42I…")★ 이고 그건 truthy 라 ★덮어쓰지 않고 그대로 배달됐다.★
+    #   그래서 두 번째 배달부터 매크로가 ★7자짜리 peer_id★ 로 파섹 [Join] 을 눌렀고,
+    #   아무 데도 안 붙어 "런처가 안 보인다"로만 보였다(원인이 두 단계 뒤에 나타남).
+    #   PC-21 계정3 전환이 이걸로 실패했다 — 첫 시도 27자 OK, 재시도 7자 FAIL.
+    #   parsec_pw 는 원래도 무조건 덮어쓰고 있었다. peer_id 만 조건부였던 게 구멍.
+    #   → 주소록에 값이 있으면 항상 그걸 쓴다. 없을 때만 들어온 값을 남긴다.
+    pmap = await _get_parsec_map(tenant)
+    base = _base_pc(pc_id)
+    num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
+    _pid = pmap.get(num) or pmap.get(base) or ""
+    if _pid:
+        out["peer_id"] = _pid
+    elif "…" in str(out.get("peer_id") or ""):
+        out["peer_id"] = ""          # 주소록에 없는데 마스킹본뿐이면 빈 값이 낫다
+                                     # (매크로가 "peer_id 없음"으로 멈춘다 — 오접속보다 안전)
     for key in ("parsec_id", "parsec_pw"):
         v = (await get_setting(ns(tenant, key))) or ""
         if v:
