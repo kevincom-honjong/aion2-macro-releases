@@ -6870,15 +6870,40 @@ async def serve_image(fname: str):
         raise HTTPException(status_code=404)
     data = _IMG_PROXY_CACHE.get(fname)
     if data is None:
-        try:
-            import httpx as _hx
-            r = _hx.get(f"{_GH_RAW}/images2/{_urlparse.quote(fname)}",
-                        timeout=15.0, follow_redirects=True)
-        except Exception:
-            raise HTTPException(status_code=502, detail="upstream error")
-        if r.status_code != 200:
+        # ★★상류를 하나만 쓰지 않는다 (2026-08-19 사용자 지적)★★
+        #   사용자: "내부망이 실패하면 외부망으로 해야지 왜 그건 안 하냐"
+        #   맞는 지적이다. 여기는 상류가 raw.githubusercontent 하나뿐이라,
+        #   그게 잠깐만 흔들려도 함대는 ★그 템플릿을 영영 못 받는다★
+        #   (업데이터 쪽 URL 도 하나뿐이라 4회 재시도 후 포기한다).
+        #   → raw → jsDelivr → GitHub API(base64) 순으로 내려간다.
+        #     하나라도 200 이면 성공이고, 무결성은 업데이터가 sha256 으로 본다.
+        _q = _urlparse.quote(fname)
+        _repo = "kevincom-honjong/aion2-macro-releases"
+        _sources = [
+            ("raw", f"{_GH_RAW}/images2/{_q}"),
+            ("jsdelivr", f"https://cdn.jsdelivr.net/gh/{_repo}@main/images2/{_q}"),
+            ("ghapi", f"https://api.github.com/repos/{_repo}/contents/images2/{_q}?ref=main"),
+        ]
+        data = None
+        _errs = []
+        import httpx as _hx
+        for _name, _url in _sources:
+            try:
+                r = _hx.get(_url, timeout=15.0, follow_redirects=True,
+                            headers={"Accept": "application/vnd.github.raw"}
+                            if _name == "ghapi" else None)
+            except Exception as _e:
+                _errs.append(f"{_name}:{_e.__class__.__name__}")
+                continue
+            if r.status_code == 200 and r.content:
+                data = r.content
+                if _name != "raw":
+                    print(f"[img] {fname} — raw 실패 → {_name} 로 받음", flush=True)
+                break
+            _errs.append(f"{_name}:{r.status_code}")
+        if data is None:
+            print(f"[img] {fname} 전 상류 실패: {_errs}", flush=True)
             raise HTTPException(status_code=404)
-        data = r.content
         if len(_IMG_PROXY_CACHE) > 80:
             _IMG_PROXY_CACHE.clear()
         _IMG_PROXY_CACHE[fname] = data
