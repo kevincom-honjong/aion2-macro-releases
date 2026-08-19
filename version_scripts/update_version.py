@@ -104,8 +104,18 @@ def main():
     # ── images2 처리 ──────────────────────────────
     if os.path.exists(IMAGES_DIR):
         new_images: dict = {}
+        # ★★.png 만 목록에 넣는다 (2026-08-19 실사고)★★
+        #   images2 폴더에 굴러다니던 files.zip 이 그대로 매니페스트에 들어가,
+        #   함대가 매번 /img/files.zip 을 받으려다 404 → 4회 재시도 → "✗ 이미지 실패"
+        #   를 찍었다. 서버 /img 는 이미지 전용이라 zip 은 애초에 못 준다.
+        #   사용자: "files.zip은 목록에서 없애라 필요도없는거잖아"
+        #   → 폴더에 뭐가 굴러다녀도 매니페스트는 ★png 만★. 파일을 지우는 것보다
+        #     이쪽이 안전하다(다시 떨어뜨려도 자동으로 걸러진다).
         for fname in sorted(os.listdir(IMAGES_DIR)):
             fpath = os.path.join(IMAGES_DIR, fname)
+            if not fname.lower().endswith(".png"):
+                print(f"[images] 건너뜀(비png): {fname}")
+                continue
             if os.path.isfile(fpath):
                 new_images[fname] = sha256_file(fpath)
 
