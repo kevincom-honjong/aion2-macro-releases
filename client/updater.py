@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.5"
+UPDATER_VERSION  = "3.1.6"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -88,6 +88,279 @@ pc_id: str = "PC-?"
 macro_proc: subprocess.Popen | None = None
 macro_state: str = "stopped"   # stopped / running / updating / crashed
 _state_lock = threading.Lock()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 원격 로그 전송 (3.1.6, 2026-08-20 신설)
+# ══════════════════════════════════════════════════════════════════════════════
+# ★왜 만들었나 (2026-08-20 PC-23 실사고)★
+#   매크로가 죽으면 그 PC 는 ★완전 실명★이 된다. 업데이터는 서버에 macro_state 한 칸
+#   (stopped/running/updating/crashed)만 보내고, 자기가 무슨 시도를 했는지는 전부
+#   C:\auto\updater.log 에만 남긴다. 그래서 PC-23 이 죽었을 때
+#     "되살리려 시도는 했나 / 몇 번 했나 / 왜 실패했나 / no_restart 때문이었나"
+#   를 확인할 방법이 하나도 없었다. 그 PC 에 직접 붙기 전까지는 추측뿐이었다.
+#   → 업데이터 로그도 매크로처럼 서버로 올린다. 매크로가 죽어도 눈은 남는다.
+#
+# ★설계 원칙 3가지 (전부 이 프로젝트에서 데인 것들)★
+#   ① 로그가 본체를 느리게 하거나 죽이면 안 된다
+#      → 찍는 쪽은 링버퍼에 넣기만 하고(_log_push), 네트워크는 전용 스레드가 한다.
+#        _log_push 는 어떤 예외도 밖으로 내지 않는다.
+#   ② 되먹임 고리를 만들면 안 된다
+#      → 전송하며 찍은 로그가 다시 전송 대상이 되면 영원히 안 끝난다. 2겹으로 막는다
+#        (_RemoteLogHandler 주석 참조).
+#   ③ 종료 직전 로그가 제일 중요한데, 그걸 버리면 안 된다
+#      → 자가업데이트/exit/치명적오류 직전에 _log_shutdown 으로 밀어내고,
+#        그래도 남으면 디스크 스풀에 적어 ★다음 프로세스가 이어서★ 보낸다.
+LOG_FLUSH_INTERVAL = 20        # 평상시 전송 주기(초)
+LOG_BATCH_MAX      = 25        # 한 번에 보내는 줄 수 (서버 /updater/log 는 50까지 받는다)
+LOG_RING_MAX       = 300       # 메모리에 들고 있는 최대 줄 수
+LOG_RATE_MAX       = 60        # 분당 큐 적재 상한 — 폭주 로그가 서버 DB·대역폭을 먹는 것 방지
+LOG_MSG_MAX        = 500       # 한 줄 길이 상한 (서버도 500 에서 자른다)
+LOG_BACKOFF_MAX    = 300.0     # 서버가 죽어 있을 때 재시도 간격 상한(초)
+LOG_SPOOL_PATH     = r"C:\auto\updater_log_spool.jsonl"
+LOG_SPOOL_MAX      = 500       # 스풀 파일에 남기는 최대 줄 수
+
+# ★deque(maxlen=…) 을 쓰지 않는다★ — 전송 실패로 배치를 ★앞으로 되돌릴 때★
+#   maxlen 이 걸린 deque 는 앞에 넣는 순간 ★뒤(=최신)를 버린다★. 즉 방금 찍힌
+#   "왜 실패했는지" 가 사라지고 옛날 줄만 남는다. 평범한 list + 명시적 트림으로 간다.
+_log_ring: list = []
+_log_lock = threading.RLock()  # _log_push 가 락 안에서 다시 호출될 여지를 열어두기 위해 RLock
+_log_dropped = 0               # 링버퍼가 넘쳐서 버린 줄 수 (다음 배치에 한 줄로 보고)
+_log_rate_since = 0.0          # 분당 상한 창의 시작 시각
+_log_rate_n = 0                # 이번 창에서 적재한 줄 수
+_log_suppressed = 0            # 분당 상한에 걸려 버린 줄 수
+_log_tls = threading.local()   # .sending = True 인 동안은 로그를 큐에 넣지 않는다(되먹임 차단)
+
+
+def _log_push(level: str, message: str):
+    """링버퍼에 한 줄 넣는다. ★절대 예외를 밖으로 내지 않는다★ (로깅이 본체를 죽이면 안 된다)."""
+    global _log_dropped, _log_rate_since, _log_rate_n, _log_suppressed
+    try:
+        now = time.time()
+        with _log_lock:
+            # ── 분당 상한 ────────────────────────────────────────────────────
+            #   같은 에러가 초당 수십 줄 찍히는 상황(폴링 실패 루프 등)이 실제로 있다.
+            #   버리되 ★몇 줄 버렸는지는 반드시 남긴다★ — 조용한 유실은 이 프로젝트에서
+            #   제일 자주 사람을 속인 실패 방식이다.
+            if now - _log_rate_since >= 60.0:
+                if _log_suppressed:
+                    _log_ring.append({"ts": now, "level": "warn",
+                                      "message": f"[로그] 분당 상한 초과로 {_log_suppressed}줄 생략"})
+                    _log_suppressed = 0
+                _log_rate_since = now
+                _log_rate_n = 0
+            if _log_rate_n >= LOG_RATE_MAX:
+                _log_suppressed += 1
+                return
+            _log_rate_n += 1
+            _log_ring.append({"ts": now, "level": level,
+                              "message": str(message)[:LOG_MSG_MAX]})
+            # ── 링버퍼 상한 — ★오래된 것부터 버린다★ ──────────────────────────
+            #   최근 줄이 사고 원인에 가깝다. 넘치면 앞(옛날)을 자른다.
+            over = len(_log_ring) - LOG_RING_MAX
+            if over > 0:
+                del _log_ring[:over]
+                _log_dropped += over
+    except Exception:
+        pass
+
+
+class _RemoteLogHandler(logging.Handler):
+    """log()/err() 한 줄을 그대로 원격 큐에 넣는 핸들러.
+
+    ★되먹임 고리 차단 2겹★
+      ① record.name != "root" 이면 무시
+         — requests/urllib3 는 자기들끼리 DEBUG 로그를 찍는다. 그걸 큐에 넣으면
+           '보내려고 찍은 로그' 가 다시 보낼 거리가 되어 큐가 영원히 안 비워진다.
+           이 파일이 쓰는 logging.info/error 는 전부 root 로거다.
+      ② _log_tls.sending 이면 무시
+         — 전송 스레드가 전송 중에 찍는 로그(예외 메시지 등)를 큐에 넣지 않는다.
+           ①만으로는 _log_flush_once 안에서 err() 를 부르는 순간 뚫린다.
+
+    INFO 미만(DEBUG)은 서버로 올리지 않는다 — 파일 로그에는 그대로 남는다.
+    """
+
+    def emit(self, record):
+        try:
+            if record.name != "root" or record.levelno < logging.INFO:
+                return
+            if getattr(_log_tls, "sending", False):
+                return
+            lv = ("error" if record.levelno >= logging.ERROR
+                  else "warn" if record.levelno >= logging.WARNING
+                  else "info")
+            _log_push(lv, record.getMessage())
+        except Exception:
+            pass
+
+
+def _log_flush_once(timeout=(TIMEOUT_CONNECT, 10)):
+    """한 배치 전송. True=보냄 / False=실패(되돌림 완료) / None=지금은 보낼 수 없음.
+
+    ★None 과 False 를 구분하는 이유★
+      키·pc_id 가 아직 없는 상태는 '실패' 가 아니라 '아직 아님' 이다. 여기에 백오프를
+      태우면 세팅이 끝난 뒤에도 5분씩 조용해진다. 쌓아만 두고 다음 주기에 다시 본다.
+      (신규 PC 는 info.txt 를 사람이 채우기 전까지 pc_id 가 PC-?? 다)
+    """
+    global _log_dropped
+    if not CONTROL_API_KEY or pc_id in ("PC-?", "PC-??", ""):
+        return None
+    with _log_lock:
+        if not _log_ring:
+            return None
+        batch = _log_ring[:LOG_BATCH_MAX]
+        del _log_ring[:len(batch)]
+        if _log_dropped:
+            # 유실은 ★배치 맨 앞★에 붙인다 — 시간순으로 보면 버려진 구간이 이 앞이다.
+            batch.insert(0, {"ts": time.time(), "level": "warn",
+                             "message": f"[로그] 버퍼 넘침 — {_log_dropped}줄 유실"})
+            _log_dropped = 0
+    _log_tls.sending = True
+    try:
+        r = requests.post(
+            f"{CONTROL_SERVER}/updater/log/{pc_id}",
+            json={"logs": batch, "updater_version": UPDATER_VERSION},
+            headers=_headers(),
+            timeout=timeout,
+        )
+        if r.status_code == 200:
+            return True
+        raise RuntimeError(f"HTTP {r.status_code}")
+    except Exception:
+        # ★순서를 보존하며 앞으로 되돌린다★
+        #   append 로 되돌리면 옛날 줄이 최신 줄 ★뒤★로 가서 대시보드 시간순이 뒤집힌다.
+        #   슬라이스 대입은 통째 삽입이라 중간에 다른 스레드가 끼어들 틈이 없다.
+        with _log_lock:
+            _log_ring[:0] = batch
+            over = len(_log_ring) - LOG_RING_MAX
+            if over > 0:
+                del _log_ring[:over]      # 되돌릴 때도 오래된 것부터 버린다
+                _log_dropped += over
+        return False
+    finally:
+        _log_tls.sending = False
+
+
+def _spool_dump_and_clear():
+    """링버퍼를 디스크에 적어두고 비운다 — ★이 프로세스가 곧 사라질 때★ 쓴다.
+
+    ★왜 필요한가★
+      자가업데이트는 새 인스턴스가 _kill_stale_updater_processes() 로 나를 taskkill 한다.
+      그 순간 메모리에 있던 '무엇을 하다 죽었는지' 가 통째로 사라진다. 파일에 남겨두면
+      다음 프로세스가 _spool_load() 로 집어 이어서 보낸다 = 로그가 안 끊긴다.
+
+    쓰기는 임시파일 + os.replace 원자 교체 — 쓰다가 죽어도 반쪽 파일이 남지 않는다.
+    """
+    try:
+        with _log_lock:
+            batch = list(_log_ring)
+            _log_ring.clear()
+        if not batch:
+            return
+        old = []
+        try:
+            if os.path.exists(LOG_SPOOL_PATH):
+                with open(LOG_SPOOL_PATH, "r", encoding="utf-8") as f:
+                    old = [ln for ln in f.read().splitlines() if ln.strip()]
+        except Exception:
+            old = []
+        lines = old + [json.dumps(e, ensure_ascii=False) for e in batch]
+        lines = lines[-LOG_SPOOL_MAX:]      # 파일이 무한히 자라지 않게
+        tmp = LOG_SPOOL_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, LOG_SPOOL_PATH)
+    except Exception:
+        pass
+
+
+def _spool_load():
+    """스풀 파일을 읽어 링 ★앞★에 넣는다(이전 프로세스 줄이 더 오래됐으니까).
+
+    ★읽자마자 먼저 지운다★
+      파싱이 깨진 파일이 남아 있으면 부팅할 때마다 같은 걸 다시 읽어 영원히 실패한다.
+      한 번 읽으면 파일은 없앤다 — 최악의 경우 로그 몇 줄을 잃지만, 업데이터가 매 부팅
+      같은 파일에 걸려 넘어지는 것보다 낫다.
+    """
+    global _log_dropped
+    try:
+        if not os.path.exists(LOG_SPOOL_PATH):
+            return
+        raw = ""
+        try:
+            with open(LOG_SPOOL_PATH, "r", encoding="utf-8") as f:
+                raw = f.read()
+        finally:
+            try:
+                os.remove(LOG_SPOOL_PATH)
+            except Exception:
+                pass
+        items = []
+        for ln in raw.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                e = json.loads(ln)
+                if isinstance(e, dict) and e.get("message"):
+                    items.append(e)
+            except Exception:
+                pass
+        if not items:
+            return
+        with _log_lock:
+            _log_ring[:0] = items
+            over = len(_log_ring) - LOG_RING_MAX
+            if over > 0:
+                del _log_ring[:over]
+                _log_dropped += over      # 스풀(500) > 링(300) 이라 실제로 넘칠 수 있다
+        log(f"[로그] 이전 프로세스가 남긴 {len(items)}줄 이어서 전송")
+    except Exception:
+        pass
+
+
+def _log_shutdown(reason: str):
+    """프로세스가 곧 사라진다 — 남은 로그를 최대한 밀어넣고, 못 보낸 건 디스크에 남긴다.
+
+    ★반드시 '죽는 동작' 보다 ★앞★에서 불러야 한다★
+      자가업데이트는 새 인스턴스가 나를 죽인다. Popen 뒤에 부르면 전송 도중에 잘린다.
+      그래서 호출 지점이 Popen ★직전★이다(self_update 참조).
+    타임아웃을 (5,5) 로 줄인 것도 같은 이유 — 종료 경로에서 15초씩 붙들려 있으면 안 된다.
+    """
+    try:
+        _log_push("warn", f"[로그] 프로세스 종료: {reason}")
+        for _ in range(2):
+            if _log_flush_once(timeout=(5, 5)) is not True:
+                break      # 실패(False)든 보낼 게 없든(None) 더 붙들고 있지 않는다
+        _spool_dump_and_clear()
+    except Exception:
+        pass
+
+
+def _log_thread():
+    """전송 전용 스레드. 로그를 찍는 쪽은 여기서 무슨 일이 나든 영향받지 않는다."""
+    _spool_load()
+    wait = 1.0     # 부팅 직후 한 번은 빨리 — '언제 켜졌는지' 가 대시보드에 바로 보이게
+    while True:
+        try:
+            r = _log_flush_once()
+            if r is False:
+                # 서버가 죽었거나 망이 끊겼다 → 점점 뜸하게(최대 5분). 그동안 줄은 링에 쌓인다.
+                wait = min(max(wait * 2, LOG_FLUSH_INTERVAL), LOG_BACKOFF_MAX)
+            elif r is True:
+                # 아직 밀린 게 많으면 곧바로 다음 배치 — 큰 덩어리가 20초씩 끌리지 않게.
+                with _log_lock:
+                    more = len(_log_ring) >= LOG_BATCH_MAX
+                wait = 1.0 if more else LOG_FLUSH_INTERVAL
+            else:
+                wait = LOG_FLUSH_INTERVAL     # 보낼 게 없거나 아직 키/pc_id 가 없음
+        except Exception:
+            wait = LOG_FLUSH_INTERVAL
+        time.sleep(wait)
+
+
+# ★핸들러 등록은 이 블록 맨 끝에서★ — 위 함수들이 전부 정의된 뒤여야 emit 이 안전하다.
+logging.getLogger().addHandler(_RemoteLogHandler(level=logging.INFO))
 
 
 # ==================================================
@@ -261,11 +534,22 @@ def download_file(url: str, dest_path: str, expected_sha256: str = None) -> bool
 # ==================================================
 # 매크로 프로세스 관리
 # ==================================================
-def _set_state(state: str):
+def _set_state(state: str, expect: str = None) -> bool:
+    """상태를 바꾼다. expect 를 주면 ★현재 값이 expect 일 때만★ 바꾼다(compare-and-set).
+
+    ★왜 expect 가 필요한가 (2026-08-20)★
+      크래시감지 스레드가 '되살아났네' 하고 running 을 쓰는 사이, 명령 스레드가
+      stop/update 로 stopped·updating 을 쓸 수 있다(handle_command 는 별도 데몬 스레드).
+      확인과 기록이 갈라져 있으면 늦게 쓴 쪽이 이겨서 ★죽은 매크로가 running 으로★
+      남는다. 락 안에서 확인+기록을 붙여 그 창을 없앤다.
+    """
     global macro_state
     with _state_lock:
+        if expect is not None and macro_state != expect:
+            return False
         macro_state = state
     log(f"[상태] macro_state → {state}")
+    return True
 
 
 def _minimize_consoles():
@@ -503,6 +787,12 @@ def self_update(updater_info: dict):
         os.rename(new_tmp, target)
         log("[자가업데이트] updater_new.exe → updater.exe")
 
+        # ★로그를 먼저 비운다 — 순서가 핵심 (3.1.6)★
+        #   새 인스턴스는 부팅하며 _kill_stale_updater_processes() 로 ★나를 taskkill★ 한다.
+        #   그러니 네트워크 전송은 반드시 Popen ★앞★에서 끝나야 한다. 뒤에 두면
+        #   "자가업데이트 하다 죽었다" 는 제일 중요한 로그가 전송 도중에 잘린다.
+        _log_shutdown(f"자가업데이트 {UPDATER_VERSION} → {new_ver}")
+
         # 새 updater.exe 실행
         subprocess.Popen(
             [target],
@@ -511,6 +801,9 @@ def self_update(updater_info: dict):
         )
         launched = True
         log(f"[자가업데이트] 새 버전 실행 완료 → 자신 종료")
+        # Popen 뒤에 찍힌 줄(위 한 줄 + 그 사이 다른 스레드가 찍은 것)은 전송할 시간이
+        # 없다 — 디스크에만 남겨 새 인스턴스가 이어서 보내게 한다.
+        _spool_dump_and_clear()
         time.sleep(1)
         os._exit(0)
     except Exception as e:
@@ -518,6 +811,9 @@ def self_update(updater_info: dict):
         # ★새 인스턴스가 이미 떠 있으면 내가 남는 순간 이중 실행(명령 나눠먹기/파일 잠금
         #   꼬임) — 무조건 종료(v3.0.5). (새 쪽 부팅 시 잔여 프로세스 강제 정리도 있음)★
         if launched:
+            # 여기 온 예외 메시지가 곧 '왜 자가업데이트가 삐끗했는지' 다 — 디스크에 남겨
+            # 새 인스턴스가 이어서 올리게 한다(전송할 시간은 없다).
+            _spool_dump_and_clear()
             os._exit(0)
         # 복구 시도
         try:
@@ -775,6 +1071,10 @@ def handle_command(cmd: dict):
     elif command == "exit":
         log("[명령] 업데이터 종료")
         stop_macro()
+        # ★누가 껐는지 남긴다★ — exit 로 사라진 업데이터는 상태 보고도 끊기므로,
+        #   서버에는 "그냥 응답 없음" 으로만 보인다. 종료 사유를 미리 밀어넣어야
+        #   나중에 "죽은 건가 끈 건가" 를 구분할 수 있다.
+        _log_shutdown("exit 명령 수신")
         time.sleep(1.0)
         os._exit(0)
 
@@ -920,6 +1220,10 @@ def _auto_revive(ret):
     try:
         if os.path.exists(NO_RESTART_PATH):
             log("[되살림] no_restart 표시 있음 — 사용자가 끈 것이므로 두고 본다")
+            # ★일부러 끈 것은 '크래시'가 아니다 (2026-08-20)★
+            #   여기서 crashed 를 그대로 두면 대시보드가 영영 빨간 crashed 를 띄운다.
+            #   의도적 종료의 정확한 이름은 stopped 다.
+            _set_state("stopped", expect="crashed")
             return
     except Exception:
         pass
@@ -974,6 +1278,30 @@ def _crash_check_thread():
                     log("[크래시감지] 매크로 프로세스가 사라짐 (핸들 없음 경로)")
                     _set_state("crashed")
                     _auto_revive("no-handle")
+            elif state == "crashed":
+                # ★★crashed 는 '사건'이지 '지속 상태'가 아니다 (3.1.6, 2026-08-20)★★
+                #
+                # ★증상★ 매크로가 죽어 crashed 가 되면, 매크로를 다시 살려도
+                #   대시보드가 영영 crashed 로 남았다(실측: PC-02 139분 / PC-09 63분 /
+                #   PC-17 324분). ★restart 명령을 사람이 쏴야만★ 빠져나왔다.
+                #
+                # ★왜★ 위 두 분기는 둘 다 `state == "running"` 을 전제로 한다.
+                #   그래서 state 가 crashed 가 되는 순간 이 스레드는 아무 일도 안 한다.
+                #   crashed 를 벗어나는 유일한 경로는 _auto_revive 안의 4초짜리 창
+                #   (프로세스 존재 확인) 하나뿐인데, 그게 다음 세 경우엔 그냥 return 한다:
+                #     ① no_restart 표시 있음  ② 시간당 되살림 상한 초과
+                #     ③ start_macro 실패
+                #   그 뒤 매크로가 ★스스로★ 살아나도(계정 순회의 powershell 부활 예약,
+                #   사람이 직접 실행) 알아채는 코드가 없다 = ★편도 트랩★.
+                #
+                # ★고치는 방식★ 여기서는 ★띄우지 않는다. 이름만 바로잡는다.★
+                #   되살리기는 위 분기와 _auto_revive 가 이미 한다. 여기까지 왔다는 건
+                #   되살림이 끝났거나 포기했다는 뜻이므로, 남은 일은 '지금 실제로
+                #   떠 있는가' 를 보고 표시를 사실과 맞추는 것뿐이다.
+                #   (프로세스를 새로 띄우지 않으므로 이중 실행 위험이 원천적으로 없다)
+                if _macro_running_anywhere():
+                    if _set_state("running", expect="crashed"):
+                        log("[크래시감지] 매크로가 다시 떠 있다 — crashed 해제 (재기동 안 함)")
         except Exception as e:
             err(f"[크래시감지] 에러: {e}")
         time.sleep(CRASH_CHECK_INT)
@@ -1308,6 +1636,16 @@ def main():
     load_pc_id()
     log(f"[업데이터] PC: {pc_id}")
 
+    # ── 원격 로그 전송 시작 (3.1.6) ─────────────────────────────────────────
+    #   ★load_pc_id() 뒤여야 한다★ — 그 전에는 pc_id 도 CONTROL_API_KEY 도 없어서
+    #   _log_flush_once 가 None(=쌓아만 둠)만 돌려준다. 여기서 띄우면 부팅 로그부터
+    #   전부 실린다(이 위 줄들은 이미 링버퍼에 들어가 있다).
+    threading.Thread(target=_log_thread, daemon=True, name="logsend").start()
+    # ★문구에 `[BOOT` 를 넣지 말 것★ — 서버 /log/ 수신부가 그 문자열을 보면
+    #   계정 자동순환 상태기계(_rot_note_boot)를 건드린다. 업데이터 부팅은 매크로
+    #   부팅이 아니므로 순환 상태를 만지면 안 된다.
+    log(f"[UPDLOG] updater v{UPDATER_VERSION} pc={pc_id} 원격 로그전송 ON")
+
     # ── 필수 디렉토리 보장 ───────────────────────────────────────────────────
     for d in [IMAGES_DIR, BUGS_DIR]:
         os.makedirs(d, exist_ok=True)
@@ -1359,3 +1697,6 @@ if __name__ == "__main__":
         err(f"[업데이터] 치명적 오류: {e}")
         import traceback
         err(traceback.format_exc())
+        # ★제일 중요한 로그가 여기다★ — 업데이터가 통째로 죽는 경로. 여기서 안 보내면
+        #   서버에는 아무 흔적도 안 남고 그 PC 는 조용히 함대에서 빠진다(PC-23 사고).
+        _log_shutdown(f"치명적 오류: {e}")
