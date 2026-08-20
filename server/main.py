@@ -618,15 +618,18 @@ async def lifespan(app: FastAPI):
         print(f"[KILL] rental_kill 로드 실패(무시): {e}")
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
+    # ★계정 자동순환 엔진 (2026-08-20)★ — 무장된 PC 가 하나도 없으면 아무 일도 안 한다.
+    rot_task = asyncio.create_task(_rot_engine())
     try:
         yield
     finally:
-        if tg_task:
-            tg_task.cancel()
-            try:
-                await tg_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        for _t in (tg_task, rot_task):
+            if _t:
+                _t.cancel()
+                try:
+                    await _t
+                except (asyncio.CancelledError, Exception):
+                    pass
 
 
 app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
@@ -830,6 +833,31 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             peer = pmap.get(str(n))
             if peer:
                 pc["parsec_peer_id"] = peer
+    # ★★'오늘 완주' 를 날짜로 검증해서 붙인다 (2026-08-20 PC-12 실측)★★
+    #   ★무엇이 문제였나★ daily_progress 의 completed 플래그는 ★늙지 않는다.★
+    #   리셋은 매크로가 ★자기 로컬 파일에만★ 한다(새벽 5시). 그래서 며칠째 안 뜬 계정
+    #   카드는 옛날 completed=true 를 그대로 달고 있고, 서버는 그걸 오늘 것으로 내보냈다.
+    #   실측 2026-08-20: 함대 계정2 카드 ★6장★ 이 08-18~19 완주를 '오늘 완주'로 표시 중.
+    #     PC-12b 슬롯1·2 completed_time=2026-08-18  (이틀 전)
+    #   → 대시보드 숫자·감시기 미완 판정·계정 순환이 전부 이 값을 보므로 여기서 한 번에 고친다.
+    #   ★completed 자체는 지우지 않는다★ — 매크로가 보낸 사실은 보존하고, 판정용
+    #     today 플래그만 얹는다(되돌릴 수 있고, 옛 소비자도 안 깨진다).
+    try:
+        for pc in statuses:
+            for _e in (pc.get("daily_progress") or []):
+                _e["today"] = bool(_e.get("completed")) and _rot_is_today(_e.get("completed_time"))
+    except Exception:
+        pass
+    # ★순환 무장 상태를 카드에 싣는다 (2026-08-20 감사)★ — 무장됐는지 화면에서 볼 수
+    #   없으면 "▶시작을 눌렀는데 계정이 안 넘어간다"를 아무도 진단할 수 없다.
+    try:
+        for pc in statuses:
+            _rk = ns(tenant, _base_pc(str(pc.get("pc_id") or "")))
+            _rs = _ROT.get(_rk)
+            if _rs:
+                pc["_rot"] = str(_rs.get("stage") or "")
+    except Exception:
+        pass
     return statuses
 
 
@@ -2910,7 +2938,7 @@ function dkHero(){
   const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
   $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
   $('dk-h-kina').textContent = fmtKinaShort(pcs.reduce((a,p)=>a+(p._total_kina||0),0));
-  const done = pcs.reduce((a,p)=>a+((p.daily_progress||[]).filter(c=>c.completed).length),0);
+  const done = pcs.reduce((a,p)=>a+((p.daily_progress||[]).filter(dpDone).length),0);
   const tot  = pcs.reduce((a,p)=>a+((p.chars||[]).length),0);
   $('dk-h-done').innerHTML = done+`<i>/${tot||'–'}</i>`;
 
@@ -2984,13 +3012,23 @@ function isDungeonDone(pc){
   return !!t && t>=fmtTs(lastWeeklyReset());
 }
 
+// ★★'오늘 끝냈나' 판정은 여기 한 곳만 쓴다 (2026-08-20 PC-12 실측)★★
+//   daily_progress 의 completed 플래그는 늙지 않는다 — 며칠째 안 뜬 계정 카드는
+//   옛 완주를 그대로 달고 있다(실측: 계정2 카드 6장이 08-18~19 완주를 오늘로 표시).
+//   서버가 붙여주는 today 플래그(completed_time 이 오늘 게임일인가)를 함께 본다.
+//   ★한 곳으로 모으는 이유★ 카드 줄·전광판·현재슬롯 판정이 제각각이면 화면 안에서
+//   숫자가 서로 안 맞고, 그러면 주인님이 어느 것도 못 믿게 된다.
+const dpDone = c => !!(c && c.completed) && c.today !== false;
+
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
 function buildDailyProgress(dp, activeSlot, charNames, pc) {
   if (!dp || !dp.length) return '';
-  const completed = dp.filter(c=>c.completed).length;
+  // ★오늘 완료만 센다★ — 서버가 붙인 today 플래그(=completed_time 이 오늘 게임일)를 쓴다.
+  //   플래그가 없는 옛 응답이면 예전처럼 completed 만 본다(today!==false).
+  const completed = dp.filter(dpDone).length;
   const total = dp.length;
   const slots = dp.map(c => {
-    const done = c.completed;
+    const done = dpDone(c);
     const isActive = !done && c.slot === activeSlot;
     // char_info OCR 이름 우선, 없으면 daily_progress 이름, 없으면 슬롯 번호
     const name = (charNames && charNames[c.slot-1]) || c.name || `${c.slot}`;
@@ -3012,7 +3050,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}</span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc(pc._rot)}</span>`:''}</span>
       ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
@@ -3107,7 +3145,7 @@ function buildCard(pc) {
     ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
-  const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!c.completed);
+  const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!dpDone(c));
   const activeName = activeDp
     ? ((pc.chars&&pc.chars[activeSlot-1]) || activeDp.name || String(activeSlot))
     : '';
@@ -3389,19 +3427,24 @@ function renderCards() {
     const n = Math.min(4, Math.max(list.length, ...list.map(p => p.acct_total || 1)));
     return {base: b, list, top, n, online: list.some(isOn)};
   });
-  const onlineAll  = stacks.filter(s=>s.online);
-  const offlineAll = stacks.filter(s=>!s.online);
+  // ★★오프라인 카드를 아래로 내리지 않는다 (2026-08-20 사용자 지시)★★
+  //   원문: "오프라인이면 밑으로 내려가잖아 앞으로 그렇게하지말고 ★온라인 자리에 그대로
+  //          놔두고 오프라인으로 명시만★ 해놓는걸로하자 오히려 헷갈리네"
+  //   ★왜 헷갈렸나★ 카드가 자리를 옮기면 "20번이 어디 갔지" 를 매번 다시 찾아야 한다.
+  //   PC 는 물리적으로 고정된 물건인데 화면에서만 돌아다니면 위치 기억이 무용지물이 된다.
+  //   → 한 격자에 전부 두고 ★순서를 고정★ 한다. 죽었다는 건 카드 색·뱃지가 말한다.
+  //   섹션/격자 자체는 남겨둔다(HTML·드래그 코드 건드리지 않음) — 비워서 숨긴다.
   const byTop = arr => { const m={}; arr.forEach(s=>m[s.top.pc_id]=s); return m; };
-  const om = byTop(onlineAll), fm = byTop(offlineAll);
-  const online  = sortByOrder(onlineAll.map(s=>s.top),  DRAG_ORDER_KEY_ON ).map(t=>om[t.pc_id]);
-  const offline = sortByOrder(offlineAll.map(s=>s.top), DRAG_ORDER_KEY_OFF).map(t=>fm[t.pc_id]);
+  const am = byTop(stacks);
+  const all = sortByOrder(stacks.map(s=>s.top), DRAG_ORDER_KEY_ON).map(t=>am[t.pc_id]);
+  const offCnt = stacks.filter(s=>!s.online).length;
   const go  = document.getElementById('grid-online');
   const gof = document.getElementById('grid-offline');
-  go.innerHTML  = online.length  ? online.map(buildStack).join('')  : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
-  gof.innerHTML = offline.length ? offline.map(buildStack).join('') : '';
-  document.getElementById('online-count').textContent  = `(${online.length})`;
-  document.getElementById('offline-count').textContent = `(${offline.length})`;
-  document.getElementById('offline-section').classList.toggle('hidden', offline.length===0);
+  go.innerHTML  = all.length ? all.map(buildStack).join('') : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
+  gof.innerHTML = '';
+  document.getElementById('online-count').textContent  = `(${all.length - offCnt}/${all.length})`;
+  document.getElementById('offline-count').textContent = `(${offCnt})`;
+  document.getElementById('offline-section').classList.add('hidden');
   refreshSummary(pcs);
   document.getElementById('pc-count').textContent = `PC ${pcs.length}대`;
   setupDrag('grid-online',  DRAG_ORDER_KEY_ON);
@@ -3440,12 +3483,12 @@ function refreshSummary(pcs) {
     if(isOnline) c.online++; else c.offline++;
     if(!isDungeonDone(p)) dungeonLeft.add(p.pc_id);
     const dp = p.daily_progress||[];
-    if(dp.length>0 && dp.every(d=>d.completed)) c.completedPcs++;
+    if(dp.length>0 && dp.every(dpDone)) c.completedPcs++;
     // ★캐릭터 수 집계(2026-08-07)★ — 전광판은 대수가 아니라 캐릭터 수를 보여준다.
     //   캐릭 수는 daily_progress 길이(=슬롯 수)가 정본, 아직 없으면 chars 목록으로 보완.
     const nChars = dp.length || ((p.chars && p.chars.length) || 0);
     if(isOnline) c.onlineChars += nChars;   // ↓ 아래에서 '뒷카드 포함'으로 다시 계산한다
-    c.completedChars += dp.filter(d=>d.completed).length;
+    c.completedChars += dp.filter(dpDone).length;
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
       seenPc.add(p.pc_id);
@@ -3665,9 +3708,25 @@ async function sendCmd(pc_id, command, args={}) {
     showToast(`⚠️ ${pc_id}는 지금 다른 계정 접속 중 — 계정 전환 후 실행하세요`);
     return false;
   }
+  // ★★계정 자동순환 무장 신호 (2026-08-20)★★
+  //   "시작을 눌러줫을때만 그작업을 하면되고" — 방아쇠는 ★사람이 누른 이 버튼★ 이다.
+  //   ★왜 서버가 command=='start' 만 보면 안 되나★ /command 로 start 를 쏘는 건 이
+  //   버튼만이 아니다 — 운영 스크립트(deploy_to.py·start_idle.py·up_and_start.py …)가
+  //   전부 쓴다. 그러면 알람 조치로 한 대를 재개시키는 것만으로 순환까지 켜지고,
+  //   up_and_start.py 한 번이면 함대 전체가 무장된다(CLAUDE.md A7 우회).
+  //   → ★대시보드에서 나가는 start 에만★ 이 표시를 싣는다. 여기가 단일 초크포인트다.
+  if (command === 'start') args = Object.assign({rotate: true}, args);
   const res=await fetch(`/command/${pc_id}`,{
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({command,args})});
+  // ★무장이 거부되면 반드시 말한다★ — start 자체는 200 이라 화면엔 아무 표시가 없었다.
+  //   순환이 안 켜진 걸 사람이 알 방법이 카드의 🔁 배지 '없음' 뿐이면 아무도 못 알아챈다.
+  if (command === 'start') {
+    try {
+      const j = await res.clone().json();
+      if (j && j.armed === false) showToast(`⚠️ ${pc_id} 사냥은 시작 — 계정 순환은 무장 안 됨 (${j.why||''})`);
+    } catch(e) {}
+  }
   return res.ok;
 }
 
@@ -5424,6 +5483,17 @@ async def receive_logs(pc_id: str, request: Request):
         message = str(entry.get("message", ""))[:500]
         if message:
             await insert_log(ns(tenant, pc_id), level, message)
+            # ★★로그 경로는 둘이다 — 여기도 부팅을 봐야 한다 [S2 치명]★★
+            #   매크로는 WS 가 끊겨 있으면 이 HTTP 로 로그를 보낸다(report_module _flush_logs).
+            #   초판은 WS 쪽에만 감지를 달아서, ★부팅 직후 WS 가 아직 안 붙은 경우★ 의
+            #   [BOOT] 를 통째로 놓쳤다. 실측: 부팅 83회 중 4회가 서버에 [BOOT] 무기록.
+            #   그러면 expect_restart 가 True 로 남아 ★다음번 사람의 재시작을 삼킨다★ =
+            #   "껐다 켜면 순환 해제" 보장이 조용히 깨진다.
+            if "[BOOT" in message:
+                try:
+                    _rot_note_boot(ns(tenant, pc_id), message)
+                except Exception as _be:
+                    print(f"[순환] 부팅 감지 실패(무시): {_be}")
     return JSONResponse({"ok": True, "count": len(logs)})
 
 
@@ -5605,6 +5675,7 @@ async def send_command(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="command 필드 필요")
     args = body.get("args", {})
     nspc = ns(tenant, pc_id)
+    _rot_result: dict = {}          # ▶시작이면 무장 결과를 응답에 실어 화면에 알린다
 
     # ★비밀은 서버가 끼워넣는다 (2026-08-16, switch_launcher)★
     #   대시보드는 비번을 ★모른다★ — 브라우저에도, 명령 DB 행에도, 명령 이력 화면에도
@@ -5628,12 +5699,31 @@ async def send_command(pc_id: str, request: Request):
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
                 "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
 
+    # ★★계정 자동순환 무장/해제 (2026-08-20 사용자 지시)★★
+    #   "이게 플켯다고 하는게 아니라 ★시작을 눌러줫을때만★ 그작업을 하면되고"
+    #   → 방아쇠는 ★부팅이 아니라 이 ▶시작 명령★ 이다. 정지/종료는 사람의 뜻이므로 해제.
+    #   순환 엔진이 스스로 보내는 start 는 _rot_send 를 쓰므로 여기를 안 거친다
+    #   (그쪽은 이미 무장 상태를 들고 있다 — 이중 무장/덮어쓰기 없음).
+    try:
+        if command == "start" and bool((args or {}).get("rotate")):
+            _ok, _why = await _rot_arm(tenant, pc_id)
+            await _rot_save(force=True)
+            _rot_result = {"armed": _ok, "why": _why}
+            if not _ok:
+                print(f"[순환] {pc_id} 무장 거부: {_why}")
+        elif command in ("stop", "exit"):
+            if _rot_disarm(tenant, pc_id, f"사람이 {command}"):
+                await _rot_save(force=True)
+                await _rot_say(tenant, pc_id, f"{command} 명령으로 순환을 해제했습니다")
+    except Exception as _re:
+        print(f"[순환] 무장/해제 실패(무시): {_re}")
+
     cmd_id = await insert_command(nspc, command, args)
     # 매크로 WS 연결되어 있으면 즉시 전달
     ws_sent = await send_command_to_macro(nspc, command, send_args, cmd_id)
     # 브로드캐스트 (명령 내역 갱신용)
     await _push_cmd_history(tenant)
-    return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent})
+    return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent, **_rot_result})
 
 
 @app.delete("/status/{pc_id}")
@@ -5704,7 +5794,16 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             elif msg_type == "log":
                 logs = msg.get("logs", [])
                 for entry in logs:
-                    await insert_log(nspc, entry.get("level", "info"), entry.get("message", ""))
+                    _m = entry.get("message", "")
+                    await insert_log(nspc, entry.get("level", "info"), _m)
+                    # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
+                    #   WS 재연결이 아니라 ★부팅★ 일 때만 나오는 줄을 본다
+                    #   (PC-21b 처럼 60초마다 WS 가 끊겼다 붙는 PC 가 있다).
+                    if "[BOOT" in str(_m):
+                        try:
+                            _rot_note_boot(nspc, _m)
+                        except Exception as _be:
+                            print(f"[순환] 부팅 감지 실패(무시): {_be}")
             elif msg_type == "ack":
                 cmd_id = msg.get("command_id")
                 if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
@@ -7103,3 +7202,736 @@ if __name__ == "__main__":
     print(f"혼종 사령부: http://localhost:{port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
 # Tue Apr  7 08:52:44     2026
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 계정 자동순환 (2026-08-20 사용자 지시)
+# ═════════════════════════════════════════════════════════════════════════════
+# 원문: "계정1이 끝났잖아. 이 끝났을때 정보수집한번때려주고 다음 계정으로 자연스럽게
+#        넘어가게끔하고 … 이게 플켯다고 하는게 아니라 ★시작을 눌러줫을때만★ 그작업을
+#        하면되고 만약에 ★캐릭터이름이 안적혀잇으면 들어가서 진행하지말고 멈추고
+#        나한테 알람★ 주는형식으로해"
+#        "계정1을 6개중 4개만 끝내고 계정2로 갔어 … 계정2 2캐릭을 다하고 정보수집을
+#        다했어 그러면 끝이아니라 ★계정1로 전환해서 남은 2캐릭하고 정보수집★"
+#
+# ★왜 매크로가 아니라 서버가 주관하나★
+#   본컴 런처 전환(switch_launcher)은 ★peer_id★ 가 있어야 하는데 매크로는 파섹 주소록을
+#   조회하지 않는다(매크로↔파섹 분리 원칙). 매크로 혼자 바꾸면 원격컴 크롬만 바뀌고
+#   본컴은 그대로 → 짝이 안 맞아 "퍼플온이 실행된 PC가 없습니다"(2026-08-20 PC-20·21 실측).
+#
+# ★★2026-08-20 적대 리뷰 3건에서 나온 결함 23개를 반영한 재작성판★★
+#   초판은 요구사항을 ★정반대로 두 번★ 깼다:
+#     · 어제 완주가 오늘 완주로 읽혀 ★둘째 날부터 한 번도 안 돌고★ "전 계정 완주"로 종료
+#     · 부팅 감지가 새는 경로가 있어 ★사람이 껐다 켜도 계속 돌았다★
+#   아래 주석의 [Sn]/[An]/[Cn] 은 그 리뷰 항목 번호다. 지우지 말 것 — 왜 이렇게
+#   생겼는지가 전부 거기 있다.
+ROT_KEY          = "acct_rotate"      # DB 설정 키(순환 상태 + 부팅 지문)
+ROT_ALLOW_KEY    = "rot_allow"        # ★카나리아 게이트★ 허용 PC 목록(쉼표). 비면 아무도 무장 못 함
+ROT_TICK         = 30.0               # 엔진 주기(초)
+ROT_COLLECT_MAX  = 420.0              # 정보수집 대기 상한
+ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작) 대기 상한
+ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
+# ★사냥 상한 < 무장 수명★ — 반대로 두면 TTL 이 먼저 걸려 사냥 상한 알람이 ★영원히 안 뜬다★
+#   (재검증 지적: ROT_HUNT_MAX 20h > ROT_TTL 18h 라 도달 불가 코드였다).
+ROT_HUNT_MAX     = 14 * 3600.0        # 사냥 단계 절대 상한 [S9] — 좀비 방지용
+ROT_TTL          = 18 * 3600.0        # 무장 자체의 수명 [C6-②] — 넘으면 해제하고 알린다
+ROT_MAX_HOPS     = 12                 # 한 번 무장에 허용하는 계정 전환 횟수(마지막 그물)
+ROT_BOOT_DEBOUNCE = 60.0              # 옛 판(마커 없는) 매크로용 [BOOT] 디바운스 [S2]
+_ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
+_ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
+_ROT_SAVED = ""                       # 마지막으로 DB 에 쓴 직렬화본(변경 없으면 안 쓴다)
+
+
+def _rot_now() -> float:
+    return time.time()
+
+
+# ── 게임일(하루) 판정 ────────────────────────────────────────────────────────
+# ★왜 필요한가 [S1 — 치명]★
+#   서버 DB 의 daily_progress 는 ★늙지 않는다.★ upsert_status 가 마지막 보고를 영구
+#   보관하고 날짜로 리셋하는 코드가 없다(리셋은 매크로가 자기 로컬 파일에만 한다).
+#   그래서 completed 플래그만 보면 ★어제 완주가 오늘도 완주★ 로 읽히고,
+#   순환은 계정을 한 번도 안 갈고 "✅ 전 계정 오늘 완주"로 정상 종료해버린다.
+#   → completed_time(로컬 KST 문자열, 실측 "2026-08-20 17:51:16")으로 오늘 것만 센다.
+#   ★게임일 경계는 새벽 5시★ (slot_manager 의 새벽리셋과 같은 기준).
+def _kst_today_key(ts: "datetime | None" = None) -> str:
+    """게임일 키. 새벽 5시 이전은 '어제'로 친다."""
+    now = ts or (datetime.now(timezone.utc) + timedelta(hours=9))
+    if now.hour < 5:
+        now = now - timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
+
+
+def _rot_is_today(ts_str: str | None) -> bool:
+    """completed_time("YYYY-MM-DD HH:MM:SS", KST)이 오늘 게임일인가. 모르면 False."""
+    if not ts_str:
+        return False
+    try:
+        dt = datetime.strptime(str(ts_str)[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return False
+    return _kst_today_key(dt) == _kst_today_key()
+
+
+def _rot_progress(card: dict) -> int:
+    """그 계정이 ★오늘★ 끝낸 캐릭 수. 슬롯 정보가 아예 없으면 -1(모름)."""
+    dp = card.get("daily_progress") or []
+    if not dp:
+        return -1
+    return sum(1 for x in dp
+               if x.get("completed") and _rot_is_today(x.get("completed_time")))
+
+
+def _rot_done(card: dict) -> bool:
+    """★오늘★ 이 계정 완주했나 — 슬롯이 있고 전부 완료이며 그 완료가 오늘일 때만 True.
+
+    ★판정 불가는 '미완'으로 떨어뜨린다 [S1]★ — 모르면 가서 확인하는 쪽이 안전하다.
+    (반대로 떨어뜨리면 순환이 통째로 안 돈다.)
+    """
+    dp = card.get("daily_progress") or []
+    if not dp:
+        return False
+    return all(x.get("completed") and _rot_is_today(x.get("completed_time")) for x in dp)
+
+
+# ── 저장/복원 ────────────────────────────────────────────────────────────────
+async def _rot_save(force: bool = False) -> None:
+    """★변경이 있을 때만 쓴다★ — 30초마다 볼륨 DB 를 두드리지 않는다(리뷰 잔소리)."""
+    global _ROT_SAVED
+    try:
+        blob = json.dumps({"rot": _ROT, "boot": _ROT_BOOT}, ensure_ascii=False, sort_keys=True)
+        if not force and blob == _ROT_SAVED:
+            return
+        await set_setting(ROT_KEY, blob)
+        _ROT_SAVED = blob
+    except Exception as e:
+        print(f"[순환] 저장 실패(무시): {e}")
+
+
+async def _rot_load() -> None:
+    """부팅 시 복원. ★복원 0건도 조용히 넘기지 않는다 [C6-①]★
+
+    Railway 재배포/재시작은 /data 를 통째로 날릴 수 있다(C6). 그러면 무장해둔 PC 가
+    ★아무 말 없이★ 순환을 잃고 완주 후 idle 로 영원히 앉아 있게 된다. 활성 카드는
+    미완 슬롯이 없어 감시기에도 안 걸린다 — 완전 무음. 그래서 복원 결과를 반드시 남긴다.
+    """
+    global _ROT_SAVED
+    try:
+        raw = await get_setting(ROT_KEY)
+        if not raw:
+            print("[순환] 복원할 상태 없음 (첫 부팅이거나 /data 초기화 — 무장된 PC 는 "
+                  "▶시작을 다시 눌러야 합니다)")
+            return
+        d = json.loads(raw)
+        if isinstance(d, dict) and "rot" in d:
+            _ROT.update(d.get("rot") or {})
+            _ROT_BOOT.update(d.get("boot") or {})
+        else:                                   # 옛 포맷(순환만) 호환
+            _ROT.update(d or {})
+        _ROT_SAVED = raw
+        print(f"[순환] 복원 {len(_ROT)}대: {sorted(_ROT)} / 부팅지문 {len(_ROT_BOOT)}건")
+    except Exception as e:
+        print(f"[순환] 복원 실패(무시): {e}")
+
+
+async def _rot_allow(tenant: str = "main") -> set:
+    """★카나리아 게이트 [A7-②]★ — CLAUDE.md A7 "한 대에서 검증되기 전에 함대에 뿌리지 않는다".
+
+    비어 있으면 ★아무도 무장하지 못한다.★ 실패해도 안전한 쪽(안 도는 쪽)으로 기운다.
+    켜는 법:  POST /rotate/allow  {"pcs": "PC-10"}      ← 한 대로 시작
+    넓히는 법: POST /rotate/allow {"pcs": "PC-10,PC-20"}
+    전부 허용: POST /rotate/allow {"pcs": "*"}
+    """
+    try:
+        raw = (await get_setting(ns(tenant, ROT_ALLOW_KEY))) or ""
+    except Exception:
+        raw = ""
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
+# ── 알림 ─────────────────────────────────────────────────────────────────────
+async def _rot_say(tenant: str, pc_id: str, text: str) -> None:
+    """순환 알림 — 로그 + 텔레그램.
+
+    ★⛔(정지)는 음소거를 무시한다 [A6-③]★ — 음소거는 '시끄러운 정상 알림'을 끄려는
+    것이지 '기능이 죽었다'를 숨기려는 게 아니다. 음소거 중인 PC 의 순환 정지가 무음이면
+    아침에 왜 안 돌았는지 아무도 모른다.
+    ★로그에는 반드시 "[텔레그램] 중계 전송" 문구를 넣는다★ — ops/watch_all.py 가 그
+    문자열로 알람을 줍기 때문이다(그게 없으면 감시기가 순환 사고를 영영 못 본다).
+    """
+    base = _base_pc(pc_id)
+    hard = text.lstrip().startswith(("⛔", "🚨"))
+    # ★N3: 매크로 로그 포맷을 그대로 흉내낸다★ — ops/tg_sweep.py 는 줄 맨 앞의
+    #   [YYYY-MM-DD HH:MM:SS] 로 시각을 뽑고, watch_all.py 는 ★텍스트 전체★ 로 중복을
+    #   거른다. 접두가 없으면 ①시각이 None 이라 '최근 N분' 에서 영구 제외되고
+    #   ②같은 문구가 두 번째부터 영영 안 뜬다.
+    _ts = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S")
+    _line = f"[{_ts}] [텔레그램] 중계 전송: {base} | [순환] {text}"
+    # ★N4: base 카드와 ★현역 카드★ 양쪽에 남긴다★ — 순환이 계정 b/c/d 에 있는 동안
+    #   base 카드는 other_account 로 강등되고, 감시기는 그 카드를 통째로 건너뛴다.
+    #   그러면 "감시기가 줍게 하려고" 넣은 이 줄이 정확히 반대로 작동한다.
+    _targets = {base}
+    if str(pc_id) != base:
+        _targets.add(str(pc_id))
+    for _t in _targets:
+        try:
+            await insert_log(ns(tenant, _t), "warn" if hard else "info", _line)
+        except Exception:
+            pass
+    if _tg_muted(base) and not hard:
+        print(f"[순환] {base} 음소거중 — 텔레그램 생략: {text}")
+        return
+    chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
+    if chat and tg_enabled():
+        try:
+            await tg_send_text(chat, f"🔁 {base} · {text}")
+        except Exception as e:
+            print(f"[순환] 텔레그램 실패(무시): {e}")
+
+
+async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = None) -> bool:
+    """순환이 쓰는 명령 송신 — /command 핸들러와 ★같은 경로★(enrich + 마스킹 저장).
+    ★성공/실패를 반환한다 [S13]★ — 호출부는 성공했을 때만 단계를 넘긴다."""
+    args = dict(args or {})
+    nspc = ns(tenant, pc_id)
+    try:
+        send_args = await enrich_cmd_args(tenant, pc_id, command, args)
+        db_args = args
+        if command in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
+            db_args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
+                       "parsec_pw": "***" if send_args.get("parsec_pw") else ""}
+        cmd_id = await insert_command(nspc, command, db_args)
+        await send_command_to_macro(nspc, command, send_args, cmd_id)
+        try:
+            await _push_cmd_history(tenant)
+        except Exception:
+            pass
+        print(f"[순환] {pc_id} ▶ {command} (#{cmd_id})")
+        return True
+    except Exception as e:
+        print(f"[순환] {pc_id} ▶ {command} ★송신 실패★: {e}")
+        return False
+
+
+# ── 무장 / 해제 ──────────────────────────────────────────────────────────────
+async def _rot_arm(tenant: str, pc_id: str) -> tuple[bool, str]:
+    """▶시작 버튼을 누르면 무장. ★부팅이 아니라 사람의 '시작' 이 방아쇠★ (사용자 지시).
+
+    ★A7-① 방어★ 초판은 `command == "start"` 면 발신자를 안 가리고 무장했다. 그런데
+    /command 로 start 를 쏘는 것은 대시보드 버튼만이 아니다 — 운영 스크립트
+    (deploy_to.py · start_idle.py · up_and_start.py · switch_acct.py …)가 전부 쓴다.
+    그러면 내가 알람 조치로 한 대를 재개시키는 것만으로 그 PC 에 순환까지 켜지고,
+    up_and_start.py 한 번이면 ★함대 전체가 무장★ 된다 = A7("2대 이상에 상태를 바꾸는
+    명령을 내 판단으로 보내지 않는다") 우회.
+    → 대시보드 ▶시작만 args {"rotate": true} 를 싣고, 그게 있을 때만 무장한다.
+    """
+    base = _base_pc(pc_id)
+    allow = await _rot_allow(tenant)
+    if not allow:
+        return False, "허용 목록이 비어 있음 (POST /rotate/allow 로 대상 PC 지정 필요)"
+    if "*" not in allow and base not in allow:
+        return False, f"{base} 는 허용 목록에 없음"
+    key = ns(tenant, base)
+    # ★N7: 재무장이 왕복 방지 가드를 리셋하지 않게 이어받는다★
+    #   전환 도중 ▶시작을 한 번 더 누르면 hops/visits 가 0 으로 돌아가 계정1↔계정2
+    #   무한 왕복 방지가 통째로 풀렸다.
+    _old = _ROT.get(key) or {}
+    _ROT[key] = {"stage": "hunting", "since": _rot_now(),
+                 "armed_at": _rot_now(), "expect_restart": False, "target": "",
+                 "hops": int(_old.get("hops") or 0), "visits": dict(_old.get("visits") or {})}
+    # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
+    #   _rot_note_boot 은 그 PC 지문을 ★처음 볼 때★ 판정을 보류한다(엉뚱한 해제 방지).
+    #   그런데 무장 시점에 자리가 비어 있으면, 그 뒤 ★사람이 껐다 켠 첫 부팅★ 이
+    #   통째로 '최초 등록'으로 흡수돼 순환이 살아남는다 = 이 기능이 막으려던 사고 그 자체.
+    #   무장된 PC 는 '보류'를 쓸 이유가 없으므로 빈 지문을 심어 prev 가 절대 비지 않게 한다.
+    _ROT_BOOT.setdefault(key, {"id": "", "at": _rot_now()})
+    return True, ""
+
+
+def _rot_disarm(tenant: str, pc_id: str, why: str) -> bool:
+    key = ns(tenant, _base_pc(pc_id))
+    if key in _ROT:
+        _ROT.pop(key, None)
+        print(f"[순환] {key} 해제 ({why})")
+        return True
+    return False
+
+
+_BOOT_RE = re.compile(r"\[BOOT#([0-9a-fA-F]{6,})\]")
+
+
+def _rot_note_boot(nspc: str, message: str) -> None:
+    """매크로 부팅 감지 — 순환이 일으킨 재시작이 아니면 ★끈다.★
+
+    ★왜 이렇게까지 하나 [S2 — 치명]★
+      초판은 로그에 "[BOOT]" 가 있으면 부팅으로 봤다. 독립 검증에서 실측으로 깨졌다:
+        · 서버에 실제로 닿는 [BOOT] 줄은 ★"[BOOT] ✅ Gemini 키 정상" 하나뿐★ 이었다
+          (부팅 초반 줄들은 report_module.start() 전이라 send_log 가 버린다).
+          즉 순환 해제 전체가 ★OCR 키 검증 로그 한 줄★ 에 얹혀 있었다.
+        · 로그 경로가 둘인데(WS / HTTP 폴백) HTTP 쪽엔 이 검사가 없었다.
+          실측 83회 부팅 중 ★4회는 서버에 [BOOT] 가 아예 안 남았다.★ 그러면
+          expect_restart 가 True 로 남아 ★다음번 사람의 재시작을 삼킨다.★
+        · 한 배치에 [BOOT] 가 2줄 오면 첫 줄이 expect_restart 를 먹고 둘째 줄이
+          순환을 죽인다(이중발화).
+      → ①매크로가 부팅마다 ★고유 지문★ `[BOOT#<uuid>]` 을 한 줄 남기고
+        ②서버는 ★지문이 바뀌었을 때만★ 부팅으로 판정한다(재전송·이중발화 면역)
+        ③WS·HTTP ★두 경로 모두★ 여기를 거친다
+        ④지문 없는 옛 판 매크로는 [BOOT] + 60초 디바운스로 폴백한다
+    """
+    tenant, raw = split_ns(nspc)
+    base = _base_pc(raw)
+    key = ns(tenant, base)
+    m = _BOOT_RE.search(str(message or ""))
+    now = _rot_now()
+    prev = _ROT_BOOT.get(key) or {}
+    if m:
+        fp = m.group(1)
+        if prev.get("id") == fp:
+            return                                   # 같은 부팅 — 재전송/중복
+        _ROT_BOOT[key] = {"id": fp, "at": now}
+        if not prev:
+            # 이 PC 의 부팅 지문을 처음 본다 = 새 부팅인지 서버가 처음 보는 건지 모른다.
+            # ★모를 때는 순환을 건드리지 않는다★ (엉뚱한 해제가 더 나쁘다).
+            print(f"[순환] {key} 부팅지문 최초 등록({fp[:8]}) — 판정 보류")
+            return
+    else:
+        if "[BOOT]" not in str(message or ""):
+            return
+        # ★★②-b: 지문을 한 번이라도 본 PC 는 옛 마커를 아예 무시한다★★
+        #   새 매크로는 두 줄을 다 낸다: [BOOT#uuid] 와 "[BOOT] ✅ Gemini 키 정상".
+        #   앞줄이 expect_restart 를 먹고 뒷줄이 디바운스를 못 넘기면 ★순환이 자기
+        #   전환 직후 스스로 죽는다.★ 그리고 60초 디바운스는 부족하다 — 로그는 30초
+        #   배치로 올라오고 전송 지연 실측이 중앙값 55초·최대 278초다(81건 중 37건이 60초 이상).
+        if prev.get("id"):
+            return
+        if now - float(prev.get("at") or 0) < ROT_BOOT_DEBOUNCE:
+            return                                   # 같은 부팅의 다른 줄
+        _ROT_BOOT[key] = {"id": "", "at": now}
+
+    st = _ROT.get(key)
+    if not st:
+        return
+    if st.get("expect_restart"):
+        st["expect_restart"] = False
+        st["since"] = now
+        print(f"[순환] {key} 재시작 확인 — 순환 유지")
+        return
+    _ROT.pop(key, None)
+    print(f"[순환] {key} ★사람이 껐다 켬★ → 순환 해제")
+    # ★★N2: 여기서 저장하지 않으면 해제가 DB 에 안 남는다★★
+    #   _rot_save 는 엔진 루프의 `if _ROT:` 안에서만 돈다. 마지막 한 대가 해제되면
+    #   _ROT 가 비어 그 블록을 영영 안 타고, Railway 재배포 뒤 _rot_load 가
+    #   ★주인님이 손으로 껐던 무장을 부활★ 시킨다. 부팅지문도 같은 이유로 안 남는다.
+    try:
+        asyncio.create_task(_rot_save(force=True))
+    except Exception:
+        pass
+    # ★해제도 반드시 알린다 [S4]★ — 조용히 죽으면 아침에 왜 안 돌았는지 알 수 없다.
+    try:
+        asyncio.create_task(_rot_say(
+            tenant, base, "매크로가 재시작돼 순환을 해제했습니다 — 이어가려면 ▶시작을 눌러주세요"))
+    except Exception:
+        pass
+
+
+# ── 카드 선택 ────────────────────────────────────────────────────────────────
+def _rot_cards(pcs: list, base: str) -> list:
+    return [p for p in pcs if _base_pc(str(p.get("pc_id") or "")) == base]
+
+
+def _rot_acct_no(pc_id) -> int:
+    """카드 id → 계정 번호. PC-20=1, PC-20b=2, PC-20c=3, PC-20d=4."""
+    s = str(pc_id or "").strip()
+    if len(s) > 1 and s[-1] in "bcd" and s[-2].isdigit():
+        return "abcd".index(s[-1]) + 1
+    return 1
+
+
+def _rot_active(cards: list) -> dict | None:
+    """지금 살아있는 계정 카드. ★없으면 None★ — cs[0] 폴백을 쓰지 않는다.
+
+    ★두 가지를 같이 본다 [S3 / 리뷰 ②]★
+      ① status 가 other_account/offline 이 아닐 것
+      ② ★보고가 신선할 것★ — base 카드(PC-20)의 offline 판정은 매크로가 아니라
+         ★업데이터 신선도★ 로 내려간다. 그래서 매크로가 마지막 offline 보고를 못 하고
+         죽으면(taskkill·크래시) 카드가 'hunting' 또는 'idle+완주' 로 ★얼어붙는다.★
+         그 박제를 현역으로 읽으면 순환이 죽은 매크로에 명령을 쏘고 20분을 버린다.
+      동률이면 last_active 가 가장 최신인 카드를 고른다(대시보드 JS 와 같은 규칙).
+    """
+    live = []
+    for c in cards:
+        st = str(c.get("status"))
+        if st in ("other_account", "offline"):
+            continue
+        # ★★신선도는 '보고해야 마땅한 상태'에만 요구한다 (2026-08-20 실측으로 정정)★★
+        #   처음엔 전부 _fresh(300) 을 걸었는데, 그게 ★기능을 통째로 막았다.★
+        #   매크로는 idle 이 되면 변경-해시 게이트 때문에 ★수천 초 무보고★ 다
+        #   (실측 PC-10 8014초, PC-14 5488초, PC-08 3926초 — 전부 idle).
+        #   그런데 순환이 완주를 감지해야 하는 카드가 바로 그 idle 카드다.
+        #   → 사냥/이동/수집/전환처럼 ★계속 움직이는 상태★ 는 무보고면 박제로 보고 버리고,
+        #     idle 같은 ★가만히 있는 게 정상인 상태★ 는 무보고를 이유로 버리지 않는다.
+        #   (박제된 idle 카드에 명령이 나가는 경우는 switching 20분 상한이 ⛔ 로 잡는다 —
+        #    조용히 죽는 게 아니라 시끄럽게 실패한다.)
+        if st in ("hunting", "moving", "collecting", "switching",
+                  "selling", "settling") and not _fresh(c.get("last_active"), 300):
+            continue
+        live.append(c)
+    if not live:
+        return None
+    return max(live, key=lambda c: str(c.get("last_active") or ""))
+
+
+def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
+    """다음으로 갈 계정 번호. 반환 (번호, 사유).
+       번호 > 0 : 그 계정으로 간다
+       번호 < 0 : |번호| 계정의 캐릭 이름이 없다 → ★정지 + 알람★
+       번호 == 0: 갈 곳 없음(전 계정 오늘 완주)
+
+    ★한 바퀴가 아니라 '미완이 없어질 때까지' 다 (2026-08-20 사용자 지시)★
+      원문: "계정1을 6개중 4개만 끝내고 계정2로 갔어 … 계정2 2캐릭을 다하고 정보수집을
+             다했어 그러면 끝이아니라 ★계정1로 전환해서 남은 2캐릭하고 정보수집★"
+      → 지나간 계정이라도 미완이면 다시 간다. 번호가 낮은 미완 계정부터 고른다.
+      ★무한 왕복은 호출부가 막는다★ — 갔다 왔는데 진행이 안 늘었으면 세운다.
+
+    ★판정 근거는 매크로가 보고한 acct_ids(자격증명)와 acct_names(캐릭 이름)★
+      info.txt 는 그 PC 만 안다(C7). 서버는 파일을 못 읽으므로 보고값을 쓴다.
+      ★보고가 아예 없으면(옛 버전 매크로) 판정하지 않고 0 을 돌려 조용히 끝낸다★ —
+      "이름이 없다"고 단정해 헛알람을 내는 것보다 낫다.
+    """
+    ids, names = {}, {}
+    saw_names = False
+    for c in cards:                     # 어느 카드가 보고했든 지도는 같다
+        ids.update(c.get("acct_ids") or {})
+        if c.get("acct_names") is not None:
+            saw_names = True
+            names.update(c.get("acct_names") or {})
+    cur = _rot_acct_no(active.get("pc_id"))
+    done_no = {_rot_acct_no(c.get("pc_id")) for c in cards if _rot_done(c)}
+    done_no.add(cur)                    # 방금 끝낸 계정은 다시 고르지 않는다
+    for n in range(1, 5):
+        if n in done_no:
+            continue
+        if not str(ids.get(str(n)) or "").strip():
+            continue                    # 자격증명 없는 계정 = 없는 계정
+        if not saw_names:
+            return 0, "매크로가 계정별 캐릭 이름을 아직 보고하지 않음(구버전) — 순환 보류"
+        if not (names.get(str(n)) or []):
+            return -n, f"계정{n} 캐릭 이름이 info.txt 에 없다"
+        return n, ""
+    return 0, "남은 계정 없음"
+
+
+# ── 상태 기계 ────────────────────────────────────────────────────────────────
+async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) -> None:
+    """순환 정지 + 알림. ★st 를 주면 '내가 아직 그 무장인가' 를 확인하고 지운다★
+    (지금은 호출 직전에 await 가 없어 사고가 안 나지만, 하나만 생겨도 주인님이 방금
+     다시 누른 무장을 지우게 된다)."""
+    key = ns(tenant, base)
+    if st is not None and _ROT.get(key) is not st:
+        return
+    _ROT.pop(key, None)
+    try:
+        await _rot_save(force=True)
+    except Exception:
+        pass
+    await _rot_say(tenant, base, msg)
+
+
+async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
+    """한 물리 PC 의 순환 한 걸음.
+
+    ★st 는 await 마다 바뀔 수 있다 [S6]★ — 사람이 도중에 정지/시작을 누르면
+    _ROT[key] 가 사라지거나 ★새 dict 로 교체★ 된다. 그런데 이 함수는 처음 받은 dict
+    ★참조★ 를 계속 들고 있으므로, 확인 없이 명령을 쏘면
+      · 정지를 눌렀는데 본컴+원격컴 전환이 나가거나
+      · 새로 무장했는데 옛 dict 에 stage 를 써서 추적이 끊긴다.
+    → 명령을 쏘기 직전마다 _alive() 로 '내가 아직 그 상태 객체인가' 를 확인한다.
+    """
+    key = ns(tenant, base)
+
+    def _alive() -> bool:
+        return _ROT.get(key) is st
+
+    cards = _rot_cards(pcs, base)
+    if not cards:
+        return                                       # 카드가 사라진 PC — 아무것도 안 한다
+    active = _rot_active(cards)
+    stage = str(st.get("stage") or "")
+    if stage not in ("hunting", "collecting", "switching", "starting"):
+        # ★미지 stage 는 조용히 굳지 않는다 [S9]★ — 옛 포맷/손상값이 들어오면 영구 정지였다.
+        print(f"[순환] {key} 알 수 없는 stage='{stage}' → hunting 으로 복구")
+        st.update({"stage": "hunting", "since": _rot_now()})
+        stage = "hunting"
+    age = _rot_now() - float(st.get("since") or 0)
+
+    # ── 무장 수명 [C6-②] ──────────────────────────────────────────────────
+    #   DB 가 살아남으면 _ROT 는 만료 없이 복원된다. 그 사이 주인님이 ★매크로 핫키★로
+    #   멈춰두고 작업 중일 수 있는데(그 경로는 /command 를 안 거쳐 해제가 안 된다),
+    #   그때 서버가 계정을 갈아끼우면 사고다.
+    if _rot_now() - float(st.get("armed_at") or 0) > ROT_TTL:
+        await _rot_stop(tenant, base,
+                        f"⛔ 순환 무장이 {int(ROT_TTL/3600)}시간을 넘겨 자동 해제했습니다 — "
+                        f"계속하려면 ▶시작을 다시 눌러주세요")
+        return
+
+    # ── ① 사냥 중 — 완주를 기다린다 ────────────────────────────────────────
+    if stage == "hunting":
+        if age > ROT_HUNT_MAX:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 사냥 단계가 {int(age/3600)}시간째입니다. 화면 확인 필요")
+            return
+        if not active:
+            return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
+        if str(active.get("status")) != "idle" or not _rot_done(active):
+            return
+        acct = _rot_acct_no(active.get("pc_id"))
+        # ★수집 전후를 비교할 기준점 [S10 / A2-②]★ — 초판은 존재하지도 않는 필드명
+        #   (char_updated_at)을 저장하고 읽지도 않았다. 실제 필드는 _char_collected_at.
+        st["char_before"] = str(active.get("_char_collected_at") or "")
+        if not _alive():
+            return
+        if not await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
+            return                                   # ★송신 실패면 단계를 넘기지 않는다 [S13]★
+        if not _alive():
+            return
+        st.update({"stage": "collecting", "since": _rot_now()})
+        await _rot_say(tenant, base, f"계정{acct} 완주 → 정보수집 시작")
+        return
+
+    # ── ② 정보수집 대기 — ★끝난 증거를 보고 넘어간다★ ─────────────────────
+    if stage == "collecting":
+        # ★타임아웃을 'active 없음' 보다 ★위에★ 둔다 (재검증 지적)★
+        #   초판은 `if not active: return` 이 먼저라, 수집 중 매크로가 죽으면 7분 알람이
+        #   아니라 ★18시간 TTL 까지 무음★ 이었다. 다른 단계는 타임아웃이 위에 있었다.
+        if age > ROT_COLLECT_MAX and not active:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 정보수집 중 매크로가 {int(age/60)}분째 "
+                            f"응답이 없습니다. 화면 확인 필요")
+            return
+        # ★A2-① 방어★ 초판은 status 만 보고 60초 뒤 넘어갔다. 그런데 정보수집은
+        #   report_status("collecting") ★전에★ 반환하는 중단 경로가 있다
+        #   (계정 혼입 의심 → 수집 중단). 하필 가장 갈아서는 안 되는 상황이다.
+        #   → 서버가 실제로 char_info 를 ★새로 받았는지★ 로 판정한다.
+        #     그 값은 전송에 성공한 것만 갱신되므로 '전달됨 ≠ 적용됨' 함정을 넘는다.
+        if not active:
+            return
+        got = str(active.get("_char_collected_at") or "")
+        if st.pop("skip_collect", False):
+            pass                                     # 수집을 보낸 적이 없다(위 S-F 경로)
+        elif got and got != str(st.get("char_before") or ""):
+            pass                                     # 수집 확인 — 아래로 진행
+        elif age <= ROT_COLLECT_MAX:
+            return                                   # 아직 기다린다
+        else:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 정보수집이 {int(age/60)}분째 확인되지 않습니다"
+                            f"(char_info 갱신 없음). 화면 확인 필요")
+            return
+
+        nxt, why = _rot_next_acct(cards, active)
+        if nxt < 0:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — {why}\n"
+                            f"info.txt 에 캐릭 이름을 적고 ▶시작을 다시 눌러주세요")
+            return
+        if nxt == 0:
+            # ★N8★ '남은 계정 없음' 은 성공이지만 '구버전이라 보류' 는 실패다.
+            #   둘 다 0 이라 초판은 배포 안 된 PC 에서 ★초록 ✅ 로 조용히 끝났다.★
+            _ok_end = "남은 계정" in why
+            await _rot_stop(tenant, base,
+                            (f"✅ 순환 종료 — {why}" if _ok_end else f"⛔ 순환 정지 — {why}"))
+            return
+
+        # ★무한 왕복 방지★ 미완 계정을 계속 도는 설계라, 어떤 계정이 영영 진행이 안 되면
+        #   계정1↔계정2 를 밤새 왕복하며 전환만 반복한다(1회 = 본컴+원격컴+재시작).
+        _tgt = next((c for c in cards if _rot_acct_no(c.get("pc_id")) == nxt), None)
+        _prog = _rot_progress(_tgt) if _tgt else -1
+        _vis = st.setdefault("visits", {})
+        _prev = _vis.get(str(nxt))
+        if _prev is not None and _prog >= 0 and _prog <= _prev:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 계정{nxt} 로 갔다 왔는데 오늘 끝낸 캐릭이 "
+                            f"{_prev}개 그대로입니다(진행 없음). 화면 확인 필요")
+            return
+        if int(st.get("hops") or 0) + 1 > ROT_MAX_HOPS:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 계정 전환을 {ROT_MAX_HOPS}회 했습니다(상한). 확인 필요")
+            return
+
+        if not _alive():
+            return
+        # ★★peer_id 가 없으면 아예 시작하지 않는다 (2026-08-20 PC-22 실사고)★★
+        #   주소록에 없는 PC 로 switch_launcher 를 쏘면 매크로가 ★반쪽만★ 한다:
+        #     "[원격명령] 계정전환 'b': peer_id 가 없어 ★원격컴 크롬만★ 바꾼다"
+        #   그러면 원격컴은 계정2, 본컴은 계정1 — 짝이 안 맞아 스트림이 영영 안 뜬다.
+        #   그런데 명령 응답은 200 이라 겉으로는 성공으로 보인다(A2 그 자리).
+        #   → 순환은 반쪽 전환을 만들지 않는다. 세우고 알린다.
+        try:
+            _pm = await _get_parsec_map(tenant)
+            _num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
+            if not (_pm.get(_num) or _pm.get(base)):
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — 파섹 주소록에 {base} 의 peer_id 가 없습니다. "
+                                f"본컴 런처를 못 바꿔 반쪽 전환이 됩니다. "
+                                f"관제컴에서 parsec_multi.py push 후 ▶시작을 다시 눌러주세요")
+                return
+        except Exception as _pe:
+            print(f"[순환] {base} 주소록 확인 실패(계속 진행): {_pe}")
+        # ★acct_index 는 1 고정 [S11]★ — 이 값은 계정 번호가 아니라 런처 드롭다운의
+        #   '다른 계정' 몇 번째 줄인가다. 목록은 ★현재 계정을 뺀 것★ 이라 nxt 로
+        #   유추하면 틀린다(계정3→계정2 역주행에서 계정1 을 가리킨다). 대시보드의 다른
+        #   두 호출부도 전부 1 고정이고, 정확한 판정은 acct_no(이메일 줄 템플릿)가 한다.
+        ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
+            "acct_index": 1, "acct_no": nxt,
+            "acct_label": f"계정{nxt}", "chrome_label": "abcd"[nxt - 1], "launch": True,
+        })
+        if not ok or not _alive():
+            return
+        _vis[str(nxt)] = _prog
+        st.update({"stage": "switching", "since": _rot_now(),
+                   "expect_restart": True, "target": "abcd"[nxt - 1],
+                   "hops": int(st.get("hops") or 0) + 1})
+        await _rot_say(tenant, base, f"계정{nxt} 로 전환 시작 (본컴 런처 + 원격컴 크롬)")
+        return
+
+    # ── ③ 전환 대기 — 목표 계정 카드가 살아나면 ▶시작 ──────────────────────
+    if stage == "switching":
+        want = str(st.get("target") or "")
+        want_no = ("abcd".index(want) + 1) if want in "abcd" else 0
+        if active and _rot_acct_no(active.get("pc_id")) == want_no:
+            s = str(active.get("status"))
+            if s in ("hunting", "moving"):
+                st.update({"stage": "hunting", "since": _rot_now()})
+                await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인")
+                return
+            if s == "idle":
+                # ★이미 오늘 할 게 없는 계정이면 start 를 쏘지 않는다 [S12]★
+                #   loot.py 의 start 는 "오늘 모든 슬롯 완료 → 시작 불가"로 조용히 반환한다.
+                #   그러면 7분 뒤 오경보로 순환이 죽는다. 여기서 미리 걸러 다음 계정으로.
+                if _rot_done(active):
+                    # ★수집을 안 했으니 수집 증거를 요구하면 안 된다 [재검증 S-F]★
+                    #   초판은 char_before 에 ★현재값★ 을 넣고 collecting 으로 넘겼다.
+                    #   수집을 보낸 적이 없으니 그 값은 영원히 안 바뀌고, 7분 뒤
+                    #   "⛔ 정보수집이 확인되지 않습니다" 라는 ★엉뚱한 사유로 순환이 죽었다.★
+                    #   (텔레그램은 "다음 계정을 찾습니다" 라고 말해놓고 못 찾는다 =
+                    #    미완 계정이 남아 있어도 거기서 끝 → 사용자 요구 4가 깨진다.)
+                    st.update({"stage": "collecting", "since": _rot_now(),
+                               "char_before": "", "skip_collect": True})
+                    await _rot_say(tenant, base,
+                                   f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다")
+                    return
+                if not _alive():
+                    return
+                if not await _rot_send(tenant, str(active.get("pc_id")), "start", {}):
+                    return
+                if not _alive():
+                    return
+                st.update({"stage": "starting", "since": _rot_now()})
+                await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작")
+                return
+            return                                   # captcha/reconnecting 등 — 더 기다린다
+        if age > ROT_SWITCH_MAX:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 계정{want_no} 전환이 {int(age/60)}분째 "
+                            f"안 끝났습니다. 화면 확인 필요")
+        return
+
+    # ── ④ 시작 대기 ────────────────────────────────────────────────────────
+    if stage == "starting":
+        if active and str(active.get("status")) in ("hunting", "moving"):
+            st.update({"stage": "hunting", "since": _rot_now()})
+            await _rot_say(tenant, base, f"계정{_rot_acct_no(active.get('pc_id'))} 사냥 시작 확인")
+            return
+        if age > ROT_START_MAX:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — ▶시작 뒤 {int(age/60)}분째 사냥이 안 잡힙니다. "
+                            f"화면 확인 필요")
+        return
+
+
+async def _rot_engine() -> None:
+    """계정 자동순환 엔진 — 무장된 PC 만 본다. 무장이 없으면 아무 일도 안 한다."""
+    await _rot_load()
+    await asyncio.sleep(25)              # 부팅 직후 상태가 채워질 여유
+    print("[순환] 엔진 시작")
+    while True:
+        try:
+            if _ROT:
+                by_tenant: dict[str, list[str]] = {}
+                for k in list(_ROT):
+                    t, raw = split_ns(k)
+                    by_tenant.setdefault(t, []).append(raw)
+                for tenant, bases in by_tenant.items():
+                    # ★테넌트 하나가 터져도 나머지는 돈다 [S13]★
+                    try:
+                        pcs = await _build_full_state(tenant)
+                    except Exception as e:
+                        print(f"[순환] {tenant} 상태 조회 실패(이번 틱 건너뜀): {e}")
+                        continue
+                    for base in bases:
+                        st = _ROT.get(ns(tenant, base))
+                        if not st:
+                            continue
+                        try:
+                            await _rot_step_pc(tenant, base, st, pcs)
+                        except Exception as e:
+                            print(f"[순환] {base} 단계 예외(무시): {e}")
+                await _rot_save()
+        except Exception as e:
+            print(f"[순환] 엔진 예외(무시): {e}")
+        await asyncio.sleep(ROT_TICK)
+
+
+# ── 조회 / 수동 조작 ─────────────────────────────────────────────────────────
+@app.get("/rotate")
+async def rotate_list(request: Request):
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    out = {}
+    for k, st in list(_ROT.items()):
+        t, raw = split_ns(k)
+        if t == tenant:
+            out[raw] = {"stage": st.get("stage"), "target": st.get("target"),
+                        "hops": st.get("hops"), "visits": st.get("visits"),
+                        "age_s": int(_rot_now() - float(st.get("since") or 0))}
+    return JSONResponse({"rotating": out, "allow": sorted(await _rot_allow(tenant))})
+
+
+@app.post("/rotate/allow")
+async def rotate_allow(request: Request):
+    """카나리아 게이트 설정 — body {"pcs": "PC-10,PC-20"} 또는 {"pcs": "*"}."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="객체가 필요합니다")
+    pcs = str(body.get("pcs") or "").strip()
+    await set_setting(ns(tenant, ROT_ALLOW_KEY), pcs)
+    return JSONResponse({"ok": True, "allow": pcs})
+
+
+@app.post("/rotate/{pc_id}")
+async def rotate_set(pc_id: str, request: Request):
+    """순환 수동 on/off — body {"on": true|false}."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="객체가 필요합니다")
+    pc_id = clean_pc_id(pc_id)
+    if body.get("on"):
+        ok, why = await _rot_arm(tenant, pc_id)
+        await _rot_save(force=True)
+        return JSONResponse({"ok": ok, "on": ok, "pc": _base_pc(pc_id), "why": why})
+    _rot_disarm(tenant, pc_id, "수동 해제")
+    await _rot_save(force=True)
+    return JSONResponse({"ok": True, "on": False, "pc": _base_pc(pc_id)})
