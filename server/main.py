@@ -367,6 +367,41 @@ manager = ConnectionManager()
 # 매크로 WebSocket 연결 관리
 macro_ws_connections: dict[str, WebSocket] = {}   # pc_id → WebSocket
 
+# ★★★'살아있다는 증거' 는 상태보고 하나가 아니다 (2026-08-21 실사고)★★★
+#   주인님: "사냥 잘하는데 왜 대시보드에는 오프라인 떠잇는경우는 뭐야?"
+#           "지금 사냥돌아가고잇는데 오프라인 뜬다니까? 그걸 잘받게 만들던가"
+#
+#   ★무슨 일이었나★ 매크로의 상태 push 는 ★해시가 바뀔 때만★ 일어나고,
+#   하트비트는 `if not _ws_connected:` 라 ★WS 가 붙었다고 믿으면 아무것도 안 보냈다.★
+#   그런데 WS 가 ★반쯤 죽으면★(서버는 끊긴 걸로 보는데 클라는 모름) 그 둘이 겹쳐
+#   서버는 몇 분씩 아무것도 못 받는다 → last_active 가 늙어 offline 으로 칠해진다.
+#   실측 03:0x — PC-09b·10b·12b·20b 가 사냥 중인데 last_active 199~257초.
+#
+#   ★고친 방향★ 매크로만 고치면 ★업데이트를 받은 PC만★ 낫는다. 서버가
+#   ★어떤 종류든 그 PC에서 온 요청★ 을 생존 신호로 받으면 전 버전이 즉시 낫는다.
+#   로그 전송·명령 폴링·ack·리포트 — 전부 그 PC 프로세스가 살아있다는 증거다.
+_last_seen: dict[str, datetime] = {}          # nspc → 마지막으로 그 PC에서 뭐라도 온 시각
+
+
+def mark_seen(nspc: str) -> None:
+    """그 PC에서 어떤 요청이든 왔다 = 살아있다. 오프라인 판정에 쓴다."""
+    try:
+        _last_seen[nspc] = datetime.now(timezone.utc)
+        if len(_last_seen) > 4000:            # 무한 증식 방지(테넌트 오염 대비)
+            _last_seen.clear()
+    except Exception:
+        pass
+
+
+_lan_cache_last: dict[str, str] = {}   # nspc → 마지막으로 받은 내부망 주소
+
+
+def seen_fresh(nspc: str, secs: int) -> bool:
+    t = _last_seen.get(nspc)
+    if not t:
+        return False
+    return (datetime.now(timezone.utc) - t).total_seconds() < secs
+
 
 async def send_command_to_macro(pc_id: str, command: str, args: dict, cmd_id: int) -> bool:
     """매크로에 WS로 명령 즉시 전송. 실패 시 False (HTTP fallback 필요)."""
@@ -754,15 +789,18 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             #   깔아뭉갰다 — PC-20b가 54초 전까지 사냥 로그를 찍는데 카드가 offline이었고,
             #   그 바람에 3.7시간 전 상태로 박제된 계정1 카드가 스택 맨 앞을 차지했다
             #   (사용자: "계정2 돌리고 있는데 왜 계정1이 카드 맨 앞이냐").
+            # ★seen_fresh 추가★ — WS 가 반쯤 죽어도 로그/폴링/ack 가 오고 있으면 살아있다.
             if (ns(tenant, pid) not in macro_ws_connections
-                    and not _fresh(pc.get("last_active"), 180)):
+                    and not _fresh(pc.get("last_active"), 180)
+                    and not seen_fresh(ns(tenant, pid), 180)):
                 pc["status"] = "offline"
         elif ukey in updater_map:
             # base 카드: 업데이터 ★90초★ 타임아웃 → offline (상수 OFFLINE_TIMEOUT) (★기존 규칙 그대로 — 단일계정
             #   함대 회귀 0★). 계정 전환으로 버려진 base 카드의 '얼어붙은 사냥중' 문제는
             #   서버 추측이 아니라 ★매크로가 떠나며 마지막 offline 보고★로 푼다
             #   (config.switch_account_and_restart — 재리뷰 결함 2).
-            if _is_stale(u.get("_updated_at")):
+            # ★업데이터가 늦어도 매크로에서 뭐라도 오고 있으면 오프라인이 아니다★
+            if _is_stale(u.get("_updated_at")) and not seen_fresh(ns(tenant, pid), 180):
                 pc["status"] = "offline"
         else:
             # base 카드인데 updater 기록 자체가 없으면 offline (기존 규칙)
@@ -771,6 +809,18 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
         pc["deaths_30m"] = death_counts.get(pid, 0)
         pc["slot_filters"] = all_filters.get(pid, {})
         pc["_ws_live"] = ns(tenant, pid) in macro_ws_connections   # 2차 패스(한 PC=한 매크로)용
+        # ★★내부망 주소는 마지막으로 받은 값을 유지한다 (2026-08-21 주인님 지적)★★
+        #   주인님: "뭐만하면 내부망연결할수없다고 하는데 그것좀수정해"
+        #   lan_url 은 상태 push 에만 실려온다. push 가 뜸해지면 카드에서 빈 값이 되고
+        #   대시보드는 '내부망 주소 없음' 토스트를 띄운다 — ★주소가 없는 게 아니라
+        #   최근에 안 받은 것뿐이다.★ 마지막으로 받은 값을 기억했다가 채워 준다.
+        #   (토큰은 매크로 재기동 때 바뀌므로, 재기동하면 다음 push 가 새 값으로 덮는다)
+        _lk = ns(tenant, pid)
+        if pc.get("lan_url"):
+            _lan_cache_last[_lk] = pc["lan_url"]
+        elif _lan_cache_last.get(_lk):
+            pc["lan_url"] = _lan_cache_last[_lk]
+            pc["_lan_url_cached"] = True
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
             ci = await get_char_info(ns(tenant, pid))
@@ -5644,6 +5694,7 @@ async def receive_logs(pc_id: str, request: Request):
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
+    mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
     except Exception:
@@ -6057,6 +6108,7 @@ async def receive_report(pc_id: str, request: Request):
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
+    mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
     except Exception:
@@ -6275,6 +6327,7 @@ async def poll_command(pc_id: str, request: Request):
     tenant = check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=403)
+    mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
         # ★WS 가 끊겨 폴링으로 받아가는 경로★ — DB 는 마스킹돼 있으므로 여기서 다시 채운다
