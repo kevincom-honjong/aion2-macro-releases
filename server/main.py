@@ -8347,3 +8347,5 @@ async def rotate_set(pc_id: str, request: Request):
     _rot_disarm(tenant, pc_id, "수동 해제")
     await _rot_save(force=True)
     return JSONResponse({"ok": True, "on": False, "pc": _base_pc(pc_id)})
+
+# redeploy trigger 2026-08-21 00:55 (Railway 502 — 새 배포 시도)
