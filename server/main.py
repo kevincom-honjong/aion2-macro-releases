@@ -2639,7 +2639,9 @@ const STATUS_CFG = {
   collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
   paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
-  offline:      {label:'오프라인',  bg:'bg-gray-900/40',   border:'border-gray-800',   badge:'bg-gray-700',   text:'text-gray-600',   online:false},
+  // ★오프라인은 빨갛게 (2026-08-20 사용자 지시)★ — 카드가 자리를 안 옮기게 바꿨으니
+  //   (아래로 안 내려간다) 죽었다는 걸 ★색으로★ 확실히 알려야 한다. 회색은 안 보인다.
+  offline:      {label:'오프라인',  bg:'bg-red-950/40',    border:'border-red-800/70', badge:'bg-red-700',    text:'text-red-400',    online:false},
   other_account:{label:'다른 계정', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
@@ -3411,7 +3413,12 @@ function buildStack(s){
 
 function renderCards() {
   migrateOrder();          // 옛 순서 목록 1회 이관(baseId 정의 뒤에 안전하게)
-  const pcs = Object.values(state).sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
+  // ★PC-TEST 는 화면에 안 띄운다 (2026-08-20 사용자: "거슬린다")★
+  //   배포 검증이 pc_id=PC-TEST 로 /check 를 때리면서 카드가 생긴다. 지워도 다음
+  //   검증 때 또 생기므로 ★렌더 단계에서 거른다★ (전광판 합계에서도 같이 빠진다).
+  const pcs = Object.values(state)
+    .filter(p => baseId(p.pc_id||'') !== 'PC-TEST')
+    .sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
   const groups = {};
   pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
   const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
