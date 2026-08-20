@@ -3738,6 +3738,7 @@ async function sendCmd(pc_id, command, args={}) {
 }
 
 async function bulkCmd(command, args={}) {
+  if (command === 'start') args = Object.assign({}, args, {rotate: false});   // ★A7★
   const ids=Object.keys(state);
   if(!ids.length){showToast('연결된 PC 없음');return;}
   await Promise.all(ids.map(id=>sendCmd(id,command,args)));
@@ -3745,7 +3746,13 @@ async function bulkCmd(command, args={}) {
   loadCmdHistory();
 }
 
+// ★★일괄/다중선택 start 는 순환을 무장하지 않는다 (2026-08-20 최종검증 🔴3)★★
+//   sendCmd 가 start 에 rotate:true 를 붙이는데, selCmd 는 '전체선택 → ▶시작' 한 클릭으로
+//   ★함대 전원★ 을 태운다(확인창도 없다). 그건 CLAUDE.md A7 이 금지한 바로 그 규모다.
+//   Object.assign({rotate:true}, args) 라 ★caller 가 이긴다★ — 여기서 false 를 실으면 막힌다.
+//   순환 무장은 ★카드 하나를 골라 누르는 경로(cardCmd)★ 에만 남긴다.
 async function selCmd(command, args={}) {
+  if (command === 'start') args = Object.assign({}, args, {rotate: false});
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const n=selectedPcs.size;
   await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
@@ -7373,7 +7380,15 @@ async def _rot_say(tenant: str, pc_id: str, text: str) -> None:
     #   거른다. 접두가 없으면 ①시각이 None 이라 '최근 N분' 에서 영구 제외되고
     #   ②같은 문구가 두 번째부터 영영 안 뜬다.
     _ts = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S")
-    _line = f"[{_ts}] [텔레그램] 중계 전송: {base} | [순환] {text}"
+    # ★★로그 문구는 '실제로 보냈는가' 를 말해야 한다 (2026-08-20 최종검증 🟠5)★★
+    #   초판은 음소거 확인 ★전에★ "중계 전송" 을 찍어서 ①안 보냈는데 보냈다고 적고
+    #   ②로그만 보는 감시기가 음소거를 우회해 그대로 울렸다. 로그가 증거인데 거짓이면
+    #   A2("증거를 붙인다")가 통째로 무너진다.
+    _chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
+    _will_send = bool(_chat) and tg_enabled() and (hard or not _tg_muted(base))
+    _line = (f"[{_ts}] [텔레그램] "
+             + ("중계 전송" if _will_send else "중계 생략(음소거/미설정)")
+             + f": {base} | [순환] {text}")
     # ★N4: base 카드와 ★현역 카드★ 양쪽에 남긴다★ — 순환이 계정 b/c/d 에 있는 동안
     #   base 카드는 other_account 로 강등되고, 감시기는 그 카드를 통째로 건너뛴다.
     #   그러면 "감시기가 줍게 하려고" 넣은 이 줄이 정확히 반대로 작동한다.
@@ -7385,15 +7400,13 @@ async def _rot_say(tenant: str, pc_id: str, text: str) -> None:
             await insert_log(ns(tenant, _t), "warn" if hard else "info", _line)
         except Exception:
             pass
-    if _tg_muted(base) and not hard:
-        print(f"[순환] {base} 음소거중 — 텔레그램 생략: {text}")
+    if not _will_send:
+        print(f"[순환] {base} 텔레그램 생략(음소거/미설정): {text}")
         return
-    chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
-    if chat and tg_enabled():
-        try:
-            await tg_send_text(chat, f"🔁 {base} · {text}")
-        except Exception as e:
-            print(f"[순환] 텔레그램 실패(무시): {e}")
+    try:
+        await tg_send_text(_chat, f"🔁 {base} · {text}")
+    except Exception as e:
+        print(f"[순환] 텔레그램 실패(무시): {e}")
 
 
 async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = None) -> bool:
@@ -7725,7 +7738,17 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         got = str(active.get("_char_collected_at") or "")
         if st.pop("skip_collect", False):
             pass                                     # 수집을 보낸 적이 없다(위 S-F 경로)
-        elif got and got != str(st.get("char_before") or ""):
+        elif (got and got != str(st.get("char_before") or "")
+              and str(active.get("status")) == "idle"):
+            # ★★status=="idle" 을 같이 요구한다 (2026-08-20 최종검증 🔴2)★★
+            #   매크로는 char_info 를 ★보낸 뒤에도★ 뱅크 자가점검 +
+            #   _ensure_char_select_screen(재연결 사다리·비번·출석부 내장) 을 더 돌고,
+            #   그 finally 에서야 release_pause("collecting") 과 report_status("idle") 을
+            #   ★함께★ 놓는다(info_collector.py 2300-2301). 그 창은 분 단위일 수 있다.
+            #   그 사이에 전환을 쏘면 loot.py 의 '수집 중 거부' 가드가 ★조용히 버린다★
+            #   (ack 없음·재큐 없음). 서버는 배달 성공만 보고 넘어가 20분 뒤
+            #   "전환이 20분째 안 끝났다" 라는 ★진짜 원인과 무관한 사유★ 로 죽었다.
+            #   → 잠금이 실제로 풀린 신호(idle)를 같이 본다. 두 값이 같은 finally 라 정확히 일치.
             pass                                     # 수집 확인 — 아래로 진행
         elif age <= ROT_COLLECT_MAX:
             return                                   # 아직 기다린다
