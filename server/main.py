@@ -641,7 +641,12 @@ app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
 OFFLINE_TIMEOUT = timedelta(seconds=90)
 
 def _is_stale(updated_at_str: str | None) -> bool:
-    """updated_at 타임스탬프가 30초 이상 지났으면 True"""
+    """updated_at 타임스탬프가 ★90초★(OFFLINE_TIMEOUT) 이상 지났으면 True.
+
+    ★주석이 거짓말하고 있었다 (2026-08-20 감사)★ — 여기와 아래 base 카드 분기가
+    둘 다 '30초' 라고 적혀 있었지만 상수는 90초다. 업데이터 STATUS_INTERVAL 이
+    30초이므로 실제 기준은 ★연속 3회 미보고★ 다. 이 숫자로 타이밍을 계산하면 틀린다.
+    """
     if not updated_at_str:
         return True
     try:
@@ -726,6 +731,23 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             u = updater_map[ukey]
             pc["_updater_state"]   = u.get("macro_state", "unknown")
             pc["_updater_version"] = u.get("updater_version", "")
+            # ★★업데이터 보고가 얼마나 낡았는지 같이 싣는다 (2026-08-20 PC-23)★★
+            #   _updater_state 는 업데이터가 ★마지막으로 전송에 성공한★ 값이다.
+            #   그런데 카드는 신선도를 전혀 안 보고 그대로 초록색으로 칠했다.
+            #   → PC-23 이 14.6시간 죽어 있는 내내 "업데이터 running" 이 초록으로
+            #     떠 있었고, 그래서 아무도 못 봤다. 함대 전 카드가 running 이었다
+            #     (PC-17b 는 08-17 21:18 에 얼어붙은 값이 그대로 초록).
+            #   ★HTTP 200 = 전달됨이지 적용됨이 아니다★ 의 표시판 버전이다(A2).
+            try:
+                _uat = u.get("_updated_at")
+                if _uat:
+                    _ud = datetime.fromisoformat(str(_uat).replace("Z", ""))
+                    if _ud.tzinfo is None:
+                        _ud = _ud.replace(tzinfo=timezone.utc)
+                    pc["_updater_age_s"] = int(
+                        (datetime.now(timezone.utc) - _ud).total_seconds())
+            except Exception:
+                pass
         if is_sub:
             # ★부계정 생사 = WS 접속 OR 아주 최근 보고(2026-08-15 실사고 수정)★
             #   WS 단독 판정은 WS가 순간 끊긴(재연결 중·HTTP 폴백) 매크로를 오프라인으로
@@ -736,7 +758,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                     and not _fresh(pc.get("last_active"), 180)):
                 pc["status"] = "offline"
         elif ukey in updater_map:
-            # base 카드: 업데이터 30초 타임아웃 → offline (★기존 규칙 그대로 — 단일계정
+            # base 카드: 업데이터 ★90초★ 타임아웃 → offline (상수 OFFLINE_TIMEOUT) (★기존 규칙 그대로 — 단일계정
             #   함대 회귀 0★). 계정 전환으로 버려진 base 카드의 '얼어붙은 사냥중' 문제는
             #   서버 추측이 아니라 ★매크로가 떠나며 마지막 offline 보고★로 푼다
             #   (config.switch_account_and_restart — 재리뷰 결함 2).
@@ -2381,6 +2403,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
         <button onclick="closeLogModal()" class="text-gray-500 hover:text-gray-200 text-xl leading-none">✕</button>
       </div>
     </div>
+    <!-- ★로그 출처 탭 (2026-08-20)★ 매크로가 죽으면 그 PC 가 실명이 된다 → 업데이터
+         로그를 같이 본다. className 은 renderLogTabs() 가 통째로 덮으므로 여기 두지 않는다
+         (마크업과 JS 두 군데에 색을 적으면 반드시 한쪽만 고쳐서 어긋난다). -->
+    <div class="flex items-center gap-1 px-4 pt-3 pb-1 text-xs shrink-0">
+      <button id="log-tab-both"  onclick="setLogSrc('both')">합침</button>
+      <button id="log-tab-macro" onclick="setLogSrc('macro')">매크로</button>
+      <button id="log-tab-upd"   onclick="setLogSrc('upd')">업데이터</button>
+    </div>
     <div id="log-entries" class="flex-1 overflow-y-auto p-4 log-box text-xs space-y-0.5 scrollbar-thin"></div>
   </div>
 </div>
@@ -2610,6 +2640,7 @@ let state = {};
 let latestVersions = {macro:'', updater:''};
 let selectedPcs = new Set();
 let logModalPc = null;
+let logModalSrc = 'both';   // 'both' | 'macro' | 'upd' — 로그 모달이 지금 보고 있는 출처
 let menuPcId = null;
 
 // ★XSS 방어(2026-07-27 보안감사): 매크로가 보낸 값(PC이름/캐릭명/에러/맵/파일명)이
@@ -3150,12 +3181,20 @@ function buildCard(pc) {
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="ml-1.5 px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
-  const ucls = {'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600';
+  // ★낡은 보고는 색칠하지 않는다 (2026-08-20 PC-23)★ — 업데이터가 마지막으로 전송에
+  //   성공한 값을 신선도 검사 없이 초록으로 칠하는 바람에, 14.6시간 죽은 PC 가
+  //   "업데이터 running" 으로 멀쩡해 보였다. 서버 OFFLINE_TIMEOUT 이 90초이므로
+  //   그 3배(270초)를 넘으면 회색 + '(N분전)' 로 강등한다.
+  const _uage = (typeof pc._updater_age_s === 'number') ? pc._updater_age_s : null;
+  const _ustale = (_uage !== null && _uage > 270);
+  const ucls = _ustale ? 'text-gray-600 line-through'
+    : ({'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600');
+  const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${_uage}초째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
   const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${pc.macro_version}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!dpDone(c));
@@ -4390,23 +4429,80 @@ async function cancelCmd(cmd_id) {
 }
 
 // ─── 로그 모달 ────────────────────────────────────────────────────────────────
+// ★★2026-08-20: 업데이터 로그를 같이 본다★★
+//   매크로가 죽으면 그 PC 는 완전 실명이 된다(PC-23 사고). 그때 유일하게 살아 있는 눈이
+//   업데이터인데, 그 로그는 C:\auto\updater.log 에만 있어서 대시보드로는 볼 수 없었다.
+//   이제 /updater/logs/{basePc} 를 같이 읽어 ★시간순으로 섞어★ 보여준다.
+//   줄 앞의 M(매크로)/U(업데이터) 뱃지로 출처를 구분한다.
+function _basePc(id){ return /\d[bcd]$/.test(id||'') ? id.slice(0,-1) : (id||''); }
+
 async function openLogModal(pc_id) {
   logModalPc=pc_id;
   document.getElementById('log-modal-title').textContent=`로그 — ${pc_id}`;
   document.getElementById('log-modal').classList.remove('hidden');
+  renderLogTabs();
+  await loadLogs();
+}
+
+function setLogSrc(src){ logModalSrc=src; renderLogTabs(); loadLogs(); }
+
+function renderLogTabs(){
+  // 탭 색은 ★여기서만★ 정한다(마크업에는 className 을 두지 않는다 — 두 군데에 있으면
+  // 반드시 한쪽만 고쳐서 어긋난다).
+  const on ='px-2 py-1 rounded bg-indigo-600 text-white font-semibold';
+  const off='px-2 py-1 rounded bg-gray-800 text-gray-400 hover:bg-gray-700';
+  const m={both:'log-tab-both',macro:'log-tab-macro',upd:'log-tab-upd'};
+  for(const k in m){ const b=document.getElementById(m[k]); if(b) b.className=(logModalSrc===k?on:off); }
+}
+
+async function loadLogs(){
+  const pc=logModalPc, src=logModalSrc;
   const el=document.getElementById('log-entries');
+  if(!pc){ return; }
   el.innerHTML='<div class="text-gray-600">로딩 중...</div>';
-  const res=await fetch(`/logs/${pc_id}`);
-  if(!res.ok){el.innerHTML='<div class="text-red-400">로드 실패</div>';return;}
+  const wantM=(src==='both'||src==='macro'), wantU=(src==='both'||src==='upd');
+  // ★병렬로 받는다★ — 순차로 받으면 한쪽 서버 지연이 그대로 두 배가 된다.
+  //   한쪽이 실패해도(그 PC 는 업데이터 로그가 아직 없을 수 있다) 나머지는 그린다.
+  const [rm,ru]=await Promise.all([
+    wantM?fetch(`/logs/${encodeURIComponent(pc)}`).then(r=>r.ok?r.json():null).catch(()=>null)
+         :Promise.resolve(null),
+    wantU?fetch(`/updater/logs/${encodeURIComponent(_basePc(pc))}`).then(r=>r.ok?r.json():null).catch(()=>null)
+         :Promise.resolve(null),
+  ]);
+  // ★늦게 온 결과가 화면을 덮지 않게★ — 탭을 연달아 누르거나 다른 PC 로 옮기면 먼저
+  //   띄운 요청이 나중에 도착해 ★엉뚱한 PC 의 로그★를 그린다. 실제로 이 프로젝트에서
+  //   "분명히 PC-20 을 열었는데 PC-10 로그가 보인다" 류의 오독이 나오는 경로다.
+  if(logModalPc!==pc||logModalSrc!==src) return;
+  if(!rm&&!ru){el.innerHTML='<div class="text-red-400">로드 실패</div>';return;}
+  let rows=[];
+  if(rm&&rm.logs) rows=rows.concat(rm.logs.map(l=>({...l,src:'M'})));
+  if(ru&&ru.logs) rows=rows.concat(ru.logs.map(l=>({...l,src:'U'})));
+  // created_at 은 "YYYY-MM-DDTHH:MM:SS" 고정폭이라 문자열 비교 = 시간 비교다.
+  rows.sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+  if(rows.length>2000) rows=rows.slice(-2000);   // 두 소스를 합치면 최대 3000줄 — 상한을 건다
   el.innerHTML='';
-  (await res.json()).logs?.forEach(l=>appendLogLine(l.level,`${l.created_at.slice(11,19)} ${l.message}`));
+  rows.forEach(l=>appendLogLine(l.level,`${String(l.created_at||'').slice(11,19)} ${l.message}`,l.src));
   el.scrollTop=el.scrollHeight;
 }
-function appendLogLine(level, msg) {
+
+function appendLogLine(level, msg, src) {
   const el=document.getElementById('log-entries');
   const d=document.createElement('div');
   d.className=`${LOG_COLOR[level]||'text-gray-400'} whitespace-pre-wrap break-all leading-5`;
-  d.textContent=msg; el.appendChild(d); el.scrollTop=el.scrollHeight;
+  // ★뱃지는 createElement + textContent 로만 붙인다★
+  //   여기서 innerHTML 을 쓰면 ★로그 본문이 HTML 로 해석★돼 2026-07-27 XSS 감사 결론
+  //   (로그는 전부 textContent 로만 그린다)이 통째로 되돌아간다. 로그 문자열에는
+  //   게임/서버가 준 임의 문자가 그대로 들어온다.
+  if(src){
+    const b=document.createElement('span');
+    b.className=(src==='U')?'mr-1 px-1 rounded bg-amber-900/60 text-amber-300'
+                           :'mr-1 px-1 rounded bg-sky-900/60 text-sky-300';
+    b.textContent=src;
+    d.appendChild(b);
+  }
+  // src 없이 부르던 기존 호출(WS 실시간 로그)은 뱃지 없이 예전과 똑같이 그려진다.
+  d.appendChild(document.createTextNode(msg));
+  el.appendChild(d); el.scrollTop=el.scrollHeight;
 }
 function closeLogModal(){logModalPc=null;document.getElementById('log-modal').classList.add('hidden');}
 
@@ -5657,6 +5753,22 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     필요 없지만, adopt=true 로 보내면 찾은 계정으로 ★정식 전환★(switch_account)까지
     이어진다. 그때 peer_id 가 없으면 본컴이 안 바뀌어 반쪽이 된다.
     """
+    if command == "set_info":
+        # ★★마스킹본이 info.txt 의 진짜 비번을 '***' 로 덮는다 (2026-08-20 감사)★★
+        #   DB 에는 비번을 '***' 로 마스킹해 저장한다(이력 평문 방지). 그런데 WS 재접속·
+        #   폴링으로 ★다시 배달★ 될 때는 그 DB 행이 그대로 나간다. 매크로의 info.txt
+        #   화이트리스트는 `계정N_비번` 을 정상 키로 받으므로 ★'***' 를 진짜 비번으로 쓴다.★
+        #   → 그 PC 의 비번이 파괴되고, 다음 계정전환부터 로그인이 전부 실패한다.
+        #   C6 의 peer_id 3Hx42I… 사고와 ★완전히 같은 기계★ 다.
+        #   되살릴 원본이 서버에 없으므로(마스킹이 목적) ★그 칸을 빼는 것★ 이 정답이다.
+        #   칸이 빠지면 매크로는 그 칸만 안 바꾼다 — 파괴보다 훨씬 낫다.
+        _kv = dict((args or {}).get("kv") or {})
+        _drop = [k for k, v in _kv.items() if str(v) == "***"]
+        for k in _drop:
+            _kv.pop(k, None)
+        if _drop:
+            print(f"[명령] set_info 마스킹본 {len(_drop)}칸 제외(재배달) — {_drop}")
+        return {**dict(args), "kv": _kv}
     if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
         return dict(args)
     out = dict(args)
@@ -5684,6 +5796,15 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     return out
 
 
+# ★★브로드캐스트 'all' 은 A7 위반 규모다 (2026-08-20 감사)★★
+#   get_pending_command(..., all_key=ns(tenant,"all")) 이 설계상 브로드캐스트를 지원해서,
+#   POST /command/all 한 번이면 ★폴링 창에 걸린 PC 전부★ 가 그 명령을 실행한다.
+#   몇 대가 실행할지가 ack 레이스로 결정된다 = 되돌릴 수도 셀 수도 없다.
+#   대시보드 JS 에는 이걸 부르는 코드가 없다(전수 확인) — 즉 잃을 기능이 0 이다.
+#   막을 수단이 있는데 안 막으면 '말로 남긴 규칙' 이 되고, 그건 전부 다시 깨졌다(§A6).
+_BROADCAST_IDS = {"all", "ALL", "All", "*"}
+
+
 @app.post("/command/{pc_id}")
 async def send_command(pc_id: str, request: Request):
     # ★명령 '주입'은 대시보드 세션 전용(2026-07-27 보안감사 critical).
@@ -5694,6 +5815,12 @@ async def send_command(pc_id: str, request: Request):
     tenant = check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
+    # ★브로드캐스트 차단 [A7]★ — 위 _BROADCAST_IDS 주석 참조.
+    #   막다가 잃는 기능이 0 이라(대시보드에 호출부 없음) 그냥 거부한다.
+    if str(pc_id).strip() in _BROADCAST_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
     body = await request.json()
     command = body.get("command")
     if not command:
@@ -5792,9 +5919,15 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         # 대기 중인 명령 즉시 전달 (브로드캐스트 'all'도 테넌트 스코프)
         pending = await get_pending_command(nspc, all_key=ns(tenant, "all"))
         if pending:
+            # ★★WS 재접속 경로도 언마스킹을 거쳐야 한다 (2026-08-20 감사)★★
+            #   여기만 DB 행을 ★그대로★ 보내고 있었다. 폴링 경로(GET /command/{pc})는
+            #   enrich_cmd_args 를 거치는데 이 경로는 안 거쳤다 = PC-21 peer_id 사고가
+            #   ★절반만★ 막혀 있었다. WS 가 끊겼다 붙는 건 흔한 일이라 실전 경로다.
+            _pargs = await enrich_cmd_args(tenant, pc_id,
+                                           pending["command"], pending.get("args") or {})
             await websocket.send_text(json.dumps({
                 "type": "command", "id": pending["id"],
-                "command": pending["command"], "args": pending.get("args", {})
+                "command": pending["command"], "args": _pargs
             }))
         while True:
             raw = await websocket.receive_text()
@@ -6142,6 +6275,85 @@ async def cancel_cmd(cmd_id: int, request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 # Updater API (API key auth) — 업데이터 데몬이 호출
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 업데이터 원격 로그 (2026-08-20 신설)
+# ══════════════════════════════════════════════════════════════════════════════
+# ★왜 (PC-23 실사고)★
+#   매크로가 죽으면 그 PC 는 완전 실명이 된다. 업데이터는 macro_state 한 칸만 보내고
+#   자기 로그는 C:\auto\updater.log 에만 남기니, "되살리려 했나 / 왜 실패했나" 를 볼
+#   방법이 없었다. 업데이터도 로그를 올리게 하고, 대시보드에서 매크로 로그와 같이 본다.
+#
+# ★저장은 기존 logs 표를 그대로 쓴다 — 키만 다르게★
+#   "PC-01" → "PC-01.upd" 로 접미사를 붙여 같은 표에 넣는다. 새 표를 만들지 않으므로
+#   스키마 변경도, insert_log 의 3000줄 자동 정리도 그대로 따라온다(PC당 3000 + 업데이터
+#   3000 으로 자연히 분리된다 — 한쪽 폭주가 다른 쪽을 밀어내지 않는다).
+#
+# ★멀티계정 접미사는 벗긴다★ — 매크로 pc_id 는 PC-20b/c/d 로 갈라지지만 업데이터는
+#   물리 PC 당 하나뿐이다. _base_pc 로 접어야 b/c/d 계정 어느 카드에서 열어도 같은
+#   업데이터 로그가 보인다.
+UPD_LOG_SUFFIX    = ".upd"
+UPD_LOG_BATCH_MAX = 50        # 배치당 최대 줄 수(클라는 25씩 보낸다 — 여유분)
+UPD_LOG_TS_SKEW   = 86400.0   # 클라 시각을 믿는 범위(초). 벗어나면 수신 시각을 쓴다
+
+
+def _upd_log_key(tenant: str, pc_id: str) -> str:
+    """업데이터 로그 저장 키. 'PC-20b' → 'PC-20.upd' (테넌트 네임스페이스 포함)."""
+    return ns(tenant, _base_pc(clean_pc_id(pc_id)) + UPD_LOG_SUFFIX)
+
+
+@app.post("/updater/log/{pc_id}")
+async def receive_updater_logs(pc_id: str, request: Request):
+    """업데이터가 보내는 로그 배치 수신 (API키 인증).
+
+    ★매크로용 /log/ 와 일부러 분리했다★ — 그쪽 수신부는 메시지에 "[BOOT" 가 있으면
+      계정 자동순환 상태기계(_rot_note_boot)를 건드린다. 업데이터 부팅은 매크로 부팅이
+      아니므로 그 경로를 절대 타면 안 된다. 여기는 순수 저장만 한다.
+    """
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    logs = data.get("logs")
+    if not isinstance(logs, list):
+        raise HTTPException(status_code=400, detail="logs 는 리스트여야 함")
+    key = _upd_log_key(tenant, pc_id)
+    now = time.time()
+    n = 0
+    for entry in logs[:UPD_LOG_BATCH_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        level   = str(entry.get("level", "info"))[:10]
+        message = str(entry.get("message", ""))[:500]
+        if not message:
+            continue
+        # ★클라가 찍은 시각을 그대로 쓴다★ — 배치는 20초~5분씩 묶여서 온다. 수신 시각으로
+        #   적으면 한 배치가 통째로 같은 시각이 되어 사고 순서를 못 읽는다.
+        #   단 시계가 어긋난 PC(부팅 직후 NTP 전 등)의 값을 그대로 믿으면 로그가 1970년이나
+        #   2030년으로 튀어 목록에서 사라진다 → 하루 이상 어긋나면 수신 시각으로 대체.
+        created = None
+        try:
+            t = float(entry.get("ts") or 0)
+            if t > 0 and abs(now - t) <= UPD_LOG_TS_SKEW:
+                created = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            created = None
+        await insert_log(key, level, message, created_at=created)
+        n += 1
+    return JSONResponse({"ok": True, "count": n})
+
+
+@app.get("/updater/logs/{pc_id}")
+async def updater_logs(pc_id: str, request: Request):
+    """대시보드가 읽는다 (세션 인증)."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    return JSONResponse({"logs": await get_logs(_upd_log_key(tenant, pc_id), limit=1000)})
+
 
 @app.post("/updater/status/{pc_id}")
 async def updater_report_status(pc_id: str, request: Request):
@@ -7469,6 +7681,7 @@ async def _rot_arm(tenant: str, pc_id: str) -> tuple[bool, str]:
     _old = _ROT.get(key) or {}
     _ROT[key] = {"stage": "hunting", "since": _rot_now(),
                  "armed_at": _rot_now(), "expect_restart": False, "target": "",
+                 "day": _kst_today_key(),   # ★게임일 [C3]★
                  "hops": int(_old.get("hops") or 0), "visits": dict(_old.get("visits") or {})}
     # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
     #   _rot_note_boot 은 그 PC 지문을 ★처음 볼 때★ 판정을 보류한다(엉뚱한 해제 방지).
@@ -7542,7 +7755,9 @@ def _rot_note_boot(nspc: str, message: str) -> None:
     st = _ROT.get(key)
     if not st:
         return
-    if st.get("expect_restart"):
+    if st.get("expect_restart") and _rot_now() <= float(st.get("expect_until") or 0):
+        # ★만료 검사 [C2]★ — 기한이 지난 expect_restart 는 소비하지 않는다.
+        #   기한 없이 삼키면 며칠 뒤 주인님이 껐다 켠 것까지 "전환 재시작" 으로 읽는다.
         st["expect_restart"] = False
         st["since"] = now
         print(f"[순환] {key} 재시작 확인 — 순환 유지")
@@ -7631,7 +7846,11 @@ def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
     """
     ids, names = {}, {}
     saw_names = False
-    for c in cards:                     # 어느 카드가 보고했든 지도는 같다
+    # ★오래된 것부터 병합 = 최신이 이긴다 [M5]★ — 예전엔 카드 순서에 그냥 의존했다.
+    #   매크로는 빈 계정의 키를 아예 안 넣으므로 '빈 값이 최신을 덮는' 방향은 막혀 있지만,
+    #   ★며칠 전 카드의 살아있는 이름이 최신의 '삭제됨' 을 덮는★ 방향은 열려 있었다.
+    #   주인님이 info.txt 에서 캐릭 이름을 지운 계정으로 순환이 들어간다 = 요구 4 구멍.
+    for c in sorted(cards, key=lambda c: str(c.get("last_active") or "")):
         ids.update(c.get("acct_ids") or {})
         if c.get("acct_names") is not None:
             saw_names = True
@@ -7683,6 +7902,15 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     def _alive() -> bool:
         return _ROT.get(key) is st
 
+    # ★TTL 을 카드 유무보다 먼저 본다 [M1]★ — 예전엔 카드가 사라지면 여기서 바로
+    #   return 이라 ROT_TTL 검사에 영영 도달하지 못했다. 대시보드에서 PC 를 지우면
+    #   그 엔트리가 DB 에 영구 저장돼 재부팅마다 되살아나고, 엔진이 30초마다
+    #   그 PC 를 위해 전체 상태를 조립했다 = 불사신 좀비.
+    if _rot_now() - float(st.get("armed_at") or 0) > ROT_TTL:
+        await _rot_stop(tenant, base,
+                        f"⛔ 순환 무장이 {int(ROT_TTL/3600)}시간을 넘겨 자동 해제했습니다 — "
+                        f"계속하려면 ▶시작을 다시 눌러주세요")
+        return
     cards = _rot_cards(pcs, base)
     if not cards:
         return                                       # 카드가 사라진 PC — 아무것도 안 한다
@@ -7694,6 +7922,18 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         st.update({"stage": "hunting", "since": _rot_now()})
         stage = "hunting"
     age = _rot_now() - float(st.get("since") or 0)
+
+    # ── ★게임일이 바뀌면 왕복 가드를 새로 센다 [C3]★ ───────────────────────
+    #   visits 는 '그 계정에 갔을 때 오늘 몇 칸 끝나 있었나' 를 적어두고, 돌아왔을 때
+    #   그대로면 "진행 없음" 으로 순환을 세운다. 그런데 ★새벽 5시 게임일 경계★ 를 넘기면
+    #   오늘 완료수가 전부 0 으로 떨어지는데 visits 에는 경계 이전의 양수가 남아 있다.
+    #   → 5칸이 통째로 남은 계정을 "3개 그대로입니다" 라는 ★사실과 정반대 문구★ 로 죽였다.
+    #   hops(12회 상한)도 같은 이유로 하루를 넘기면 부당하게 소모된다.
+    _day = _kst_today_key()
+    if str(st.get("day") or "") != _day:
+        if st.get("day"):
+            print(f"[순환] {key} 게임일 바뀜 {st.get('day')} -> {_day} — 왕복 가드 리셋")
+        st.update({"day": _day, "visits": {}, "hops": 0})
 
     # ── 무장 수명 [C6-②] ──────────────────────────────────────────────────
     #   DB 가 살아남으면 _ROT 는 만료 없이 복원된다. 그 사이 주인님이 ★매크로 핫키★로
@@ -7830,7 +8070,12 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             return
         _vis[str(nxt)] = _prog
         st.update({"stage": "switching", "since": _rot_now(),
-                   "expect_restart": True, "target": "abcd"[nxt - 1],
+                   # ★만료를 같이 심는다 [C2]★ — 부팅 지문이 유실되면(실측 83회 중 4회)
+                   #   expect_restart 가 True 로 남아 ★다음번 주인님의 재시작을 삼킨다.★
+                   #   그러면 "껐다 켜면 순환 해제"(요구 1) 가 조용히 깨진다.
+                   "expect_restart": True,
+                   "expect_until": _rot_now() + ROT_SWITCH_MAX,
+                   "target": "abcd"[nxt - 1],
                    "hops": int(st.get("hops") or 0) + 1})
         await _rot_say(tenant, base, f"계정{nxt} 로 전환 시작 (본컴 런처 + 원격컴 크롬)")
         return
@@ -7842,7 +8087,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if active and _rot_acct_no(active.get("pc_id")) == want_no:
             s = str(active.get("status"))
             if s in ("hunting", "moving"):
-                st.update({"stage": "hunting", "since": _rot_now()})
+                st.update({"stage": "hunting", "since": _rot_now(),
+                           "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
                 await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인")
                 return
             if s == "idle":
@@ -7857,7 +8103,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     #   (텔레그램은 "다음 계정을 찾습니다" 라고 말해놓고 못 찾는다 =
                     #    미완 계정이 남아 있어도 거기서 끝 → 사용자 요구 4가 깨진다.)
                     st.update({"stage": "collecting", "since": _rot_now(),
-                               "char_before": "", "skip_collect": True})
+                               "char_before": "", "skip_collect": True,
+                               "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
                     await _rot_say(tenant, base,
                                    f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다")
                     return
@@ -7867,10 +8114,19 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     return
                 if not _alive():
                     return
-                st.update({"stage": "starting", "since": _rot_now()})
+                st.update({"stage": "starting", "since": _rot_now(),
+                           "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
                 await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작")
                 return
-            return                                   # captcha/reconnecting 등 — 더 기다린다
+            # ★★여기서 return 하면 아래 20분 상한이 ★영원히 평가되지 않는다★ [C1]★★
+            #   2026-08-20 적대검증에서 잡혔다. 목표 계정 카드가 살아는 있는데 상태가
+            #   captcha·reconnecting·error 면 매 틱 이 줄로 빠져나가 ROT_SWITCH_MAX 를
+            #   건너뛰었다. 캡차는 ★계정 전환 직후 가장 흔한 상태★ 라 실전에서 바로 걸린다.
+            #   증상: 20분 뒤 떠야 할 "⛔ 계정N 전환이 20분째" 알람이 안 뜨고,
+            #        18시간 뒤 ROT_TTL 이 "무장이 18시간을 넘겨 자동 해제" 라는
+            #        ★원인과 무관한 문구★ 로 끝난다 = 주인님이 엉뚱한 데를 찾아간다.
+            #   → return 이 아니라 pass. 더 기다리되 ★상한은 적용한다.★
+            pass
         if age > ROT_SWITCH_MAX:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — 계정{want_no} 전환이 {int(age/60)}분째 "

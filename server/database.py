@@ -230,6 +230,10 @@ async def delete_pc_all_data(pc_id: str) -> None:
         await db.execute("DELETE FROM commands         WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM updater_commands WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM logs             WHERE pc_id=?", (pc_id,))
+        # ★업데이터 로그는 별도 키(".upd" 접미사)에 쌓인다 (2026-08-20)★
+        #   같은 logs 표를 쓰지만 pc_id 가 "PC-01.upd" 라서 위 줄로는 안 지워진다.
+        #   빼먹으면 PC 를 지워도 그 PC 의 업데이터 로그만 유령으로 남는다.
+        await db.execute("DELETE FROM logs WHERE pc_id=?", (pc_id + ".upd",))
         await db.execute("DELETE FROM char_info        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM death_events      WHERE pc_id=?", (pc_id,))
         await db.commit()
@@ -441,11 +445,20 @@ async def get_updater_command_pc(cmd_id: int) -> "str | None":
 
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 
-async def insert_log(pc_id: str, level: str, message: str) -> None:
+async def insert_log(pc_id: str, level: str, message: str,
+                     created_at: str | None = None) -> None:
+    """created_at: 클라이언트가 그 줄을 ★실제로 찍은 시각★(UTC ISO). None이면 수신 시각.
+
+    ★왜 필요한가 (2026-08-20, 업데이터 원격 로그)★
+      업데이터는 로그를 20초마다 배치로 모아 보내고, 서버가 죽어 있으면 최대 5분까지
+      백오프하며 쌓아둔다. 수신 시각으로 기록하면 그 배치가 전부 '방금' 찍힌 것처럼
+      뭉쳐 보여서 ★사고 순서를 못 읽는다★. 클라가 준 시각을 그대로 쓴다.
+      기본값 None 이라 기존 호출부(매크로 /log/, 서버 내부 기록)는 전부 무영향.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
-            (pc_id, level, message, _now()),
+            (pc_id, level, message, created_at or _now()),
         )
         await db.commit()
     # 오래된 로그 자동 정리 (PC당 최대 3000개 — 스팸 로그는 클라에서 서버 전송 제외하므로
