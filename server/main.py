@@ -8038,6 +8038,31 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #   → 잠금이 실제로 풀린 신호(idle)를 같이 본다. 두 값이 같은 finally 라 정확히 일치.
             pass                                     # 수집 확인 — 아래로 진행
         elif age <= ROT_COLLECT_MAX:
+            # ★★본컴이 스트리밍 대기가 아니면 7분을 버리지 않는다 (2026-08-20 PC-12 실측)★★
+            #   ★무엇이 문제였나★ 정보수집은 ★게임 화면★ 을 요구한다. 그런데 본컴이
+            #   퍼플 런처에서 '재시작'(스트리밍 대기)을 안 눌렀으면 웹플레이는
+            #   "퍼플온이 실행된 PC가 없습니다" 이고, 매크로는 20초마다 새로고침만 한다.
+            #   ★그 상태에서는 수집이 절대 성공할 수 없다.★ 그런데 순환은 그걸 모르고
+            #   ROT_COLLECT_MAX(7분)를 다 태운 뒤 "정보수집이 확인되지 않습니다" 라고
+            #   ★원인과 다른 문구★ 로 죽는다 — 주인님이 엉뚱한 데를 찾아가게 된다.
+            #   주인님: "12번 화면봐로 엉망진창이다"
+            #   → 매크로가 nohost 를 찍고 있으면 ★즉시★ 진짜 사유로 세운다.
+            #     (호스트는 원격컴이 못 만든다 — 본컴 런처를 눌러야 하므로 사람/파섹 일이다)
+            try:
+                _lg = await get_logs(ns(tenant, str(active.get("pc_id") or base)), limit=25)
+                _nh = sum(1 for _l in (_lg or [])
+                          if "아직 호스트 없음" in str(_l.get("message") or ""))
+            except Exception:
+                _nh = 0
+            if _nh >= 3:                             # 새로고침 3회 = 최소 60초째 무호스트
+                await _rot_stop(
+                    tenant, base,
+                    "⛔ 순환 정지 — ★본컴이 스트리밍 대기가 아닙니다★ "
+                    "(웹플레이: '퍼플온이 실행된 PC가 없습니다'). "
+                    "정보수집은 게임 화면이 있어야 되므로 여기서는 절대 성공하지 않습니다. "
+                    "본컴 퍼플 런처에서 '재시작' 을 누르거나 계정전환으로 호스트를 잡아주세요",
+                    st)
+                return
             return                                   # 아직 기다린다
         else:
             await _rot_stop(tenant, base,
