@@ -7501,7 +7501,9 @@ if __name__ == "__main__":
 ROT_KEY          = "acct_rotate"      # DB 설정 키(순환 상태 + 부팅 지문)
 ROT_ALLOW_KEY    = "rot_allow"        # ★카나리아 게이트★ 허용 PC 목록(쉼표). 비면 아무도 무장 못 함
 ROT_TICK         = 30.0               # 엔진 주기(초)
-ROT_COLLECT_MAX  = 420.0              # 정보수집 대기 상한
+ROT_COLLECT_MAX  = 420.0              # 정보수집 대기 ★하한★ (실제 상한은 _rot_collect_max)
+ROT_COLLECT_PER_CHAR = 150.0          # 캐릭 1명당 여유(초) — 실측 98초/캐릭 + 50% 여유
+ROT_COLLECT_HARD_MAX = 1800.0         # 캐릭이 아무리 많아도 30분
 ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작) 대기 상한
 ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 # ★사냥 상한 < 무장 수명★ — 반대로 두면 TTL 이 먼저 걸려 사냥 상한 알람이 ★영원히 안 뜬다★
@@ -7863,6 +7865,27 @@ def _rot_active(cards: list) -> dict | None:
     return max(live, key=lambda c: str(c.get("last_active") or ""))
 
 
+def _rot_collect_max(cards) -> float:
+    """★정보수집 상한은 ★캐릭 수★ 에 따라 다르다 (2026-08-20 PC-09 실측)★
+
+    ★무엇이 문제였나★ 고정 7분이었다. 그런데 실측:
+      PC-09(6캐릭) 22:44:35 → 22:54:26 = ★9분 51초★  (98초/캐릭)
+      PC-10(2캐릭) 23:01:12 → 23:05:06 = 3분 54초
+    6캐릭 계정은 ★애초에 7분 안에 끝날 수가 없다.★ 그래서 PC-09 는 수집을
+    정상적으로 마쳤는데도 순환이 두 번 다 죽었다(22:55 / 23:11).
+    PC-10 이 통과한 건 캐릭이 2명이라서였지 코드가 옳아서가 아니다.
+    ★한 대에서 됐다고 다 되는 게 아니다 — 규모가 다른 케이스로 재봐야 한다.★
+
+    캐릭 수는 카드의 daily_progress 길이로 센다(그 계정이 오늘 돌 슬롯 수 = 수집 대상).
+    """
+    try:
+        n = max((len(c.get("daily_progress") or []) for c in (cards or [])), default=0)
+    except Exception:
+        n = 0
+    return min(ROT_COLLECT_HARD_MAX,
+               ROT_COLLECT_MAX + ROT_COLLECT_PER_CHAR * max(0, n))
+
+
 def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
     """다음으로 갈 계정 번호. 반환 (번호, 사유).
        번호 > 0 : 그 계정으로 간다
@@ -8025,7 +8048,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             if _g and _g != str(st.get("char_before") or ""):
                 _ev = _g
                 break
-        if age > ROT_COLLECT_MAX and not active and not _ev:
+        _cmax = _rot_collect_max(cards)
+        if age > _cmax and not active and not _ev:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — 정보수집 중 매크로가 {int(age/60)}분째 "
                             f"응답이 없습니다. 화면 확인 필요")
@@ -8052,7 +8076,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #   "전환이 20분째 안 끝났다" 라는 ★진짜 원인과 무관한 사유★ 로 죽었다.
             #   → 잠금이 실제로 풀린 신호(idle)를 같이 본다. 두 값이 같은 finally 라 정확히 일치.
             pass                                     # 수집 확인 — 아래로 진행
-        elif age <= ROT_COLLECT_MAX:
+        elif age <= _cmax:
             # ★★본컴이 스트리밍 대기가 아니면 7분을 버리지 않는다 (2026-08-20 PC-12 실측)★★
             #   ★무엇이 문제였나★ 정보수집은 ★게임 화면★ 을 요구한다. 그런데 본컴이
             #   퍼플 런처에서 '재시작'(스트리밍 대기)을 안 눌렀으면 웹플레이는
@@ -8081,7 +8105,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             return                                   # 아직 기다린다
         else:
             await _rot_stop(tenant, base,
-                            f"⛔ 순환 정지 — 정보수집이 {int(age/60)}분째 확인되지 않습니다"
+                            f"⛔ 순환 정지 — 정보수집이 {int(age/60)}분째 "
+                            f"확인되지 않습니다(상한 {int(_cmax/60)}분)"
                             f"(char_info 갱신 없음). 화면 확인 필요")
             return
 
