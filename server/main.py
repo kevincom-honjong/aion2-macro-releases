@@ -3157,13 +3157,24 @@ function acctIdTag(pcid){
 // 보고(acct_ids/acct_servers, 키="1".."4")하므로, 접속한 적 없는 계정 카드도 표기 가능
 // (사용자: "계정1에 아이디가 안 나오네 / 계정2 서버를 못 읽는 것 같네").
 function groupAcctMaps(base){
-  const ids = {}, servers = {};
+  const ids = {}, servers = {}, plats = {};
   Object.values(state).forEach(p=>{
     if (baseId(p.pc_id||'') !== base) return;
     Object.assign(ids, p.acct_ids||{});
     Object.assign(servers, p.acct_servers||{});
+    Object.assign(plats, p.acct_platforms||{});   // ★카드 계정줄의 '구글' 표기용 (2026-08-21)★
   });
-  return {ids, servers};
+  return {ids, servers, plats};
+}
+// ★플랫폼이 구글이면 카드에 아이디 대신 '구글' 을 적는다 (2026-08-21 주인님 지시)★
+//   원문: "각 카드에 맨밑에 계정1 해서 아이디 나와있는 플랫폼이 구글인 경우에는
+//          아이디말고 구글 이라고 적어둬"
+//   구글 계정 PC(PC-07 · PC-14 · PC-17)는 지뢰 C1 대로 CDP 로그인이 구조적으로 안 된다.
+//   카드에서 한눈에 구분돼야 '왜 이 PC 만 전환이 안 되지' 를 매번 다시 파지 않는다.
+//   info.txt 의 플랫폼 표기가 '구글' / 'google' / 'Google 계정' 등으로 흔들리므로
+//   ★부분일치 + 대소문자 무시★ 로 본다.
+function isGooglePlat(v){
+  return /구글|google/i.test(String(v||''));
 }
 function acctNumOf(pcid){
   const c = (pcid||'').slice(-1);
@@ -3290,9 +3301,12 @@ function acctRow(pc){
   const maps = groupAcctMaps(baseId(pc.pc_id));
   const id = pc.acct_id || maps.ids[n] || '';
   const srv = maps.servers[n] || pc.acct_server || '';
+  // 플랫폼이 구글이면 아이디 대신 '구글' (툴팁에는 실제 아이디를 남겨 식별은 되게)
+  const plat = maps.plats[n] || '';
+  const shown = isGooglePlat(plat) ? '구글' : id;
   return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
       <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
-      <span class="truncate" title="${esc(id)}">${esc(id)}</span>
+      <span class="truncate${isGooglePlat(plat)?' text-amber-300/80':''}" title="${esc(id)}">${esc(shown)}</span>
       ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
       ${srv?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(srv)}</span>`:''}
     </div>`;
