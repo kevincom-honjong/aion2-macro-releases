@@ -3056,6 +3056,25 @@ const dpDone = c => !!(c && c.completed) && c.today !== false;
 //   CDP 없는 PC 에 그 명령을 쏘면 4~5분 낭비하고 "크롬(CDP)이 안 잡힌다" 로 끝난다.
 //   매크로가 30초마다 스스로 보고(cdp/cdp_at)하므로, ★명령을 쏘기 전에 여기서 보고 거른다.★
 //   계정이 하나뿐인 PC 는 전환할 게 없으니 표시하지 않는다(잡음 제거).
+// ★★info.txt 이름 ↔ 수집값 불일치를 보이게 한다 (2026-08-20 주인님 지적)★★
+//   주인님: "10번 계정1 info에 캐릭터명 다시적엇는데 뭐가 덧씌어졋는지 대시보드카드에는 안바뀌네"
+//   ★카드 이름은 info.txt 가 아니라 char_info(정보수집 OCR)가 이긴다★ (_build_full_state).
+//   info.txt 의 acct_names 는 ★계정 순환 판정용★ 이라 카드 표시에 안 쓴다.
+//   그래서 info.txt 를 아무리 고쳐도 카드는 안 바뀌고, 사람은 "왜 안 바뀌지" 로 헤맨다.
+//   실측 PC-10: info.txt=[미르S2,찬솔S2] / 카드=[폭딜,케피,마리드] — 옛 수집값이 남아 있었다.
+//   → 둘이 다르면 ★말해준다.★ 고치는 법(정보수집 재실행)까지 툴팁에 적는다.
+const nameMismatch = pc => {
+  const n = ({'a':1,'b':2,'c':3,'d':4})[String(pc.pc_id||'').slice(-1)] || 1;
+  const info = Object.values((pc.acct_names||{})[String(n)] || {}).filter(Boolean);
+  const card = (pc.chars||[]).filter(Boolean);
+  if (!info.length || !card.length) return '';
+  const a = info.slice().sort().join('|'), b = card.slice().sort().join('|');
+  if (a === b) return '';
+  return ` · <span class="text-orange-400" title="info.txt 에 적힌 이름: ${esc(info.join(', '))}
+카드에 보이는 이름(정보수집 OCR): ${esc(card.join(', '))}
+
+카드는 수집값이 이깁니다. info.txt 를 고쳐도 안 바뀝니다 — 정보수집을 다시 돌리십시오.">이름≠</span>`;
+};
 const cdpMark = pc => {
   const multi = Object.values(pc.acct_ids || {}).filter(v => String(v||'').trim()).length > 1;
   if (!multi) return '';
@@ -3094,7 +3113,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc(pc._rot)}</span>`:''}${cdpMark(pc)}</span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc(pc._rot)}</span>`:''}${cdpMark(pc)}${nameMismatch(pc)}</span>
       ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
