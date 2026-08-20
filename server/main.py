@@ -8010,7 +8010,22 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # ★타임아웃을 'active 없음' 보다 ★위에★ 둔다 (재검증 지적)★
         #   초판은 `if not active: return` 이 먼저라, 수집 중 매크로가 죽으면 7분 알람이
         #   아니라 ★18시간 TTL 까지 무음★ 이었다. 다른 단계는 타임아웃이 위에 있었다.
-        if age > ROT_COLLECT_MAX and not active:
+        # ★★수집 증거를 ★신선도와 무관하게★ 먼저 본다 (2026-08-20 PC-09 실측)★★
+        #   ★무엇이 있었나★ PC-09 는 22:54:26 에 "정보수집 완료 (6/6캐릭)" 를 찍었는데
+        #   순환은 22:55:42 에 "매크로가 7분째 응답이 없습니다" 로 죽었다. ★76초 차이.★
+        #   원인: _rot_active() 가 collecting 카드에 _fresh(last_active,300) 을 요구하는데,
+        #   ★정보수집 중에는 status 가 'collecting' 으로 고정이라 _hash_status() 가 안 바뀐다★
+        #   → push 가 안 나가고 → last_active 가 5분 넘게 낡는다 → active=None.
+        #   사고 99(cdp 를 해시에 안 넣어 idle PC 가 영구 동결)와 ★완전히 같은 기계★ 다.
+        #   → 수집 증거(_char_collected_at)는 ★어느 카드에든★ 남는다. 신선도와 상관없이
+        #     그것부터 본다. '살아있냐' 보다 '끝냈냐' 가 먼저다.
+        _ev = ""
+        for _c in cards:
+            _g = str(_c.get("_char_collected_at") or "")
+            if _g and _g != str(st.get("char_before") or ""):
+                _ev = _g
+                break
+        if age > ROT_COLLECT_MAX and not active and not _ev:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — 정보수집 중 매크로가 {int(age/60)}분째 "
                             f"응답이 없습니다. 화면 확인 필요")
@@ -8020,13 +8035,13 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   (계정 혼입 의심 → 수집 중단). 하필 가장 갈아서는 안 되는 상황이다.
         #   → 서버가 실제로 char_info 를 ★새로 받았는지★ 로 판정한다.
         #     그 값은 전송에 성공한 것만 갱신되므로 '전달됨 ≠ 적용됨' 함정을 넘는다.
-        if not active:
+        if not active and not _ev:
             return
-        got = str(active.get("_char_collected_at") or "")
+        got = str(active.get("_char_collected_at") or "") if active else _ev
         if st.pop("skip_collect", False):
             pass                                     # 수집을 보낸 적이 없다(위 S-F 경로)
         elif (got and got != str(st.get("char_before") or "")
-              and str(active.get("status")) == "idle"):
+              and (not active or str(active.get("status")) == "idle")):
             # ★★status=="idle" 을 같이 요구한다 (2026-08-20 최종검증 🔴2)★★
             #   매크로는 char_info 를 ★보낸 뒤에도★ 뱅크 자가점검 +
             #   _ensure_char_select_screen(재연결 사다리·비번·출석부 내장) 을 더 돌고,
