@@ -7622,6 +7622,15 @@ ROT_BOOT_DEBOUNCE = 60.0              # 옛 판(마커 없는) 매크로용 [BOO
 _ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
 _ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
 _ROT_SAVED = ""                       # 마지막으로 DB 에 쓴 직렬화본(변경 없으면 안 쓴다)
+# ★★사유 없이 사라지는 무장을 잡는다 (2026-08-21 PC-17 미해결건)★★
+#   실측: /command 응답은 armed=true 인데 30초 뒤 /status 의 _rot 가 None 이었다.
+#   배제한 것 — 허용목록(*), 서버 재시작(uptime 유지), 워커 분리(8회 폴링 동일),
+#   BOOT 늦게 도착(그 경로는 알람을 보내는데 알람 없음), stop/exit(이력 없음).
+#   ★원인을 못 찾았다.★ 그래서 다음에 같은 일이 나면 ★그 순간을 잡도록★ 흔적을 남긴다.
+#   정상 해제(_rot_disarm·_rot_stop·_rot_note_boot)는 사유를 남기므로 조용히 지나가고,
+#   ★사유 없이 사라진 것만★ 텔레그램으로 튀어나온다.
+_ROT_SEEN: set = set()                # 직전에 무장돼 있던 키들
+_ROT_GONE_WHY: dict = {}              # key -> 정상 해제 사유 (한 번 쓰고 소비)
 
 
 def _rot_now() -> float:
@@ -7677,10 +7686,35 @@ def _rot_done(card: dict) -> bool:
 
 
 # ── 저장/복원 ────────────────────────────────────────────────────────────────
+def _rot_watch_vanish() -> None:
+    """무장이 ★사유 없이★ 사라졌으면 알린다. (원인 미상 사고를 다음번에 현행범으로 잡기 위함)"""
+    global _ROT_SEEN
+    try:
+        now_keys = set(_ROT)
+        for k in (_ROT_SEEN - now_keys):
+            why = _ROT_GONE_WHY.pop(k, "")
+            if why:
+                continue                          # 정상 해제 — 이미 알렸다
+            print(f"[순환] ★★사유 없이 무장이 사라졌다★★ {k} — 원인 미상")
+            try:
+                _t, _b = split_ns(k)
+                asyncio.create_task(_rot_say(
+                    _t, _b, "⚠️ 순환 무장이 ★사유 없이★ 사라졌습니다(원인 미상). "
+                            "▶시작을 다시 눌러주세요 — 이 메시지 자체가 버그 신고입니다"))
+            except Exception:
+                pass
+        for k in (now_keys - _ROT_SEEN):
+            _ROT_GONE_WHY.pop(k, None)            # 재무장 — 옛 사유는 버린다
+        _ROT_SEEN = now_keys
+    except Exception as e:
+        print(f"[순환] 소실 감시 실패(무시): {e}")
+
+
 async def _rot_save(force: bool = False) -> None:
     """★변경이 있을 때만 쓴다★ — 30초마다 볼륨 DB 를 두드리지 않는다(리뷰 잔소리)."""
     global _ROT_SAVED
     try:
+        _rot_watch_vanish()
         blob = json.dumps({"rot": _ROT, "boot": _ROT_BOOT}, ensure_ascii=False, sort_keys=True)
         if not force and blob == _ROT_SAVED:
             return
@@ -7840,6 +7874,7 @@ async def _rot_arm(tenant: str, pc_id: str) -> tuple[bool, str]:
 def _rot_disarm(tenant: str, pc_id: str, why: str) -> bool:
     key = ns(tenant, _base_pc(pc_id))
     if key in _ROT:
+        _ROT_GONE_WHY[key] = why or "disarm"      # ★사유를 남긴다★ (소실 감시가 조용히 넘기게)
         _ROT.pop(key, None)
         print(f"[순환] {key} 해제 ({why})")
         return True
@@ -7907,6 +7942,7 @@ def _rot_note_boot(nspc: str, message: str) -> None:
         st["since"] = now
         print(f"[순환] {key} 재시작 확인 — 순환 유지")
         return
+    _ROT_GONE_WHY[key] = "사람이 껐다 켬(BOOT)"
     _ROT.pop(key, None)
     print(f"[순환] {key} ★사람이 껐다 켬★ → 순환 해제")
     # ★★N2: 여기서 저장하지 않으면 해제가 DB 에 안 남는다★★
@@ -8045,6 +8081,7 @@ async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) ->
     key = ns(tenant, base)
     if st is not None and _ROT.get(key) is not st:
         return
+    _ROT_GONE_WHY[key] = "rot_stop: " + str(msg or "")[:40]   # ★소실 감시가 오탐하지 않게★
     _ROT.pop(key, None)
     try:
         await _rot_save(force=True)
