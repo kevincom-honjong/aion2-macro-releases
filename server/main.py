@@ -928,6 +928,11 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             _rs = _ROT.get(_rk)
             if _rs:
                 pc["_rot"] = str(_rs.get("stage") or "")
+                # ★전환 목표도 싣는다 (2026-08-21 주인님 요청 "전환중이라는 표시")★
+                #   stage 만으로는 '어디로' 가 안 보여서 화면에서 진단이 안 된다.
+                _tg = _rs.get("target")
+                if _tg:
+                    pc["_rot_target"] = int(_tg)
     except Exception:
         pass
     return statuses
@@ -3163,7 +3168,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc(pc._rot)}</span>`:''}${cdpMark(pc)}${nameMismatch(pc)}</span>
+      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc((ROT_CHIP[pc._rot]||{}).t||pc._rot)}</span>`:''}${cdpMark(pc)}${nameMismatch(pc)}</span>
       ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
@@ -3251,6 +3256,29 @@ function acctChip(pid){
                  d:'bg-amber-800/70 text-amber-200 border-amber-600'}[c];
   return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${acctNum(c)}">계정 ${acctNum(c)}</span>`;
 }
+// ★★순환 단계 칩 — '전환중' 이 한눈에 보이게 (2026-08-21 주인님 요청)★★
+//   원문: "그리고 대시보드에 전환중이라는 표시도 보여야할거같아"
+//   예전엔 카드 맨 아래 10px 회색으로 `🔁 switching` 만 찍혀서 ①영어고 ②안 보였다.
+//   순환이 실제로 뭘 하는 중인지가 안 보이면 "왜 안 넘어가지" 를 아무도 진단 못 한다.
+//   hunting 은 평상시라 조용히, 나머지 3단계는 ★상태 이름 옆에 크게★ 띄운다.
+const ROT_CHIP = {
+  collecting: {t:'📋 정보수집중',  c:'bg-cyan-800/80 text-cyan-100 border-cyan-500',    p:true},
+  switching : {t:'🔄 계정 전환중', c:'bg-amber-700/85 text-amber-100 border-amber-400', p:true},
+  starting  : {t:'▶ 사냥 시작중',  c:'bg-green-800/80 text-green-100 border-green-500', p:true},
+  hunting   : {t:'🔁 순환 ON',     c:'bg-purple-900/60 text-purple-300 border-purple-700', p:false},
+};
+function rotChip(pc) {
+  const r = ROT_CHIP[pc._rot];
+  if (!r) return '';
+  const tgt = pc._rot_target ? ` → 계정${pc._rot_target}` : '';
+  const title = pc._rot === 'switching'
+      ? `계정 자동순환: 지금 계정을 바꾸는 중입니다${tgt}. 본컴 런처 → 원격컴 크롬 → 매크로 재시작 순서로 진행됩니다`
+      : (pc._rot === 'collecting' ? '계정 자동순환: 완주를 감지해 캐릭터 정보를 수집하는 중입니다'
+      : (pc._rot === 'starting'   ? '계정 자동순환: 전환이 끝나 사냥을 시작하는 중입니다'
+      : '계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다'));
+  return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${r.c}${r.p?' pulse':''}"
+                title="${title}">${r.t}${esc(tgt)}</span>`;
+}
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
@@ -3319,7 +3347,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>
+          <span class="truncate">${cfg.label}</span>${rotChip(pc)}
         </span>
       </div>
     </div>
