@@ -7617,6 +7617,7 @@ ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 ROT_HUNT_MAX     = 14 * 3600.0        # 사냥 단계 절대 상한 [S9] — 좀비 방지용
 ROT_TTL          = 18 * 3600.0        # 무장 자체의 수명 [C6-②] — 넘으면 해제하고 알린다
 ROT_MAX_HOPS     = 12                 # 한 번 무장에 허용하는 계정 전환 횟수(마지막 그물)
+ROT_ARM_GRACE    = 90.0               # ★무장 직후 유예★ — 매크로가 그 start 를 소화할 시간
 ROT_BOOT_DEBOUNCE = 60.0              # 옛 판(마커 없는) 매크로용 [BOOT] 디바운스 [S2]
 _ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
 _ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
@@ -8120,6 +8121,19 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
         if str(active.get("status")) != "idle" or not _rot_done(active):
             return
+        # ★★무장 직후 유예 [2026-08-21 PC-09 실사고]★★
+        #   ★무엇이 있었나★ 주인님이 ▶시작을 누르면 매크로는 그 start 를 소화하느라
+        #   30초 넘게 바쁘다(캐릭선택창 이동 → 슬롯 진입 → 완주 판정 = 실측 33초).
+        #   그런데 서버는 무장 ★19초 뒤★ 다음 tick 에서 'idle + 완주' 를 보고 곧바로
+        #   collect_info 를 쐈고, 매크로는 "이전 명령 처리 중 → 거부" 하며 ★조용히 버렸다.★
+        #   loot.py 의 그 경로는 ack 도 재큐도 없다. 그런데 _rot_send 는 '큐에 넣기' 에
+        #   성공했으므로 True 를 돌려주고, 순환은 collecting 으로 넘어가
+        #   ★아무도 수집을 안 하는 채로★ 상한(최대 30분)을 태웠다.
+        #   = A2 그 자리(배달됨 ≠ 실행됨). 실측 PC-09 16:40:50 start / 16:41:09 거부.
+        #   → 무장 직후에는 그 start 가 끝날 시간을 준다. 이미 사냥 중이던 PC 는
+        #     유예가 그냥 흘러가므로 무해하다.
+        if _rot_now() - float(st.get("armed_at") or 0) < ROT_ARM_GRACE:
+            return
         acct = _rot_acct_no(active.get("pc_id"))
         # ★수집 전후를 비교할 기준점 [S10 / A2-②]★ — 초판은 존재하지도 않는 필드명
         #   (char_updated_at)을 저장하고 읽지도 않았다. 실제 필드는 _char_collected_at.
@@ -8130,7 +8144,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             return                                   # ★송신 실패면 단계를 넘기지 않는다 [S13]★
         if not _alive():
             return
-        st.update({"stage": "collecting", "since": _rot_now()})
+        st.update({"stage": "collecting", "since": _rot_now(), "recollect": False})
         await _rot_say(tenant, base, f"계정{acct} 완주 → 정보수집 시작")
         return
 
@@ -8198,7 +8212,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 _nh = sum(1 for _l in (_lg or [])
                           if "아직 호스트 없음" in str(_l.get("message") or ""))
             except Exception:
-                _nh = 0
+                _lg, _nh = [], 0
             if _nh >= 3:                             # 새로고침 3회 = 최소 60초째 무호스트
                 await _rot_stop(
                     tenant, base,
@@ -8207,6 +8221,22 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     "정보수집은 게임 화면이 있어야 되므로 여기서는 절대 성공하지 않습니다. "
                     "본컴 퍼플 런처에서 '재시작' 을 누르거나 계정전환으로 호스트를 잡아주세요",
                     st)
+                return
+            # ★★매크로가 수집을 '거부' 했으면 한 번 다시 보낸다 (2026-08-21 PC-09)★★
+            #   위 유예(ROT_ARM_GRACE)가 못 막는 경합이 아직 남는다 — 주인님이나 내가
+            #   다른 긴 명령(switch·screenshot…)을 쏜 직후에도 같은 거부가 난다.
+            #   그때 로그의 "'collect_info'를 거부" 는 ★버려졌다는 확정 증거★ 다.
+            #   (추측이 아니라 그 PC 가 직접 찍은 줄이다 — A2 를 만족한다)
+            #   → 딱 한 번만 재전송한다. 무한 재시도로 바꾸지 않는다.
+            if not st.get("recollect") and any(
+                    "'collect_info'를 거부" in str(_l.get("message") or "")
+                    for _l in (_lg or [])):
+                st["recollect"] = True
+                print(f"[순환] {base} 수집 거부 감지 → collect_info 재전송")
+                if await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
+                    st["since"] = _rot_now()         # 상한도 그 시점부터 다시 센다
+                    await _rot_say(tenant, base,
+                                   "정보수집이 거부돼 있었습니다 → 다시 보냈습니다")
                 return
             return                                   # 아직 기다린다
         else:
