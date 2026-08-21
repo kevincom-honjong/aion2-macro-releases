@@ -25,6 +25,7 @@ from database import (
     set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
+    recent_updater_commands,
     upsert_char_info, get_char_info, get_all_char_info,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
@@ -1479,6 +1480,16 @@ async def health(request: Request):
         #   이미지 배포처를 raw 로 바꿔 놓고 재배포를 30분 기다렸는데, 배포가 됐는지
         #   안 됐는지 확인할 방법이 없어 /check 응답만 계속 찔러 봤다. 값을 내보내면 끝난다.
         "img_base": _GH_CDN.split("//", 1)[-1][:28],
+        # ★★지금 /check 가 ★무슨 버전을 광고하고 있는지★ 를 밖에서 보이게 (사고 146)★★
+        #   2026-08-22 실사고: 605·606·607 을 11분 안에 몰아 올렸더니 _version_cache(300초)
+        #   + raw.githubusercontent 엣지 캐시가 겹쳐, 릴리스 후 ~10분간 /check 가 옛 버전을
+        #   광고했다. 그동안 [업데이트] 를 누르면 서버가 exe_update 키를 통째로 빼고 주고
+        #   업데이터는 그걸 ★'최신'★ 으로 읽고 조용히 끝낸다 → "눌러도 안 한다".
+        #   주인님이 확인할 수단이 없었다. 이제 이 두 줄이면 1초에 판정된다.
+        "serving_exe": (((_version_cache.get("data") or {}).get("exe") or {}).get("version")
+                        if isinstance(_version_cache.get("data"), dict) else None),
+        "version_cache_age_s": (round(time.time() - float(_version_cache.get("ts") or 0), 1)
+                                if _version_cache.get("ts") else None),
     }
     if _detail:
         out.update({
@@ -3760,13 +3771,30 @@ function selectAllPcs() {
 function baseId(id){ return (id && 'bcd'.includes(id.slice(-1))) ? id.slice(0,-1) : id; }
 async function selUpdaterCmd(command, args={}) {
   if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
-  const sent=new Set();
+  const sent=new Set(); const failed=[];
   for(const id of selectedPcs) {
     const b=baseId(id); if(sent.has(b))continue; sent.add(b);   // 같은 PC의 여러 계정 카드 중복 제거
-    await fetch(`/updater/command/${b}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command,...args})});
+    // ★★body 는 {command, args} 다 (2026-08-22)★★ — 옛 코드는 `{command,...args}` 로
+    //   args 를 ★평평하게 펴서★ 보냈는데 서버는 body["args"] 만 읽는다(dashboard_send_updater_command).
+    //   그래서 인자가 조용히 사라졌다. 'update' 는 인자가 없어 지금껏 안 터졌을 뿐이다.
+    //   (§B3 의 set_info 를 {"kv": {...}} 로 감싸는 것과 정확히 같은 함정)
+    let ok=false;
+    try {
+      const res = await fetch(`/updater/command/${b}`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({command, args})});
+      ok = res.ok;
+    } catch(e) { ok = false; }
+    if(!ok) failed.push(b);
   }
   const n=sent.size;
-  showToast(`${n}대 업데이터 ${command} (선택 해제됨)`);
+  // ★★응답을 보고 말한다 (2026-08-22 사고 146)★★
+  //   옛 코드는 fetch 결과를 ★쳐다보지도 않고★ 무조건 성공 토스트를 띄웠다.
+  //   401/500 이어도 주인님 눈에는 "✓ 22대 업데이터 update" 로 보였다 — §A2 위반.
+  //   주인님: "내가 업데이트를 눌러도 뭐 업데이트를 안 하는데 우짜냐 이거"
+  if(failed.length){
+    showToast(`⛔ ${n}대 중 ${failed.length}대 전송 실패: ${failed.slice(0,5).join(', ')}${failed.length>5?'…':''}`);
+  } else {
+    showToast(`✓ ${n}대 업데이터 ${command} 전송됨 (선택 해제) — 적용은 '업데이터 명령' 판에서 확인`);
+  }
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 중복 명령 방지★
 }
 
@@ -4876,24 +4904,33 @@ document.addEventListener('click',()=>{
 
 // ─── 업데이터 명령 ────────────────────────────────────────────────────────────
 async function sendUpdaterCmd(pc_id, command, args={}) {
-  const res = await fetch(`/updater/command/${baseId(pc_id)}`, {   // 업데이터=base id (멀티계정)
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({command, args})
-  });
-  return res.ok;
+  try {
+    const res = await fetch(`/updater/command/${baseId(pc_id)}`, {   // 업데이터=base id (멀티계정)
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({command, args})
+    });
+    return res.ok;
+  } catch (e) {          // ★네트워크 예외도 실패다 (2026-08-22)★ 안 잡으면 호출부가 통째로 죽는다
+    console.error('sendUpdaterCmd 실패', pc_id, command, e);
+    return false;
+  }
 }
 
 async function bulkUpdaterCmd(command, args={}) {
   const ids = [...new Set(Object.keys(state).map(baseId))];   // 계정 카드 중복 → base로 접어 1대당 1회
   if (!ids.length) { showToast('연결된 PC 없음'); return; }
-  await Promise.all(ids.map(id => sendUpdaterCmd(id, command, args)));
-  showToast(`✓ 업데이터 ${command} → 전체 ${ids.length}대`);
+  // ★결과를 세어서 말한다 (2026-08-22 사고 146)★ — 옛 코드는 Promise.all 반환값을 버렸다.
+  const oks = await Promise.all(ids.map(id => sendUpdaterCmd(id, command, args)));
+  const bad = oks.filter(v => !v).length;
+  if (bad) showToast(`⛔ 업데이터 ${command} — ${ids.length}대 중 ${bad}대 전송 실패`);
+  else showToast(`✓ 업데이터 ${command} → 전체 ${ids.length}대 전송됨`);
 }
 
 async function updaterCmd(command, args={}) {
   if (!menuPcId) return;
-  await sendUpdaterCmd(menuPcId, command, args);
-  showToast(`✓ 업데이터 ${command} → ${menuPcId}`);
+  const ok = await sendUpdaterCmd(menuPcId, command, args);
+  showToast(ok ? `✓ 업데이터 ${command} → ${menuPcId} 전송됨`
+               : `⛔ 업데이터 ${command} → ${menuPcId} ★전송 실패★`);
   closeCardMenu();
 }
 
@@ -6556,6 +6593,31 @@ async def dashboard_send_updater_command(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="command 필드 필요")
     cmd_id = await insert_updater_command(ns(tenant, pc_id), command, body.get("args", {}))
     return JSONResponse({"ok": True, "id": cmd_id})
+
+
+@app.get("/updater/commands/recent")
+async def dashboard_recent_updater_commands(request: Request, limit: int = 60):
+    """★업데이터 명령 큐 조회 (2026-08-22 사고 146)★
+    /commands/recent 는 ★매크로 큐★ 만 본다. 업데이터 큐는 여태 밖에서 볼 수가 없어서
+    "업데이트를 눌러도 안 한다" 를 확증도 반증도 못 했다. 이게 그 눈이다."""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    limit = max(1, min(int(limit or 60), 300))
+    # ★테넌트 격리★ — main 은 접두어가 없으므로 LIKE 로는 못 좁힌다(남의 테넌트가 샌다).
+    #   넉넉히 받아서 ns_of() 로 거른 뒤 limit 만큼만 돌려준다.
+    raw = await recent_updater_commands(min(limit * 6, 1200))
+    out = []
+    for r in raw:
+        key = str(r.get("pc_id") or "")
+        t, pid = split_ns(key)
+        if t != tenant:
+            continue
+        r["pc_id"] = pid
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return JSONResponse({"commands": out})
 
 
 @app.post("/updater/command/{pc_id}/ack/{cmd_id}")

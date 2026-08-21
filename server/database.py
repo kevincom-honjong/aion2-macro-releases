@@ -539,6 +539,46 @@ async def get_pending_updater_command(pc_id: str, all_key: str = "all") -> dict 
     return {"id": row["id"], "command": row["command"], "args": args, "created_at": row["created_at"]}
 
 
+async def recent_updater_commands(limit: int = 60) -> list[dict]:
+    """★업데이터 명령 큐를 밖에서 볼 수 있게 (2026-08-22 사고 146)★
+
+    주인님: "내가 업데이트를 눌러도 뭐 업데이트를 안 하는데 우짜냐 이거"
+    그때 확인할 수단이 ★하나도 없었다★:
+      · 대시보드 명령이력(/commands/recent)은 ★매크로 큐★ 만 읽는다
+      · 업데이터 큐(updater_commands)에는 조회 엔드포인트가 아예 없었다
+      · 업데이터 원격 로그는 3.1.6 기능인데 함대는 전원 3.1.5 → 전 PC 0줄
+    → '눌렀다' / '갔다' / '됐다' 가 전부 구분 불가능했다(§A2 그 자체).
+    이 함수 + GET /updater/commands/recent 가 최소한 ★'갔다'★ 를 보이게 한다.
+
+    ★테넌트 필터는 여기서 하지 않는다★ — main 테넌트는 접두어가 ★없어서★
+    LIKE 'prefix%' 로 좁히면 prefix 가 빈 문자열이 되어 ★남의 테넌트까지 전부★ 걸린다.
+    (초판이 그렇게 짰다가 스스로 잡았다.) 호출부가 ns_of() 로 걸러 쓴다.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT id, pc_id, command, args, status, created_at, updated_at
+            FROM updater_commands
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        try:
+            args = json.loads(r["args"])
+        except Exception:
+            args = {}
+        out.append({
+            "id": r["id"], "pc_id": r["pc_id"], "command": r["command"],
+            "args": args, "status": r["status"],
+            "created_at": r["created_at"], "updated_at": r["updated_at"],
+        })
+    return out
+
+
 async def ack_updater_command(cmd_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
