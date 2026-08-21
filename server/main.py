@@ -7629,7 +7629,24 @@ async def updater_check(request: Request):
     # updater 자가 업데이트 체크
     updater_info = ver.get("updater", {})
     server_updater_ver = updater_info.get("version", "0.0.0")
-    if server_updater_ver != client_updater_ver:
+    # ★★업데이터는 ★올라갈 때만★ 준다 — 다운그레이드 금지 (2026-08-22 사고 146-b)★★
+    #   옛 조건은 문자열 `!=` 였다. 그런데 업데이터 클라는 자가업데이트를 ★최우선★ 으로
+    #   돌리고 성공하면 sys.exit() 한다(client/updater.py:858-861) — 즉 자가업데이트가
+    #   걸리면 그 회차 ★매크로 exe 업데이트에 영영 도달하지 못한다.★
+    #   실측 지뢰: 소스는 UPDATER_VERSION="3.1.6"(client/updater.py:34) 인데
+    #   version.json 의 updater 는 3.1.5 다. 3.1.6 을 빌드해 함대에 깔면
+    #     함대 3.1.6 → 서버가 "3.1.5 로 바꿔라" → 자가업데이트 → 재시작 → 다시 3.1.6…
+    #   ★전 함대가 매크로 업데이트를 영원히 못 받는 무한 루프★ 가 된다.
+    #   되돌리기가 정말 필요하면 version.json 의 updater 버전을 ★더 큰 수★ 로 올린다.
+    def _vtup(s):
+        out = []
+        for p in str(s or "0").split("."):
+            try:
+                out.append(int(p))
+            except Exception:
+                out.append(-1)      # 숫자가 아니면 가장 낮게 — 미지 버전으로 되돌리지 않는다
+        return tuple(out)
+    if server_updater_ver != client_updater_ver and _vtup(server_updater_ver) > _vtup(client_updater_ver):
         result["updater_update"] = {
             "version":      server_updater_ver,
             "sha256":       updater_info.get("sha256"),
