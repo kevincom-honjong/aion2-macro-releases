@@ -3871,7 +3871,15 @@ async function sendCmd(pc_id, command, args={}) {
 }
 
 async function bulkCmd(command, args={}) {
-  if (command === 'start') args = Object.assign({}, args, {rotate: false});   // ★A7★
+  // ★★어떤 ▶시작이든 순환을 무장한다 (2026-08-21 주인님 지시)★★
+  //   원문: "야 그러면 내가 오늘 새벽에도 전체를 선택하고 시작을해서 무장이 안되서
+  //          순환이 안됐다는얘기잖아 뭔시작을눌러도 순환하게 바꿔나"
+  //   ★무슨 일이 있었나★ 예전엔 여기서 rotate:false 를 실어 일괄/다중선택 start 가
+  //   순환을 ★일부러 껐다.★ A7("한 클릭으로 함대 전원 무장")을 막으려던 것이었는데,
+  //   그 결과 2026-08-21 새벽 주인님이 전체선택 → ▶시작을 누르셨을 때 함대 전원이
+  //   ★무장 없이★ 돌았고, 완주한 13대가 정보수집도 계정전환도 못 한 채 8시간을 섰다.
+  //   주인님이 허용목록을 '*' 로 전체 개방하셨으므로 그 방어의 근거도 사라졌다.
+  //   → sendCmd 의 rotate:true 를 그대로 통과시킨다(여기서 덮어쓰지 않는다).
   const ids=Object.keys(state);
   if(!ids.length){showToast('연결된 PC 없음');return;}
   await Promise.all(ids.map(id=>sendCmd(id,command,args)));
@@ -3879,13 +3887,16 @@ async function bulkCmd(command, args={}) {
   loadCmdHistory();
 }
 
-// ★★일괄/다중선택 start 는 순환을 무장하지 않는다 (2026-08-20 최종검증 🔴3)★★
-//   sendCmd 가 start 에 rotate:true 를 붙이는데, selCmd 는 '전체선택 → ▶시작' 한 클릭으로
-//   ★함대 전원★ 을 태운다(확인창도 없다). 그건 CLAUDE.md A7 이 금지한 바로 그 규모다.
-//   Object.assign({rotate:true}, args) 라 ★caller 가 이긴다★ — 여기서 false 를 실으면 막힌다.
-//   순환 무장은 ★카드 하나를 골라 누르는 경로(cardCmd)★ 에만 남긴다.
+// ★★[폐기됨] 일괄/다중선택 start 는 순환을 무장하지 않는다 (2026-08-20 → 2026-08-21 철회)★★
+//   옛 근거: selCmd 는 '전체선택 → ▶시작' 한 클릭으로 함대 전원을 태우니 A7 위반이다.
+//   ★왜 철회했나 (주인님 지시)★
+//     "뭔시작을눌러도 순환하게 바꿔나"
+//   그리고 그 방어가 실제로 만든 피해가 더 컸다 — 2026-08-21 새벽 전체선택 시작이
+//   ★무장 없이★ 나가 완주한 13대가 정보수집·계정전환 없이 8시간을 섰다.
+//   허용목록도 '*' 로 전체 개방됐으므로 '몰래 전원 무장' 이라는 우려 자체가 없어졌다.
+//   ★A7 은 여전히 유효하다★ — 다만 그건 ★사람이 버튼을 누르는 것★ 이 아니라
+//   ★내가 스크립트로 쏘는 것★ 을 막는 규칙이다(a7guard.py). 여기는 사람의 클릭이다.
 async function selCmd(command, args={}) {
-  if (command === 'start') args = Object.assign({}, args, {rotate: false});
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const n=selectedPcs.size;
   await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
