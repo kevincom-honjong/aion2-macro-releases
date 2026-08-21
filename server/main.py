@@ -3792,8 +3792,22 @@ async function selUpdaterCmd(command, args={}) {
   //   주인님: "내가 업데이트를 눌러도 뭐 업데이트를 안 하는데 우짜냐 이거"
   if(failed.length){
     showToast(`⛔ ${n}대 중 ${failed.length}대 전송 실패: ${failed.slice(0,5).join(', ')}${failed.length>5?'…':''}`);
+  } else if(command === 'update'){
+    // ★★서버가 ★지금 무슨 버전을 광고 중인지★ 를 같이 보여준다 (사고 146)★★
+    //   릴리스 직후 ~10분은 /check 가 옛 버전을 광고한다(_version_cache 300초 + raw 엣지 캐시).
+    //   그 창에서 누르면 서버가 exe_update 를 빼고 주고 업데이터는 '최신' 으로 조용히 끝낸다.
+    //   버전을 눈으로 보면 "왜 안 올라가지" 를 1초에 판정할 수 있다.
+    let tail = '';
+    try {
+      const h = await (await fetch('/health')).json();
+      if (h && h.serving_exe) {
+        const age = Math.round(h.version_cache_age_s || 0);
+        tail = ` · 서버가 광고 중인 버전 ${h.serving_exe} (캐시 ${age}초 전)`;
+      }
+    } catch(e) {}
+    showToast(`✓ ${n}대에 update 전송됨${tail}`);
   } else {
-    showToast(`✓ ${n}대 업데이터 ${command} 전송됨 (선택 해제) — 적용은 '업데이터 명령' 판에서 확인`);
+    showToast(`✓ ${n}대 업데이터 ${command} 전송됨 (선택 해제)`);
   }
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 중복 명령 방지★
 }
