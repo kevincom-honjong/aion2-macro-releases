@@ -3231,6 +3231,25 @@ function groupAcctMaps(base){
 function isGooglePlat(v){
   return /구글|google/i.test(String(v||''));
 }
+// ★★카드 계정줄을 '아이디' 가 아니라 ★플랫폼★ 으로 적는다 (2026-08-21 주인님 지시)★★
+//   원문: "대시보드 카드 밑에 계정해서 계정 나오는거 플램폼으로 표시하는게 나을거같다
+//          NC 면 NC, 전화번호면 전화번호, 구글이면 구글"
+//   ★왜 나은가★ 아이디는 길고(`selp9qsw539mh8r@naver.com`) 잘려서 식별이 안 되는데,
+//   정작 운영에서 필요한 정보는 ★어떤 방식으로 로그인하는 계정인가★ 다.
+//   구글이면 CDP 로그인에 세션 이관이 필요하고(§C1), 전화번호면 또 다르다.
+//   실측 값(2026-08-21 함대 23대): 'NC' · '전화번호' · '구글' 세 가지.
+//   아이디는 title 툴팁에 그대로 남겨 마우스만 올리면 확인된다.
+const PLAT_STYLE = [
+  [/구글|google/i,            '구글',    'text-amber-300/90'],
+  [/전화|폰|phone|mobile/i,   '전화번호', 'text-emerald-300/90'],
+  [/^\s*NC\s*$|엔씨|플레이엔씨|plaync/i, 'NC', 'text-sky-300/90'],
+];
+function platLabel(v){
+  const t = String(v||'').trim();
+  if (!t) return null;
+  for (const [re, label, cls] of PLAT_STYLE) if (re.test(t)) return {label, cls};
+  return {label: t, cls: 'text-gray-300/90'};   // 모르는 값도 그대로 보여준다(숨기지 않는다)
+}
 function acctNumOf(pcid){
   const c = (pcid||'').slice(-1);
   return 'bcd'.includes(c) ? ({b:2,c:3,d:4}[c]) : ((state[pcid]||{}).acct_num || 1);
@@ -3379,12 +3398,14 @@ function acctRow(pc){
   const maps = groupAcctMaps(baseId(pc.pc_id));
   const id = pc.acct_id || maps.ids[n] || '';
   const srv = maps.servers[n] || pc.acct_server || '';
-  // 플랫폼이 구글이면 아이디 대신 '구글' (툴팁에는 실제 아이디를 남겨 식별은 되게)
+  // ★아이디 대신 플랫폼★ (툴팁에는 실제 아이디를 남겨 식별은 되게)
   const plat = maps.plats[n] || '';
-  const shown = isGooglePlat(plat) ? '구글' : id;
+  const pl   = platLabel(plat);
+  const shown = pl ? pl.label : id;
+  const shownCls = pl ? pl.cls : '';
   return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
       <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
-      <span class="truncate${isGooglePlat(plat)?' text-amber-300/80':''}" title="${esc(id)}">${esc(shown)}</span>
+      <span class="truncate ${shownCls}" title="${esc(id || plat)}">${esc(shown)}</span>
       ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
       ${srv?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(srv)}</span>`:''}
     </div>`;
