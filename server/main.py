@@ -8448,6 +8448,14 @@ async def _rot_engine() -> None:
     print("[순환] 엔진 시작")
     while True:
         try:
+            # ★★소실 감시는 `if _ROT:` ★밖★ 에서 돈다 (2026-08-21 적대검증이 잡음)★★
+            #   초판은 _rot_save() 안에서만 불렀는데, _rot_save 는 아래 `if _ROT:` 블록
+            #   안에서만 호출된다. 그래서 ★마지막 한 대가 사유 없이 사라지면★ 다음 틱에
+            #   _ROT 가 비어 블록을 통째로 건너뛰고 → 감시기가 영영 안 돌아 ★침묵★ 한다.
+            #   하필 그게 이 장치를 만든 이유(PC-17, 무장 1대 상태에서 사라짐)와 같은 상황이다.
+            #   같은 파일 N2 주석이 이미 경고한 함정인데(_rot_note_boot 만 force 우회를 넣었다)
+            #   감시기에는 그 우회를 안 넣었다.
+            _rot_watch_vanish()
             if _ROT:
                 by_tenant: dict[str, list[str]] = {}
                 for k in list(_ROT):
