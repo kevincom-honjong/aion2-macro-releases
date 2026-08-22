@@ -6267,7 +6267,10 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
         if _drop:
             print(f"[명령] set_info 마스킹본 {len(_drop)}칸 제외(재배달) — {_drop}")
         return {**dict(args), "kv": _kv}
-    if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
+    # ★kill_game 추가 (2026-08-22)★ — 파섹으로 본컴 작업관리자를 열어 게임을 죽인다.
+    #   peer_id 가 없으면 붙을 본컴이 없어 시작조차 못 한다(switch_launcher 와 같은 린치핀).
+    if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host",
+                       "kill_game"):
         return dict(args)
     out = dict(args)
     # ★★peer_id 는 ★무조건★ 주소록으로 덮어쓴다 (2026-08-19 실사고, PC-21)★★
