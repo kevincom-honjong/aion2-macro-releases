@@ -1384,7 +1384,17 @@ async def set_setting_ep(key: str, request: Request):
     val_raw = str(body.get("value", ""))
     # rental_kill은 테넌트 나열이라 100자 상한이 이름을 중간에서 잘라 '무경고 킬 누락/오차단'을
     # 만들 수 있다(리뷰 2026-08-06 major) — 이 키만 1000자. 나머지 설정은 기존 100자 유지.
-    val = val_raw[:1000] if key == "rental_kill" else val_raw[:100]
+    # ★★키마다 상한이 다르다 — 넘치면 ★조용히 잘려서★ 값이 깨진다★★
+    #   rental_kill : 테넌트 나열이라 100자면 이름이 중간에서 잘려 '무경고 킬 누락/오차단'
+    #                 (리뷰 2026-08-06 major)
+    #   ai_dungeon_done : ★AI 던전 추천의 완료 체크★ (2026-08-22). {"day":"...","keys":[...]}
+    #                 형태이고 캐릭이 150명대라 100자는 ★수십 배 부족★ 하다.
+    #                 100자로 자르면 JSON 이 깨져 파싱 실패 → 체크가 매번 초기화된다
+    #                 (직원분들이 "체크했는데 사라진다" 를 겪게 된다). 배포 전 게이트에서 잡음.
+    _CAP = {"rental_kill": 1000, "ai_dungeon_done": 8000}
+    val = val_raw[:_CAP.get(key, 100)]
+    if len(val_raw) > len(val):
+        print(f"[설정] ★{key} 값이 상한({_CAP.get(key,100)})을 넘어 잘렸다★ — {len(val_raw)}자")
     await set_setting(ns(tenant, key), val)
     # 렌탈 킬스위치(2026-08-06): main 세션의 rental_kill 저장 즉시 메모리 반영.
     # 지인 테넌트가 같은 키를 저장해도 자기 네임스페이스 설정일 뿐 여기 안 닿는다.
@@ -2220,6 +2230,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <span class="brand-sub hidden md:inline">HONJONG COMMAND</span>
   <button onclick="openVietnamModal()" class="px-3 py-1 rounded-lg text-sm font-semibold bg-red-700/70 hover:bg-red-600 text-white transition-colors whitespace-nowrap">Việt Nam</button>
   <div class="ml-auto flex items-center gap-3">
+    <!-- ★★AI 던전 추천 (2026-08-22 주인님 지시)★★
+         원문: "직원들이 존나 헷갈려하고있어 오늘 어떤 캐릭터의 던전을 돌아야할지
+                그래서 내가 그걸 일일이 얘기해주는건 너무 번잡하고 내가 부재일때가 있으니까"
+         → 사람이 매일 불러주던 판단을 화면이 대신한다. 기준은 주인님이 준 그대로:
+           ①일일 에너지(앞 숫자)를 먼저 태운다  ②구독 계정이 2배 효율  ③파워 30만+ 만 투입 -->
+    <button id="ai-btn" onclick="openAiPlan()" class="px-3 py-1 rounded-lg text-xs font-extrabold bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white transition-colors whitespace-nowrap shadow" title="오늘 어느 계정의 어느 캐릭으로 던전을 돌면 좋은지 — 지금 정보수집 상태 기준">🤖 AI</button>
     <button id="tts-btn" onclick="toggleTts()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors whitespace-nowrap">🔇 음성 꺼짐</button>
     <button onclick="toggleVoicePanel()" class="px-2 py-1 rounded-lg text-xs bg-gray-700/70 hover:bg-gray-600 text-gray-300 transition-colors" title="설정 — 파섹 계정 · 목소리">⚙ 설정</button>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
@@ -2585,6 +2601,24 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 </div>
 
 <!-- 버그 모달 -->
+<!-- ★★AI 던전 추천 모달 (2026-08-22)★★ 기본 언어 = 베트남어(직원분들), 한국어 전환 가능 -->
+<div id="ai-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-4xl max-h-[92vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
+      <h2 class="font-extrabold text-lg text-fuchsia-300" id="ai-title">🤖 Hầm ngục hôm nay</h2>
+      <div class="flex items-center gap-2">
+        <button onclick="setAiLang('vi')" id="ai-lang-vi" class="text-xs px-2 py-1 rounded bg-fuchsia-700 text-white font-bold">🇻🇳 VI</button>
+        <button onclick="setAiLang('ko')" id="ai-lang-ko" class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 font-bold">🇰🇷 KO</button>
+        <button onclick="renderAiPlan()" id="ai-refresh" class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200">↻</button>
+        <button onclick="document.getElementById('ai-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-300 text-2xl leading-none px-1">&times;</button>
+      </div>
+    </div>
+    <div class="px-5 py-2 border-b border-gray-800 shrink-0 text-xs text-gray-400" id="ai-summary"></div>
+    <div class="overflow-y-auto px-5 py-3 grow" id="ai-body"></div>
+    <div class="px-5 py-3 border-t border-gray-800 shrink-0 text-[11px] text-gray-500" id="ai-foot"></div>
+  </div>
+</div>
+
 <div id="bug-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
   <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-2xl max-h-[90vh] flex flex-col">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
@@ -4731,6 +4765,169 @@ async function requestLogs() {
 }
 
 // ─── 토스트 ──────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★AI 던전 추천 (2026-08-22 주인님 지시)★★
+//
+//   주인님 원문: "직원들이 존나 헷갈려하고있어 오늘 어떤 캐릭터의 던전을 돌아야할지
+//     … 내가 그걸 일일이 얘기해주는건 너무 번잡하고 내가 부재일때가 있으니까 힘들어"
+//
+//   ★기준은 주인님이 준 그대로다 (추측 금지)★
+//     · 오드에너지 `840(+115)/840` 에서
+//         앞 숫자   = ★매일 차는 에너지★ → 이걸 먼저 태워야 안 버린다
+//         괄호 안   = 아이템으로 충전해둔 별도 에너지 (급하지 않다)
+//         분모      = ★계정 단위★ 속성. 840=구독 / 560=구독 해제
+//     · 구독이면 던전 한 판에 80 소모 = ★2배로 돈다★ → 우선순위 위
+//     · 구독 해제면 한 판 40 + 거래소 판매 불가 + 원격창고 불가
+//     · ★파워 전투력 300,000 이상만 던전 투입★ (주인님 운영 기준)
+//
+//   ★계정 단위다★ — 주인님: "840 560 이게 계정단위야 캐릭터단위가 아니라".
+//   그래서 계정(카드)으로 묶고, 구독 배지는 계정에 붙인다.
+//
+//   완료 체크는 ★서버★ 에 저장한다 — 직원이 여러 명이라 브라우저에 두면 공유가 안 된다.
+//   게임일은 ★새벽 5시★ 기준(주인님 지시). 5시 전이면 전날로 친다.
+// ═══════════════════════════════════════════════════════════════════════════
+let aiLang = localStorage.getItem('aiLang') || 'vi';   // ★기본 베트남어 (직원분들)★
+let aiDone = { day: '', keys: [] };
+
+const AI_T = {
+  vi: { title:'🤖 Hầm ngục hôm nay', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
+        power:'Lực', energy:'Năng lượng', runs:'lượt', bonus:'thêm', done:'Xong',
+        acct:'Tài khoản', slot:'Ô', total:'Tổng', chars:'nhân vật',
+        warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
+        empty:'Chưa có dữ liệu. Hãy chạy "정보수집" trước.',
+        foot:'Tiêu chuẩn: Lực ≥ 300,000 · ưu tiên tài khoản có đăng ký · dùng hết năng lượng hằng ngày trước. Đánh dấu Xong sẽ được lưu, tự reset lúc 5 giờ sáng.',
+        summary:(a,c,r)=>`${a} tài khoản · ${c} nhân vật · còn ${r} lượt` },
+  ko: { title:'🤖 오늘의 던전', sub:'구독 O', nosub:'구독 X',
+        power:'파워', energy:'에너지', runs:'판', bonus:'보너스', done:'완료',
+        acct:'계정', slot:'슬롯', total:'합계', chars:'캐릭',
+        warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
+        empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
+        foot:'기준: 파워 30만 이상 · 구독 계정 우선 · 매일 차는 에너지부터 소모. 완료 체크는 저장되며 새벽 5시에 리셋됩니다.',
+        summary:(a,c,r)=>`계정 ${a}개 · 캐릭 ${c}명 · 남은 ${r}판` },
+};
+
+// ★게임일 — 새벽 5시 경계 (주인님 지시)★ 5시 전이면 전날로 친다.
+function aiGameDay(){
+  const d = new Date();
+  if (d.getHours() < 5) d.setDate(d.getDate() - 1);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+// `840(+115)/840` → {daily:840, bonus:115, max:840}. 못 읽으면 null.
+function aiParseOdd(s){
+  const m = String(s||'').match(/^\s*([\d,]+)\s*(?:\(\+?([\d,]+)\))?\s*\/\s*([\d,]+)/);
+  if(!m) return null;
+  const n = v => parseInt(String(v||'0').replace(/,/g,''), 10) || 0;
+  return { daily:n(m[1]), bonus:n(m[2]), max:n(m[3]) };
+}
+
+async function aiLoadDone(){
+  try{
+    const r = await fetch('/setting/ai_dungeon_done');
+    const j = await r.json();
+    const v = JSON.parse(j.value || '{}');
+    // ★게임일이 바뀌었으면 통째로 버린다 = 새벽 5시 리셋★
+    aiDone = (v && v.day === aiGameDay()) ? {day:v.day, keys:v.keys||[]} : {day:aiGameDay(), keys:[]};
+  }catch(e){ aiDone = {day:aiGameDay(), keys:[]}; }
+}
+
+async function aiSaveDone(){
+  aiDone.day = aiGameDay();
+  try{
+    await fetch('/setting/ai_dungeon_done', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({value: JSON.stringify(aiDone)})});
+  }catch(e){ showToast('⛔ 완료 체크 저장 실패'); }
+}
+
+async function aiToggleDone(key, el){
+  const i = aiDone.keys.indexOf(key);
+  if (i >= 0) aiDone.keys.splice(i,1); else aiDone.keys.push(key);
+  await aiSaveDone();
+  renderAiPlan();
+}
+
+function setAiLang(l){
+  aiLang = l; localStorage.setItem('aiLang', l);
+  document.getElementById('ai-lang-vi').className = 'text-xs px-2 py-1 rounded font-bold ' + (l==='vi'?'bg-fuchsia-700 text-white':'bg-gray-700 text-gray-300');
+  document.getElementById('ai-lang-ko').className = 'text-xs px-2 py-1 rounded font-bold ' + (l==='ko'?'bg-fuchsia-700 text-white':'bg-gray-700 text-gray-300');
+  renderAiPlan();
+}
+
+async function openAiPlan(){
+  document.getElementById('ai-modal').classList.remove('hidden');
+  await aiLoadDone();
+  setAiLang(aiLang);
+}
+
+// ★항상 지금 정보수집 상태로 다시 계산한다 (주인님 지시)★ — 캐시하지 않는다.
+function aiBuildPlan(){
+  const acc = {};
+  (charTableData||[]).forEach(r => {
+    const oe = aiParseOdd(r.odd_energy);
+    if (!oe) return;                                   // 오드 미수집 캐릭은 판단 불가 → 제외
+    const pc = r.pc_id || '';
+    if (!acc[pc]) acc[pc] = {pc, max:0, chars:[]};
+    acc[pc].max = Math.max(acc[pc].max, oe.max);       // ★계정 단위 속성★
+    acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
+                        daily:oe.daily, bonus:oe.bonus});
+  });
+  const out = [];
+  Object.values(acc).forEach(a => {
+    const sub = a.max >= 840;
+    const per = sub ? 80 : 40;
+    const elig = a.chars.filter(c => c.pw >= 300000).sort((x,y) => y.daily - x.daily);
+    if (!elig.length) return;
+    elig.forEach(c => { c.runs = Math.floor(c.daily / per); c.key = a.pc + ':' + c.slot; });
+    out.push({pc:a.pc, sub, per, max:a.max, chars:elig,
+              runsLeft: elig.reduce((s,c) => s + (aiDone.keys.includes(c.key) ? 0 : c.runs), 0)});
+  });
+  // ★구독 계정 먼저★(2배 효율) → 남은 판수 많은 순
+  out.sort((x,y) => (y.sub - x.sub) || (y.runsLeft - x.runsLeft));
+  return out;
+}
+
+function renderAiPlan(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  document.getElementById('ai-title').textContent = T.title;
+  document.getElementById('ai-foot').textContent = T.foot;
+  const plan = aiBuildPlan();
+  const body = document.getElementById('ai-body');
+  if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
+                      document.getElementById('ai-summary').textContent = ''; return; }
+  const nChar = plan.reduce((s,a)=>s+a.chars.length,0);
+  const nRun  = plan.reduce((s,a)=>s+a.runsLeft,0);
+  document.getElementById('ai-summary').textContent = T.summary(plan.length, nChar, nRun);
+  let h = '';
+  plan.forEach(a => {
+    const badge = a.sub
+      ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399" class="px-2 py-0.5 rounded text-xs font-bold">${T.sub} · ${a.per}/${T.runs}</span>`
+      : `<span style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid #f87171" class="px-2 py-0.5 rounded text-xs font-bold">${T.nosub} · ${a.per}/${T.runs}</span>`;
+    h += `<div class="mb-3 rounded-lg border ${a.sub?'border-gray-700':'border-red-900/60'} bg-gray-800/40">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60">
+        <span style="font-size:16px;font-weight:800;color:#fff">${esc(baseId(a.pc))}</span>
+        ${acctTagSpread(a.pc)}
+        ${badge}
+        <span class="ml-auto text-xs text-gray-400">${T.total} <b class="text-fuchsia-300">${a.runsLeft}</b> ${T.runs}</span>
+      </div>`;
+    if (!a.sub) h += `<div class="px-3 py-1 text-[11px] text-red-300">${T.warn}</div>`;
+    a.chars.forEach(c => {
+      const done = aiDone.keys.includes(c.key);
+      h += `<div class="flex items-center gap-2 px-3 py-1.5 ${done?'opacity-40':''}">
+        <input type="checkbox" ${done?'checked':''} onchange="aiToggleDone('${c.key}', this)"
+               style="width:18px;height:18px;accent-color:#a855f7;cursor:pointer">
+        <span class="text-xs text-gray-500 w-10">${T.slot}${c.slot}</span>
+        <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem">${esc(c.name)}</span>
+        <span class="text-xs text-gray-400">${T.power} <b class="text-amber-300">${c.pw.toLocaleString()}</b></span>
+        <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
+        <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
+        <span class="ml-auto text-sm font-extrabold ${done?'text-gray-600':'text-fuchsia-300'}">${c.runs}${T.runs}</span>
+      </div>`;
+    });
+    h += `</div>`;
+  });
+  body.innerHTML = h;
+}
+
 // ─── 음성 알림 (TTS) ─────────────────────────────────────────────────────────
 // 브라우저 내장 speechSynthesis. 서버는 텍스트만 보내고 발화는 전부 여기서 한다.
 // ★자동재생 정책: 사용자 제스처 없이 speak()를 처음 부르면 크롬이 무시한다.
@@ -5324,7 +5521,11 @@ function renderCharTable() {
       <td colspan="23" class="px-3 py-2 font-bold text-gray-100"><!-- ★colspan=컬럼 수와 동기★ 회랑 열 추가 때 22 그대로라 마지막 열 위가 빈칸(사용자: "회랑 위에 아무것도 없고 짤려있다") -->
         <div class="flex items-center gap-2">
           <span id="pc-arrow-${pc}">▶</span>
-          <span>${baseId(pc)}</span><!-- ★접미사(PC-20b) 노출 금지(사용자) — 계정은 태그가 말한다★ -->
+          <!-- ★PC 이름도 같이 키운다 (2026-08-22 주인님 지시)★
+               "숫자동그라미는 잘나왔는데 이제 PC가 잘안보인다 저것도 글자 키우고 가시성이 좋게해"
+               ★뱃지만 키우면 옆 글자가 상대적으로 작아 보인다★ — 한쪽을 키우면 짝도 같이 봐야 한다.
+               26px 뱃지에 맞춰 17px/800 + 흰색으로. 접미사(PC-20b)는 계속 감춘다(계정은 뱃지가 말한다). -->
+          <span style="font-size:17px;font-weight:800;color:#ffffff;letter-spacing:.01em;">${baseId(pc)}</span>
           ${acctTagSpread(pc)}
           ${serverTag}${kinaTag}${acctIdTag(pc)}
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
