@@ -6270,7 +6270,10 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     # ★kill_game 추가 (2026-08-22)★ — 파섹으로 본컴 작업관리자를 열어 게임을 죽인다.
     #   peer_id 가 없으면 붙을 본컴이 없어 시작조차 못 한다(switch_launcher 와 같은 린치핀).
     if command not in ("switch_launcher", "acct_tour", "switch_account", "find_host",
-                       "kill_game"):
+                       # ★plrow_shot 추가 (2026-08-22)★ — 계정줄 템플릿 촬영도
+                       #   connect_parsec 를 타므로 peer_id + 파섹 자격증명이 필요하다.
+                       #   ★chrome_view 로는 못 한다★ — 파섹 로그인 화면에서 멈춘다(실측).
+                       "kill_game", "plrow_shot"):
         return dict(args)
     out = dict(args)
     # ★★peer_id 는 ★무조건★ 주소록으로 덮어쓴다 (2026-08-19 실사고, PC-21)★★
