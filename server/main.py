@@ -4790,20 +4790,18 @@ let aiLang = localStorage.getItem('aiLang') || 'vi';   // ★기본 베트남어
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
-  vi: { title:'🤖 Hầm ngục hôm nay', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
-        power:'Lực', energy:'Năng lượng', runs:'lượt', bonus:'thêm', done:'Xong',
-        acct:'Tài khoản', slot:'Ô', total:'Tổng', chars:'nhân vật',
+  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm',
+        slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
-        empty:'Chưa có dữ liệu. Hãy chạy "정보수집" trước.',
-        foot:'Tiêu chuẩn: Lực ≥ 300,000 · ưu tiên tài khoản có đăng ký · dùng hết năng lượng hằng ngày trước. Đánh dấu Xong sẽ được lưu, tự reset lúc 5 giờ sáng.',
-        summary:(a,c,r)=>`${a} tài khoản · ${c} nhân vật · còn ${r} lượt` },
-  ko: { title:'🤖 오늘의 던전', sub:'구독 O', nosub:'구독 X',
-        power:'파워', energy:'에너지', runs:'판', bonus:'보너스', done:'완료',
-        acct:'계정', slot:'슬롯', total:'합계', chars:'캐릭',
+        empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
+        foot:'Lực ≥ 300,000 · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
+        summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
+  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스',
+        slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
-        foot:'기준: 파워 30만 이상 · 구독 계정 우선 · 매일 차는 에너지부터 소모. 완료 체크는 저장되며 새벽 5시에 리셋됩니다.',
-        summary:(a,c,r)=>`계정 ${a}개 · 캐릭 ${c}명 · 남은 ${r}판` },
+        foot:'파워 30만 이상 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
+        summary:(a,c,d)=>`계정 ${a}개 · 캐릭 ${c}명 · 완료 ${d}` },
 };
 
 // ★게임일 — 새벽 5시 경계 (주인님 지시)★ 5시 전이면 전날로 친다.
@@ -4874,15 +4872,20 @@ function aiBuildPlan(){
   const out = [];
   Object.values(acc).forEach(a => {
     const sub = a.max >= 840;
-    const per = sub ? 80 : 40;
     const elig = a.chars.filter(c => c.pw >= 300000).sort((x,y) => y.daily - x.daily);
     if (!elig.length) return;
-    elig.forEach(c => { c.runs = Math.floor(c.daily / per); c.key = a.pc + ':' + c.slot; });
-    out.push({pc:a.pc, sub, per, max:a.max, chars:elig,
-              runsLeft: elig.reduce((s,c) => s + (aiDone.keys.includes(c.key) ? 0 : c.runs), 0)});
+    elig.forEach(c => { c.key = a.pc + ':' + c.slot; });
+    // ★★정렬은 완료 체크와 ★무관★ 해야 한다 (2026-08-22 주인님 지시)★★
+    //   원문: "지금 체크하면 목록에서 없어진단말이야? 그러지말고 체크해도 그자리에 있게"
+    //   ★초판 버그★ — 정렬 키를 '아직 안 한 것의 합' 으로 잡아서, 체크하는 순간 그 계정의
+    //   점수가 떨어지고 ★목록이 통째로 재정렬★ 됐다. 사람 눈에는 '사라진' 것으로 보인다.
+    //   작업 목록에서 자리가 움직이면 지금 어디까지 했는지를 잃는다 — 체크는 ★표시만★ 이고
+    //   순서는 화면을 연 시점 그대로 고정한다.
+    out.push({pc:a.pc, sub, max:a.max, chars:elig,
+              energy: elig.reduce((s,c) => s + c.daily, 0)});   // 완료와 무관한 고정 키
   });
-  // ★구독 계정 먼저★(2배 효율) → 남은 판수 많은 순
-  out.sort((x,y) => (y.sub - x.sub) || (y.runsLeft - x.runsLeft));
+  // ★구독 계정 먼저★(2배 효율) → 그 안에서 일일 에너지 많은 순. 체크해도 안 바뀐다.
+  out.sort((x,y) => (y.sub - x.sub) || (y.energy - x.energy));
   return out;
 }
 
@@ -4895,32 +4898,33 @@ function renderAiPlan(){
   if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
                       document.getElementById('ai-summary').textContent = ''; return; }
   const nChar = plan.reduce((s,a)=>s+a.chars.length,0);
-  const nRun  = plan.reduce((s,a)=>s+a.runsLeft,0);
-  document.getElementById('ai-summary').textContent = T.summary(plan.length, nChar, nRun);
+  const nDone = plan.reduce((s,a)=>s+a.chars.filter(c=>aiDone.keys.includes(c.key)).length,0);
+  document.getElementById('ai-summary').textContent = T.summary(plan.length, nChar, `${nDone}/${nChar}`);
   let h = '';
   plan.forEach(a => {
     const badge = a.sub
-      ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399" class="px-2 py-0.5 rounded text-xs font-bold">${T.sub} · ${a.per}/${T.runs}</span>`
-      : `<span style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid #f87171" class="px-2 py-0.5 rounded text-xs font-bold">${T.nosub} · ${a.per}/${T.runs}</span>`;
+      ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399" class="px-2 py-0.5 rounded text-xs font-bold">${T.sub}</span>`
+      : `<span style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid #f87171" class="px-2 py-0.5 rounded text-xs font-bold">${T.nosub}</span>`;
+    const aDone = a.chars.filter(c=>aiDone.keys.includes(c.key)).length;
     h += `<div class="mb-3 rounded-lg border ${a.sub?'border-gray-700':'border-red-900/60'} bg-gray-800/40">
       <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60">
         <span style="font-size:16px;font-weight:800;color:#fff">${esc(baseId(a.pc))}</span>
         ${acctTagSpread(a.pc)}
         ${badge}
-        <span class="ml-auto text-xs text-gray-400">${T.total} <b class="text-fuchsia-300">${a.runsLeft}</b> ${T.runs}</span>
+        <span class="ml-auto text-xs ${aDone===a.chars.length?'text-emerald-400 font-bold':'text-gray-400'}">${aDone}/${a.chars.length}</span>
       </div>`;
     if (!a.sub) h += `<div class="px-3 py-1 text-[11px] text-red-300">${T.warn}</div>`;
     a.chars.forEach(c => {
       const done = aiDone.keys.includes(c.key);
-      h += `<div class="flex items-center gap-2 px-3 py-1.5 ${done?'opacity-40':''}">
+      // ★체크해도 자리는 그대로★ — 흐리게 + 취소선으로만 표시한다(정렬은 위에서 고정).
+      h += `<div class="flex items-center gap-2 px-3 py-1.5" style="${done?'opacity:.45':''}">
         <input type="checkbox" ${done?'checked':''} onchange="aiToggleDone('${c.key}', this)"
-               style="width:18px;height:18px;accent-color:#a855f7;cursor:pointer">
+               style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
         <span class="text-xs text-gray-500 w-10">${T.slot}${c.slot}</span>
-        <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem">${esc(c.name)}</span>
+        <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
         <span class="text-xs text-gray-400">${T.power} <b class="text-amber-300">${c.pw.toLocaleString()}</b></span>
         <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
         <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
-        <span class="ml-auto text-sm font-extrabold ${done?'text-gray-600':'text-fuchsia-300'}">${c.runs}${T.runs}</span>
       </div>`;
     });
     h += `</div>`;
