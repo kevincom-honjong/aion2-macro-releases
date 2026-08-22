@@ -2329,8 +2329,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          캐릭터 수를 본다. 대수는 툴팁과 아래 '온라인' 섹션 헤더에 남아 있다. -->
     <div class="stat-tile tile-green">
       <div class="stat-icon">🖥️</div>
-      <div class="stat-num text-green-400" id="cnt-online" title="온라인 PC들이 맡고 있는 캐릭터 수">0</div>
-      <div class="stat-label">온라인 캐릭</div>
+      <div class="stat-num text-green-400" id="cnt-online" title="함대가 굴리는 전체 캐릭터 수 (뒷카드·오프라인 PC 포함)">0</div>
+      <div class="stat-label">캐릭터</div>
     </div>
     <div class="stat-tile tile-blue">
       <div class="stat-icon">✅</div>
@@ -3708,10 +3708,19 @@ function refreshSummary(pcs) {
       const b = baseId(p.pc_id || '');
       (grp[b] = grp[b] || []).push(p);
     });
+    // ★★온라인 여부로 묶음을 건너뛰지 않는다 (2026-08-22 주인님 지시)★★
+    //   주인님: "온라인캐릭터 말고 문구를 캐릭터로 바꾸고 카드 뒤의 캐릭터들도
+    //            모두포함해서 집계를 하도록하게해"
+    //   ★무엇이 틀렸나★ 뒷카드(other_account)는 이미 합치고 있었는데, 그 앞에
+    //   `anyOn` 게이트가 있어서 ★묶음에 온라인 카드가 하나도 없으면 통째로 건너뛰었다.★
+    //   실측(2026-08-22 16:1x): 표시 122 / 실제 153 — 차이 31.
+    //     PC-17(6) · PC-19(9) · PC-20(8) · PC-21(8) 이 빠졌다.
+    //     직원분들이 대시보드에서 끈 PC 들이라 카드가 전부 offline/other_account 였다.
+    //   ★이 숫자는 '지금 몇 대가 켜져 있나' 가 아니라 '내가 굴리는 캐릭이 몇인가' 다.★
+    //   PC 를 껐다고 캐릭터가 사라지는 게 아니므로 온라인 여부와 무관하게 전부 센다.
+    //   (대수 정보는 아래 '온라인' 섹션 헤더와 이 칸 툴팁에 그대로 남는다)
     let n = 0;
     Object.values(grp).forEach(list => {
-      const anyOn = list.some(p => (STATUS_CFG[p.status || 'offline'] || STATUS_CFG.offline).online);
-      if (!anyOn) return;
       list.forEach(p => {
         const dp = p.daily_progress || [];
         n += dp.length || ((p.chars && p.chars.length) || 0);
@@ -3728,7 +3737,9 @@ function refreshSummary(pcs) {
   });
   const elOn = document.getElementById('cnt-online');
   elOn.textContent = c.onlineChars;
-  elOn.title = `온라인 PC ${c.online}대가 맡고 있는 캐릭터 ${c.onlineChars}명 (오프라인 ${c.offline}대)`;
+  // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
+  elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
+             + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
   document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
   document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
   document.getElementById('cnt-trade-kina').textContent=tradeSeen ? fmtKinaKor(totalTrade) : '–';
