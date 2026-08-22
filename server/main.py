@@ -4861,14 +4861,33 @@ function setAiLang(l){
 //   · ★구글은 눈에 띄게★ — 지뢰 C1: 구글 계정은 CDP 자동 로그인이 구조적으로 안 되고
 //     사람이 직접 해야 한다. 색을 달리해 '이건 손이 더 간다' 를 미리 알린다
 //   · 아이디는 ★보고 타이핑하는 값★ 이라 monospace + user-select:all (클릭 한 번에 전체 선택)
+// info.txt 의 플랫폼 표기(NC / 전화번호 / 구글 …)를 현재 언어로. 모르는 값은 원문 유지.
+function aiPlatLabel(raw){
+  const v = String(raw||'').trim();
+  if (!v) return '';
+  if (/구글|google/i.test(v))            return aiLang==='vi' ? 'Google'      : '구글';
+  if (/전화|폰|핸드폰|phone|번호/i.test(v)) return aiLang==='vi' ? 'Số điện thoại' : '전화번호';
+  if (/카카오|kakao/i.test(v))            return aiLang==='vi' ? 'Kakao'       : '카카오';
+  if (/네이버|naver/i.test(v))            return aiLang==='vi' ? 'Naver'       : '네이버';
+  if (/애플|apple/i.test(v))              return aiLang==='vi' ? 'Apple'       : '애플';
+  if (/^\s*nc\s*$/i.test(v) || /엔씨|플레이엔씨|plaync/i.test(v)) return 'NC';
+  return v;                                  // ★모르는 값은 함부로 안 바꾼다★ — 원문이 정보다
+}
 function aiAcctInfo(pcid){
   const n  = acctNumOf(pcid);
   const M  = groupAcctMaps(baseId(pcid));
   const st = state[pcid] || {};
   const id   = st.acct_id || M.ids[n] || '';
-  const plat = (st.acct_platforms && st.acct_platforms[n]) || M.plats[n] || '';
+  let   plat = (st.acct_platforms && st.acct_platforms[n]) || M.plats[n] || '';   // ★let★ — 아래에서 번역해 덮는다
   if (!id && !plat) return '';
   const goog = isGooglePlat(plat);
+  // ★★플랫폼도 번역한다 (2026-08-22 주인님 지적)★★
+  //   주인님: "베트남어로 보여야하는데 전화번호랑 구글은 한글이면 어떻게 ㅋㅋㅋ"
+  //   ★i18n 은 '내가 쓴 문장' 만 번역하고 끝나기 쉽다★ — info.txt 에서 올라온 값
+  //   (NC / 전화번호 / 구글)은 데이터라서 번역 대상에서 빠져 있었다.
+  //   화면에 뜨는 글자는 출처가 어디든 그 화면 언어여야 한다.
+  //   info.txt 표기가 흔들리므로(구글/google/Google 계정 …) 부분일치로 본다.
+  plat = aiPlatLabel(plat);
   const pchip = plat
     ? `<span style="background:${goog?'rgba(234,179,8,.22)':'rgba(59,130,246,.20)'};`
       + `color:${goog?'#fde047':'#93c5fd'};border:1px solid ${goog?'#eab308':'#60a5fa'};`
@@ -4876,7 +4895,7 @@ function aiAcctInfo(pcid){
     : '';
   const idtxt = id
     ? `<span style="font-family:ui-monospace,Consolas,monospace;font-size:14px;font-weight:700;`
-      + `color:#e5e7eb;user-select:all;cursor:text" title="클릭하면 전체 선택됩니다">${esc(id)}</span>`
+      + `color:#e5e7eb;user-select:all;cursor:text" title="${aiLang==='vi'?'Nhấp để chọn toàn bộ':'클릭하면 전체 선택'}">${esc(id)}</span>`
     : '';
   return `<span style="display:inline-flex;align-items:center;gap:6px">${pchip}${idtxt}</span>`;
 }
