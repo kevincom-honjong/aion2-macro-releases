@@ -4851,6 +4851,36 @@ function setAiLang(l){
   renderAiPlan();
 }
 
+// ★★계정 헤더에 '플랫폼 + 아이디' 를 크게 (2026-08-22 주인님 지시)★★
+//   원문: "애들이 얘기하는게 컴퓨터에서 계정변경하는게 바로 눈에 안보인다고하니까
+//          PC-01 구독 옆에 플랫폼이랑 아이디 빡 적어주는게 좋을거같아"
+//   ★이 팝업은 '작업 지시서' 다★ — 직원분은 이걸 보고 ★그 PC 에서 계정을 바꾼다.★
+//   그런데 어느 아이디로 바꿔야 하는지가 없으면, 결국 다시 물어봐야 한다
+//   (이 기능을 만든 이유 자체가 '물어보는 걸 없애는 것' 이었다).
+//   · 플랫폼(NC / 전화번호 / 구글)은 로그인 화면이 서로 달라서 먼저 알아야 한다
+//   · ★구글은 눈에 띄게★ — 지뢰 C1: 구글 계정은 CDP 자동 로그인이 구조적으로 안 되고
+//     사람이 직접 해야 한다. 색을 달리해 '이건 손이 더 간다' 를 미리 알린다
+//   · 아이디는 ★보고 타이핑하는 값★ 이라 monospace + user-select:all (클릭 한 번에 전체 선택)
+function aiAcctInfo(pcid){
+  const n  = acctNumOf(pcid);
+  const M  = groupAcctMaps(baseId(pcid));
+  const st = state[pcid] || {};
+  const id   = st.acct_id || M.ids[n] || '';
+  const plat = (st.acct_platforms && st.acct_platforms[n]) || M.plats[n] || '';
+  if (!id && !plat) return '';
+  const goog = isGooglePlat(plat);
+  const pchip = plat
+    ? `<span style="background:${goog?'rgba(234,179,8,.22)':'rgba(59,130,246,.20)'};`
+      + `color:${goog?'#fde047':'#93c5fd'};border:1px solid ${goog?'#eab308':'#60a5fa'};`
+      + `padding:1px 7px;border-radius:6px;font-size:12px;font-weight:800;flex:none">${esc(plat)}</span>`
+    : '';
+  const idtxt = id
+    ? `<span style="font-family:ui-monospace,Consolas,monospace;font-size:14px;font-weight:700;`
+      + `color:#e5e7eb;user-select:all;cursor:text" title="클릭하면 전체 선택됩니다">${esc(id)}</span>`
+    : '';
+  return `<span style="display:inline-flex;align-items:center;gap:6px">${pchip}${idtxt}</span>`;
+}
+
 async function openAiPlan(){
   document.getElementById('ai-modal').classList.remove('hidden');
   await aiLoadDone();
@@ -4907,10 +4937,11 @@ function renderAiPlan(){
       : `<span style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid #f87171" class="px-2 py-0.5 rounded text-xs font-bold">${T.nosub}</span>`;
     const aDone = a.chars.filter(c=>aiDone.keys.includes(c.key)).length;
     h += `<div class="mb-3 rounded-lg border ${a.sub?'border-gray-700':'border-red-900/60'} bg-gray-800/40">
-      <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60 flex-wrap">
         <span style="font-size:16px;font-weight:800;color:#fff">${esc(baseId(a.pc))}</span>
         ${acctTagSpread(a.pc)}
         ${badge}
+        ${aiAcctInfo(a.pc)}
         <span class="ml-auto text-xs ${aDone===a.chars.length?'text-emerald-400 font-bold':'text-gray-400'}">${aDone}/${a.chars.length}</span>
       </div>`;
     if (!a.sub) h += `<div class="px-3 py-1 text-[11px] text-red-300">${T.warn}</div>`;
