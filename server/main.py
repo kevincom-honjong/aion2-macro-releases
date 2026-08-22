@@ -3211,7 +3211,27 @@ function acctTagSpread(pcid){
   // 자기 카드에 없으면 전 계정 지도에서 — 접속 안 한 계정도 아이디가 나온다
   // ★아이디는 여기서 안 붙인다 (2026-08-18 사용자 지시: '서버 돈 아이디 순')★
   //   순서를 바꾸려면 조각이 나뉘어 있어야 한다 — 태그는 '계정 N' 만 책임진다.
-  return `<span class="text-purple-300 text-xs font-normal">계정 ${n}</span>`;
+  //
+  // ★★'계정 N' 글자 → ★색깔 동그라미 숫자★ (2026-08-22 주인님 지시)★★
+  //   원문: "PC-09 계정1 계정2 이렇게 나와있는데 이거 존나 보기힘들어 …
+  //          1 에 동그라미 쳐져잇는거 그거 색깔 해가지고 좀크게 보일수잇게 바꿔"
+  //   ★왜 안 보였나★ 10~12px 보라 글씨 하나라 PC 이름·서버·키나·아이디 사이에 묻혔다.
+  //   스프레드는 ★PC 하나에 계정 줄이 여러 개★ 쌓이는 화면이라, 지금 보는 줄이 몇 번
+  //   계정인지가 제일 먼저 읽혀야 한다. 크기(26px)·굵기·색으로 분리한다.
+  //   색은 카드 칩(acctChip)과 ★같은 규약★ 을 쓴다 — 두 화면에서 계정1 이 다른 색이면
+  //   그게 더 헷갈린다: 1=초록 2=보라 3=청록 4=주황.
+  //   ★Tailwind 클래스 대신 인라인 스타일★ — 퍼지(purge)로 색 클래스가 빠져도
+  //   이 뱃지는 반드시 보여야 한다(안 보이면 이 수정의 목적 자체가 사라진다).
+  const AC = {
+    1: {fg:'#6ee7b7', bg:'rgba(16,185,129,.20)', bd:'#34d399'},   // 초록
+    2: {fg:'#c4b5fd', bg:'rgba(139,92,246,.20)', bd:'#a78bfa'},   // 보라
+    3: {fg:'#5eead4', bg:'rgba(20,184,166,.20)', bd:'#2dd4bf'},   // 청록
+    4: {fg:'#fcd34d', bg:'rgba(245,158,11,.20)', bd:'#fbbf24'},   // 주황
+  }[n] || {fg:'#d1d5db', bg:'rgba(107,114,128,.20)', bd:'#9ca3af'};
+  return `<span title="계정 ${n}" style="display:inline-flex;align-items:center;justify-content:center;`
+       + `width:26px;height:26px;border-radius:9999px;border:2px solid ${AC.bd};`
+       + `background:${AC.bg};color:${AC.fg};font-size:15px;font-weight:800;line-height:1;`
+       + `flex:none;">${n}</span>`;
 }
 // 계정 아이디만 따로 — 스프레드 헤더에서 ★서버·돈 다음★에 놓는다 (2026-08-18 사용자 지시)
 function acctIdTag(pcid){
