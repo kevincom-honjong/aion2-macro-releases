@@ -8335,6 +8335,40 @@ ROT_COLLECT_MAX  = 420.0              # 정보수집 대기 ★하한★ (실제
 ROT_COLLECT_PER_CHAR = 150.0          # 캐릭 1명당 여유(초) — 실측 98초/캐릭 + 50% 여유
 ROT_COLLECT_HARD_MAX = 1800.0         # 캐릭이 아무리 많아도 30분
 ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작) 대기 상한
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★★사고 188 (2026-08-24) — 순환이 ★자기가 일으킨 재시작★ 에 자살한다★★
+#
+# ★실사고 (PC-23, 07:47~07:50)★
+#   07:47:51  [순환] 계정2 로 전환 시작            ← expect_restart=True (20분)
+#   07:50:06  런처 14/14 완주 (128초, 실패 0)
+#   07:50:37  원격컴 크롬도 'b' 로 전환 완료
+#   07:50:53  [순환] 계정2 로 전환 완료 → ▶시작    ← ★expect_restart 를 지웠다★
+#   07:50:58  [BOOT#68ff966458d1] 매크로 기동      ← 전환이 일으킨 바로 그 재시작
+#   07:50:53  [순환] 매크로가 재시작돼 순환을 해제했습니다
+#   실측: /rotate 에 PC-01~22·24 는 전부 남고 ★PC-23 만 사라졌다.★
+#
+# ★왜★ 같은 사건의 신호 두 개가 ★서로 다른 속도의 경로★ 로 온다.
+#     '카드가 살아났다'  = WS 상태보고  → ★즉시★
+#     '[BOOT#uuid] 재시작' = 로그 30초 배치 → ★중앙값 55초 · 최대 278초★
+#       (같은 파일 _rot_note_boot 주석의 실측치. 81건 중 37건이 60초 이상)
+#   게다가 매크로는 ★재시작하기 전에★ 이미 새 계정 이름으로 상태를 보낸다
+#   (PC-23b 카드가 07:50:40 에 살아났고 실제 부팅은 07:50:58 이었다).
+#   그래서 아래 ③ 전환 대기 분기가 카드를 보자마자 expect_restart 를 False 로
+#   지우고, 뒤늦게 도착한 부팅 지문이 '사람이 껐다 켬' 으로 읽힌다.
+#   ★전환이 잘 될수록 확실하게 죽는다.★
+#
+# ★고치는 법★ 전환 확인은 기대를 ★지우는★ 게 아니라 ★짧게 줄이는★ 것이어야 한다.
+#   위 6655 줄(업데이트 재시작)이 이미 같은 처방을 쓰고 있었다 — 전환 경로에만
+#   안 넣었을 뿐이다. 5분이면 실측 최대 지연 278초를 덮는다. 5분이 지난 뒤의
+#   부팅은 진짜 '사람이 껐다 켬' 이므로 예전대로 순환을 해제한다(요구 1 유지).
+# ═════════════════════════════════════════════════════════════════════════════
+ROT_BOOT_GRACE   = 300.0              # 전환 확인 뒤 늦게 오는 부팅 지문을 삼킬 유예
+
+
+def _rot_boot_grace() -> dict:
+    """전환 확인 시점의 기대치 — 지우지 말고 5분으로 줄인다 (사고 188)."""
+    return {"expect_restart": True, "expect_until": _rot_now() + ROT_BOOT_GRACE}
 ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 # ★사냥 상한 < 무장 수명★ — 반대로 두면 TTL 이 먼저 걸려 사냥 상한 알람이 ★영원히 안 뜬다★
 #   (재검증 지적: ROT_HUNT_MAX 20h > ROT_TTL 18h 라 도달 불가 코드였다).
@@ -9247,7 +9281,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 if not _alive():
                     return
                 st.update({"stage": "tasking", "since": _rot_now(), "sent_at": _rot_now(),
-                           "busy": False, "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
+                           "busy": False, **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작")
                 return
             if age > ROT_SWITCH_MAX:
@@ -9259,7 +9293,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             s = str(active.get("status"))
             if s in ("hunting", "moving"):
                 st.update({"stage": "hunting", "since": _rot_now(),
-                           "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
+                           **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인")
                 return
             if s == "idle":
@@ -9275,7 +9309,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     #    미완 계정이 남아 있어도 거기서 끝 → 사용자 요구 4가 깨진다.)
                     st.update({"stage": "collecting", "since": _rot_now(),
                                "char_before": "", "skip_collect": True,
-                               "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
+                               **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
                     await _rot_say(tenant, base,
                                    f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다")
                     return
@@ -9286,7 +9320,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 if not _alive():
                     return
                 st.update({"stage": "starting", "since": _rot_now(),
-                           "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
+                           **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작")
                 return
             # ★★여기서 return 하면 아래 20분 상한이 ★영원히 평가되지 않는다★ [C1]★★
