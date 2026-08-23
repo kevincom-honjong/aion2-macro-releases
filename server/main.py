@@ -2594,10 +2594,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          ★짝이 안 맞아 스트림이 영영 안 뜬다★. 이제 한 번 누르면
          본컴 런처(파섹) → 원격컴 크롬 → 재시작 까지 이어서 간다.
          openCardMenu 가 열 때마다 있는 계정만 활성화 -->
-    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 1 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 1</button>
-    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 2 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 2</button>
-    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 3 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 3</button>
-    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 4 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 4</button>
+    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 1 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 1 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 1</button>
+    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 2 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 2 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 2</button>
+    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 3 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 3 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 3</button>
+    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 4 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 4 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 4</button>
     <!-- ★[🌐 크롬 제어모드 전환] 제거 (2026-08-23 주인님 지시)★
          함수 chromeCdpFromMenu() 와 chrome_cdp 원격명령은 남는다 —
          CDP 없는 PC 를 살릴 때 ops 스크립트로 여전히 쓴다. -->
@@ -6044,19 +6044,47 @@ async function fullAccountSwitch(id, n){
   // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
   const live = liveCardOf(base);
   const target = live ? live.pc_id : id;
-  // ★이미 그 계정이면 막는다★ — 본컴을 괜히 한 번 더 돌릴 이유가 없다
   const curAcct = ((target.match(/([bcd])$/)||[])[1]) || 'a';
-  if (curAcct === lab) { showToast(`${target} 는 이미 계정 ${n} 입니다`); return false; }
+  const same = (curAcct === lab);
+  // ══════════════════════════════════════════════════════════════════════════
+  // ★★'이미 그 계정' 이어도 막지 않는다 (2026-08-23 주인님 지시)★★
+  //   원문: "카드는 계정1로 되어잇는데 직원들이 작업하고 계정이 어딧는지 모른단말이지.
+  //          근데 난 이거 계정1을 틀고 싶거든 이런경우도있으니까,
+  //          카드 오른쪽 클릭해서 계정1도 전환할수있게 하긴해야돼"
+  //
+  //   ★왜 옛 가드가 틀렸나★ 카드의 계정은 ★매크로가 자기 info.txt 로 자칭하는 값★ 이다.
+  //   본컴 런처를 보고 정한 값이 아니다. 직원이 본컴에서 런처를 갈아놓으면
+  //   카드는 옛 계정 그대로고 ★짝이 어긋난 채로 굳는다.★ 그때 필요한 것이 바로
+  //   '같은 번호로 한 번 더' = 강제 재정렬인데, 그걸 대시보드가 막고 있었다.
+  //
+  //   ★풀어도 안전한 이유 — 매크로 코드 실측 (2026-08-23)★
+  //     · 본컴 : launcher_ctl._run_switch_locked 가 ★런처 드롭다운★ 으로 진짜 현재 계정을
+  //              읽는다(detect_host_acct). 다르면 바꾸고, 같으면 런처를 안 건드리고
+  //              [게임 실행]만 확인한다 → "skip · 이미 목표 계정(런처 무변경)"
+  //     · 원격컴: loot.py 가 chrome_label == config.ACCOUNT 면 "전환 생략"
+  //              → ★매크로 재시작이 아예 안 일어난다★
+  //   즉 정말 계정 N 이면 게임만 다시 확실히 켜지고, 아니면 제대로 교정된다.
+  //   ※ 상단 다중선택 [🔁 계정전환] 의 '이미 그 계정 제외' 는 ★그대로 둔다★ —
+  //     거기서 풀면 한 번에 수십 대의 게임을 재정렬한다. 이건 카드 한 장짜리 손잡이다.
+  if (same && !confirm(
+      `${base} 카드는 지금 ★계정 ${n}★ 으로 표시돼 있습니다.\n\n` +
+      `그래도 계정 ${n} 으로 ★강제 재정렬★ 할까요?\n\n` +
+      `· 본컴 런처를 ★직접 읽어서★ 계정 ${n} 이 아니면 바꿉니다\n` +
+      `· 맞으면 런처는 안 건드리고 게임만 다시 켭니다\n` +
+      `· 원격컴 크롬이 이미 계정 ${n} 이면 매크로 재시작은 하지 않습니다\n\n` +
+      `(카드 표시가 실제와 어긋났을 때 쓰는 손잡이입니다)`)) return false;
   const st = ((state[target]||{}).status)||'';
   if (st === 'hunting' && !confirm(`${target} 는 지금 사냥 중입니다.\n★게임을 먼저 끄는 게 맞습니다★ (웹플레이 Quit Game).\n그래도 보낼까요?`)) return false;
-  if (!confirm(`${base} → 계정 ${n} 전환\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n1~2분 걸립니다. 진행할까요?`)) return false;
+  if (!same && !confirm(`${base} → 계정 ${n} 전환\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n1~2분 걸립니다. 진행할까요?`)) return false;
   // ★한 방에★ — 본컴(런처) 먼저, 성공하면 매크로가 이어서 원격컴 크롬까지 바꾼다.
   //   peer_id·파섹 비번은 서버가 배달 직전에 채운다(enrich_cmd_args).
   //   acct_index=1 : 런처 드롭다운의 '다른 계정' 첫 줄. 계정 2개면 항상 맞다.
   //   ★3개 이상은 줄 간격 미실측★ — 빗나가면 매크로가 '계정 칩 안 바뀜'으로 잡아 실패 처리.
   const ok = await sendCmd(target, 'switch_launcher',
                            {acct_no: n, acct_index: 1, acct_label: `계정${n}`, chrome_label: lab});
-  showToast(ok ? `🔁 ${base} → 계정 ${n} 통짜 전환 시작 (본컴→원격컴, 결과는 텔레그램)` : '✗ 전송 실패');
+  showToast(ok ? (same ? `🔁 ${base} 계정 ${n} ★강제 재정렬★ 시작 (본컴 런처 확인 → 게임 실행)`
+                       : `🔁 ${base} → 계정 ${n} 통짜 전환 시작 (본컴→원격컴, 결과는 텔레그램)`)
+               : '✗ 전송 실패');
   loadCmdHistory();
   return ok;
 }
