@@ -2605,7 +2605,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <div id="ai-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
   <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-4xl max-h-[92vh] flex flex-col">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
-      <h2 class="font-extrabold text-lg text-fuchsia-300" id="ai-title">🤖 Hầm ngục hôm nay</h2>
+      <div class="flex items-center gap-2 flex-wrap">
+        <h2 class="font-extrabold text-lg text-fuchsia-300" id="ai-title">🤖 Hầm ngục hôm nay</h2>
+        <!-- ★상위/하위 던전 필터 (2026-08-23 주인님 지시)★ 기준 파워 280,000 -->
+        <button onclick="setAiFilter('hi')" id="ai-f-hi"
+                class="text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white"></button>
+        <button onclick="setAiFilter('lo')" id="ai-f-lo"
+                class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
+      </div>
       <div class="flex items-center gap-2">
         <button onclick="setAiLang('vi')" id="ai-lang-vi" class="text-xs px-2 py-1 rounded bg-fuchsia-700 text-white font-bold">🇻🇳 VI</button>
         <button onclick="setAiLang('ko')" id="ai-lang-ko" class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-300 font-bold">🇰🇷 KO</button>
@@ -4787,6 +4794,15 @@ async function requestLogs() {
 //   게임일은 ★새벽 5시★ 기준(주인님 지시). 5시 전이면 전날로 친다.
 // ═══════════════════════════════════════════════════════════════════════════
 let aiLang = localStorage.getItem('aiLang') || 'vi';   // ★기본 베트남어 (직원분들)★
+// ★★상위/하위 던전 (2026-08-23 주인님 지시)★★
+//   원문: "오늘의던전 옆에 상위던전 이라고 버튼 만들어서 그걸 눌렀을때 280k 이상 되는
+//          출력하면되고 그옆에 하위던전 버튼하나만들어서 그걸 눌렀을때는 280k 미만인
+//          애들 출력하게끔하면돼. 구독이나 오드에너지 말해준건 똑같이하고"
+//   → 파워 기준선 하나(280,000)로 목록을 둘로 가른다. 정렬·구독배지·에너지 표시·
+//     완료 체크는 ★손대지 않는다★ (완료 키가 'pc:slot' 이라 필터를 바꿔도 유지된다).
+//   기본은 '상위' — 기존 화면(30만 이상)과 가장 가깝다.
+const AI_PW_CUT = 280000;
+let aiFilter = localStorage.getItem('aiFilter') || 'hi';   // 'hi' = 280k 이상 / 'lo' = 미만
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
@@ -4794,13 +4810,17 @@ const AI_T = {
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
-        foot:'Lực ≥ 300,000 · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
+        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k',
+        foot:'Lực ≥ 280,000 · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
+        footLo:'Lực < 280,000 (hầm ngục cấp thấp) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu, tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
   ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스',
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
-        foot:'파워 30만 이상 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
+        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓',
+        foot:'파워 28만 이상 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
+        footLo:'파워 28만 미만(하위 던전) · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며 새벽 5시에 리셋됩니다.',
         summary:(a,c,d)=>`계정 ${a}개 · 캐릭 ${c}명 · 완료 ${d}` },
 };
 
@@ -4921,7 +4941,10 @@ function aiBuildPlan(){
   const out = [];
   Object.values(acc).forEach(a => {
     const sub = a.max >= 840;
-    const elig = a.chars.filter(c => c.pw >= 300000).sort((x,y) => y.daily - x.daily);
+    // ★파워 기준선 하나로 상/하위를 가른다 (2026-08-23)★ 나머지 규칙은 그대로.
+    const elig = a.chars
+      .filter(c => aiFilter === 'lo' ? c.pw < AI_PW_CUT : c.pw >= AI_PW_CUT)
+      .sort((x,y) => y.daily - x.daily);
     if (!elig.length) return;
     elig.forEach(c => { c.key = a.pc + ':' + c.slot; });
     // ★★정렬은 완료 체크와 ★무관★ 해야 한다 (2026-08-22 주인님 지시)★★
@@ -4938,10 +4961,27 @@ function aiBuildPlan(){
   return out;
 }
 
+// ★상/하위 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
+function setAiFilter(f){
+  aiFilter = (f === 'lo') ? 'lo' : 'hi';
+  try{ localStorage.setItem('aiFilter', aiFilter); }catch(e){}
+  renderAiPlan();
+}
+
 function renderAiPlan(){
   const T = AI_T[aiLang] || AI_T.vi;
   document.getElementById('ai-title').textContent = T.title;
-  document.getElementById('ai-foot').textContent = T.foot;
+  document.getElementById('ai-foot').textContent =
+    (aiFilter === 'lo' && T.footLo) ? T.footLo : T.foot;
+  // 필터 버튼 라벨 + 활성 표시
+  const bHi = document.getElementById('ai-f-hi'), bLo = document.getElementById('ai-f-lo');
+  if (bHi && bLo) {
+    bHi.textContent = T.fHi; bLo.textContent = T.fLo;
+    const on = 'text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white';
+    const off = 'text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300 hover:bg-gray-600';
+    bHi.className = (aiFilter === 'hi') ? on : off;
+    bLo.className = (aiFilter === 'lo') ? on : off;
+  }
   const plan = aiBuildPlan();
   const body = document.getElementById('ai-body');
   if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
