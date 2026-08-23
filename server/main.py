@@ -8363,11 +8363,34 @@ ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작)
 #   안 넣었을 뿐이다. 5분이면 실측 최대 지연 278초를 덮는다. 5분이 지난 뒤의
 #   부팅은 진짜 '사람이 껐다 켬' 이므로 예전대로 순환을 해제한다(요구 1 유지).
 # ═════════════════════════════════════════════════════════════════════════════
-ROT_BOOT_GRACE   = 300.0              # 전환 확인 뒤 늦게 오는 부팅 지문을 삼킬 유예
+# ★유예 길이★ 위 실측이 중앙값 55초·최대 278초(81표본)다. 300초면 표본 최대를
+#   1.08배로 덮을 뿐이라 꼬리가 넘는 건 시간문제다(적대리뷰 F1). 600초로 잡는다 —
+#   ★늘려도 안전한 이유는 아래 조건부 처리 때문★ 이다. 그게 없으면 늘리는 만큼
+#   "사람이 껐다 켬" 을 놓치는 창이 커진다.
+ROT_BOOT_GRACE   = 600.0              # 전환 확인 뒤 늦게 오는 부팅 지문을 삼킬 유예
 
 
-def _rot_boot_grace() -> dict:
-    """전환 확인 시점의 기대치 — 지우지 말고 5분으로 줄인다 (사고 188)."""
+def _rot_boot_grace(st: dict) -> dict:
+    """전환 확인 시점의 기대치 — ★아직 안 온 부팅에만★ 유예를 준다.
+
+    ★왜 조건부인가 (적대리뷰 F3 — 이게 없으면 §A7 을 깬다)★
+      초판은 전환 확인 때 유예를 ★무조건★ 다시 세웠다. 그런데 전환의 부팅 지문이
+      이미 switching 단계에서 도착해 소비된 경우가 있다(실측: PC-16·PC-22 는 그렇게
+      살아남았다). 그때 유예를 또 세우면 ★그 다음에 오는 부팅★ = 사람이 껐다 켠 것
+      까지 삼킨다. 그러면 순환이 살아남아 그 계정이 완주 상태일 때 자동으로
+      collect_info → switch_launcher 를 쏜다 = ★"켰을 뿐인데 계정이 넘어간다".★
+      2026-08-20 에 주인님이 정확히 이 모양을 프로그램 버그로 오해하셨다(§A7).
+
+    ★그래서★ expect_restart 가 아직 True(= 그 전환의 부팅을 아직 못 봤다) 일 때만
+      기한을 늘린다. 이미 소비됐으면 예전처럼 False 로 두어 다음 부팅이 정상적으로
+      순환을 해제하게 한다. 결과: 흔한 경우 노출 창 = 0, 늦게 오는 경우만 600초.
+
+    ★F4 (기한이 ROT_SWITCH_MAX 총창을 넘을 수 있다)★ 는 의도한 것이다. 전환이
+      느렸다는 건 로그 배송도 밀렸을 가능성이 크다는 뜻이라 여기서 깎으면 F1 이
+      되돌아온다. 상한은 이 기한이 아니라 ROT_SWITCH_MAX 알람이 따로 건다.
+    """
+    if not st.get("expect_restart"):
+        return {"expect_restart": False}      # 이미 그 부팅을 봤다 — 다시 세우지 않는다
     return {"expect_restart": True, "expect_until": _rot_now() + ROT_BOOT_GRACE}
 ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 # ★사냥 상한 < 무장 수명★ — 반대로 두면 TTL 이 먼저 걸려 사냥 상한 알람이 ★영원히 안 뜬다★
@@ -8739,8 +8762,22 @@ def _rot_note_boot(nspc: str, message: str) -> None:
         # ★만료 검사 [C2]★ — 기한이 지난 expect_restart 는 소비하지 않는다.
         #   기한 없이 삼키면 며칠 뒤 주인님이 껐다 켠 것까지 "전환 재시작" 으로 읽는다.
         st["expect_restart"] = False
-        st["since"] = now
-        print(f"[순환] {key} 재시작 확인 — 순환 유지")
+        # ★★단계 시계는 switching 일 때만 되감는다 (적대리뷰 F2)★★
+        #   수정 전에는 늦게 온 부팅이 순환을 ★죽였으므로★ 이 줄이 전환 이후 단계에서
+        #   돌 일이 없었다. 사고 188 수정으로 그 경로가 새로 열렸다. starting 단계에서
+        #   되감으면 ROT_START_MAX(420초) 알람이 최대 유예만큼 밀리고, collecting 도
+        #   같다. ★재시작이 실제로 되감는 것은 그 재시작을 기다리던 단계뿐이다.★
+        if str(st.get("stage") or "") == "switching":
+            st["since"] = now
+        # ★소비도 저장한다 (적대리뷰 F6 / N2 주석과 같은 부류)★ — 해제 경로만 force
+        #   저장을 걸고 있어서, 소비 직후 30초 안에 Railway 가 재시작하면
+        #   expect_restart=True 인 옛 상태가 부활해 ★다음 부팅을 또 삼킨다.★
+        try:
+            asyncio.create_task(_rot_save(force=True))
+        except Exception:
+            pass
+        _stg = st.get("stage")
+        print(f"[순환] {key} 재시작 확인 — 순환 유지 (stage={_stg})")
         return
     _ROT_GONE_WHY[key] = "사람이 껐다 켬(BOOT)"
     _ROT.pop(key, None)
@@ -9281,7 +9318,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 if not _alive():
                     return
                 st.update({"stage": "tasking", "since": _rot_now(), "sent_at": _rot_now(),
-                           "busy": False, **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
+                           "busy": False, **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작")
                 return
             if age > ROT_SWITCH_MAX:
@@ -9293,7 +9330,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             s = str(active.get("status"))
             if s in ("hunting", "moving"):
                 st.update({"stage": "hunting", "since": _rot_now(),
-                           **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
+                           **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인")
                 return
             if s == "idle":
@@ -9309,7 +9346,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     #    미완 계정이 남아 있어도 거기서 끝 → 사용자 요구 4가 깨진다.)
                     st.update({"stage": "collecting", "since": _rot_now(),
                                "char_before": "", "skip_collect": True,
-                               **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
+                               **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                     await _rot_say(tenant, base,
                                    f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다")
                     return
@@ -9320,7 +9357,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 if not _alive():
                     return
                 st.update({"stage": "starting", "since": _rot_now(),
-                           **_rot_boot_grace()})   # ★전환 확인 → 기대를 5분으로 축소 (사고 188)★
+                           **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작")
                 return
             # ★★여기서 return 하면 아래 20분 상한이 ★영원히 평가되지 않는다★ [C1]★★
