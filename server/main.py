@@ -6439,6 +6439,37 @@ async def send_command(pc_id: str, request: Request):
             _rot_result = {"armed": _ok, "why": _why}
             if not _ok:
                 print(f"[순환] {pc_id} 무장 거부: {_why}")
+        elif command in ("update", "update_only", "restart"):
+            # ══════════════════════════════════════════════════════
+            # ★★업데이트/재시작은 '사람이 껐다 켠 것' 이 아니다 (2026-08-23)★★
+            #
+            # ★실사고★ 주인님이 v1.1.644 전 함대 업데이트를 누르자 순환이 통째로 풀렸다.
+            #   디스크에는 14대가 무장돼 있는데 서버 메모리 _ROT 에는 1대만 남았다.
+            #   주인님: "위쪽 메뉴로 시작 눌럿는데 순환이 안떠있는데 괜찮은거지?"
+            #
+            # ★왜 풀렸나★ update 는 updater 에서 stop_macro() → start_macro() 다.
+            #   즉 ★새 부팅★ 이고 매크로가 새 부팅 지문 [BOOT#uuid] 을 보낸다.
+            #   _rot_note_boot 은 그걸 "사람이 껐다 켬" 으로 읽고 순환을 해제한다.
+            #   그 판정 자체는 옳다 — 사람이 끈 건 존중해야 한다. 다만
+            #   ★업데이트는 사람이 '끈' 게 아니라 '올린' 것★ 이고, 순환은 유지돼야 한다.
+            #
+            # ★고치는 법은 이미 있었다★ — 순환 엔진이 자기 재시작을 예고할 때 쓰는
+            #   expect_restart 를 여기서도 세워둔다. 그러면 뒤이어 오는 부팅 지문을
+            #   "예상된 재시작" 으로 소비하고 순환을 유지한다.
+            #   ★기한을 둔다★ — 기한 없이 세우면 며칠 뒤 사람이 껐다 켠 것까지 삼킨다
+            #   (그게 바로 8375 줄 주석이 경고하는 그 함정이다). 업데이트는 다운로드+
+            #   재기동까지 넉넉잡아 5분이면 끝난다.
+            # ══════════════════════════════════════════════════════
+            try:
+                _rk = ns(tenant, _base_pc(pc_id))
+                _rs = _ROT.get(_rk)
+                if _rs:
+                    _rs["expect_restart"] = True
+                    _rs["expect_until"] = _rot_now() + 300.0    # 5분
+                    await _rot_save(force=True)
+                    print(f"[순환] {_rk} {command} — 재시작 예고(5분) → 순환 유지")
+            except Exception as _ue:
+                print(f"[순환] {command} 재시작 예고 실패(무시): {_ue}")
         elif command in ("stop", "exit"):
             if _rot_disarm(tenant, pc_id, f"사람이 {command}"):
                 await _rot_save(force=True)
