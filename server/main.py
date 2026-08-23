@@ -3524,13 +3524,24 @@ function acctRow(pc){
   const maps = groupAcctMaps(baseId(pc.pc_id));
   const id = pc.acct_id || maps.ids[n] || '';
   const srv = maps.servers[n] || pc.acct_server || '';
-  // ★아이디 대신 플랫폼★ (툴팁에는 실제 아이디를 남겨 식별은 되게)
   const plat = maps.plats[n] || '';
   const pl   = platLabel(plat);
-  const shown = pl ? pl.label : id;
-  const shownCls = pl ? pl.cls : '';
+  // ★★NC 는 아이디를 다시 보여준다 (2026-08-23 주인님 지시)★★
+  //   원문: "계정1 NC 해가지고 아래 나오는곳에 NC는 아이디 다시 나오게 해놔줘"
+  //
+  //   ★왜 NC 만 되돌리나★ 2026-08-21 에 계정줄을 아이디→플랫폼으로 바꾼 이유는
+  //   '구글이냐 아니냐' 가 한눈에 보여야 해서였다(구글은 CDP 로그인이 구조적으로 막힌다, §C1).
+  //   그건 지금도 맞다. 그런데 ★함대 대부분이 NC★ 라 카드가 죄다 'NC' 로 똑같아져서
+  //   ★어느 계정인지 구분이 안 되는★ 부작용이 생겼다.
+  //   → 소수라서 라벨 자체가 신호인 구글·전화번호는 라벨을 유지하고,
+  //     다수라서 라벨이 신호가 못 되는 NC 는 아이디를 보여준다. 대신 작은 'NC' 표식은 남긴다.
+  const isNC     = !!(pl && pl.label === 'NC');
+  const useId    = (!pl || isNC) && !!id;
+  const shown    = useId ? id : (pl ? pl.label : id);
+  const shownCls = useId ? 'text-gray-400' : (pl ? pl.cls : '');
   return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
       <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
+      ${isNC ? `<span class="shrink-0 text-sky-300/80" style="font-size:10px" title="플랫폼: NC">NC</span>` : ''}
       <span class="truncate ${shownCls}" title="${esc(id || plat)}">${esc(shown)}</span>
       ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
       ${srv?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(srv)}</span>`:''}
@@ -6016,12 +6027,20 @@ function refreshAcctButtons(pc_id){
     const b = document.getElementById('cm-acct-'+n);
     if (!b) continue;
     const has = avail.has(n);
-    b.disabled = !has || n===cur;
-    b.style.opacity = b.disabled ? '0.35' : '';
+    // ★★현재 계정 버튼도 ★누를 수 있게★ 둔다 (2026-08-23 주인님 지시)★★
+    //   원문: "카드는 계정1로 되어잇는데 직원들이 작업하고 계정이 어딧는지 모른단말이지.
+    //          근데 난 이거 계정1을 틀고 싶거든 … 계정1도 전환할수있게 하긴해야돼"
+    //   ★막는 자리가 두 곳이었다★ — fullAccountSwitch 의 조기 return 만 풀었더니
+    //   버튼이 애초에 disabled 라 거기까지 가지도 못했다(주인님 스샷: '✓ 계정 1' 회색).
+    //   ★없는 계정만★ 막는다(info.txt 에 아이디/비번이 없는 칸). 현재 계정은 '강제 재정렬'
+    //   손잡이로 살려둔다 — 카드의 계정은 매크로의 자칭값이라 본컴과 어긋날 수 있다.
+    b.disabled = !has;
+    b.style.opacity = b.disabled ? '0.35' : (n===cur ? '0.8' : '');
     b.style.cursor = b.disabled ? 'not-allowed' : '';
     b.textContent = (n===cur ? '✓ 계정 ' : '계정 ') + n;
     b.title = !has ? 'info.txt에 이 계정의 아이디/비번이 없습니다'
-            : (n===cur ? '현재 접속 중인 계정' : `계정 ${n}로 통짜 전환 (본컴 런처 → 원격컴 크롬 → 재시작)`);
+            : (n===cur ? `카드상 현재 계정입니다. 눌러도 됩니다 — ★강제 재정렬★ (본컴 런처를 직접 읽어 계정 ${n} 이 아니면 바꾸고, 맞으면 게임만 다시 켭니다. 매크로 재시작 없음)`
+                       : `계정 ${n}로 통짜 전환 (본컴 런처 → 원격컴 크롬 → 재시작)`);
   }
 }
 async function switchAccountDirect(n){
@@ -8511,6 +8530,12 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "") -> tuple[bool, str]:
     → 대시보드 ▶시작만 args {"rotate": true} 를 싣고, 그게 있을 때만 무장한다.
     """
     base = _base_pc(pc_id)
+    # ★★가짜 PC 는 무장하지 않는다 (2026-08-23)★★
+    #   PC-TEST 는 배포 검증 스크립트가 /check 를 두드릴 때 쓰는 이름이라 카드로 남는데,
+    #   한 번 무장되면 ★영원히 사냥 중★ 이라 14시간 뒤 "사냥 단계가 14시간째입니다" 라는
+    #   유령 알람이 튀어나온다(2026-08-23 실제로 울렸다). 실체가 없으니 조치도 불가능하다.
+    if base.upper() in ("PC-TEST", "PC-DEMO"):
+        return False, f"{base} 는 검증용 가짜 PC — 순환 대상이 아님"
     allow = await _rot_allow(tenant)
     if not allow:
         return False, "허용 목록이 비어 있음 (POST /rotate/allow 로 대상 PC 지정 필요)"
