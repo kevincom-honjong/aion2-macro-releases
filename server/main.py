@@ -2247,7 +2247,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      되살리려면 아래 한 줄을 주석에서 꺼내면 된다 (openRentalModal·#rental-modal·
      loadRentalTenants 는 전부 그대로 남아 있다. loadRentalTenants 는 btn 이 없으면
      아무 것도 안 하도록 이미 가드가 있어 무해하다):
-  <button id="rental-btn" onclick="openRentalModal()" class="hidden px-3 py-1 rounded-lg text-xs font-semibold bg-rose-900/70 hover:bg-rose-700 text-rose-100 transition-colors whitespace-nowrap" title="대여 계정 관리 — 이용 중지/재개 (킬스위치)">🛑 렌탈</button>
+  <!-- ★[🛑 렌탈] 버튼 제거 (2026-08-23 주인님 지시)★ — 렌탈 사업 폐기.
+       ★모달과 킬스위치 서버 코드는 지우지 않는다★ (48h 유예 함정 — 지우면
+       휴면 테넌트가 다시 살아난다). 되살리려면 이 버튼만 다시 붙이면 된다. -->
      화면 없이 차단을 켜고 끄려면: POST /setting/rental_kill  {"value":"친구A"} / 해제 {"value":""} -->
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
@@ -2536,7 +2538,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
   <div class="cm-sec">ACTION</div>
   <div class="cm-grid2">
-    <button class="cm-btn chip-purple cm-span2" onclick="cardCmdSwitch()">⇄ 캐릭 전환...</button>
+    <!-- ★[⇄ 캐릭 전환...] 제거 (2026-08-23 주인님 지시 "안 쓸 것 같다")★
+         함수 cardCmdSwitch() 는 남겨둔다 — 되살릴 때 버튼만 다시 붙이면 된다. -->
     <button class="cm-btn chip-yellow" onclick="sellAllFromMenu()" title="전 캐릭 순회 판매 (상단 거래소가 확정 필요)">$ 판매</button>
     <button class="cm-btn chip-amber"  onclick="settleFromMenu()" title="전 캐릭 준비 — 정산 → 추출 → 개인/서버창고 보관 → 인벤정렬 → 귀환주문서 보충">🧰 준비</button>
     <button class="cm-btn chip-cyan"   onclick="collectInfoFromMenu()">📡 정보수집</button>
@@ -2560,7 +2563,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          갈아타며 "호스트가 살아있는 계정"을 찾아 스트리밍 직전에서 멈춘다(계정당 20~30초).
          계정 순회(위)와 혼동 금지 — 저건 본컴 런처 교체+재시작이라 20~40분이다. -->
     <button class="cm-btn chip-amber cm-span2" onclick="findHostFromMenu()" title="본PC가 지금 어느 계정으로 켜져 있는지 원격컴 크롬만으로 찾습니다(1~2분). 찾으면 ★스트리밍 직전★ 상태로 세워두고 멈춥니다. 본PC 런처는 건드리지 않습니다.">🔎 본컴 계정 찾기</button>
-    <button class="cm-btn chip-purple cm-span2" onclick="acctTourFromMenu()" title="계정 1→2→3→4 를 한 바퀴 돌며 각 계정에서 정보수집. 계정마다 본컴 런처+원격컴 크롬 전환+매크로 재시작이 들어가 ★20~40분★ 걸립니다. 중단은 ■정지">🔄 계정 순회 (정보수집)</button>
+    <!-- ★[🔄 계정 순회] 제거 (2026-08-23 주인님 지시)★ — 20~40분이 걸리고
+         서버 자동순환(rotate)과 역할이 겹친다. 함수 acctTourFromMenu() 는 남는다. -->
   </div>
   <div class="cm-sec">VIEW</div>
   <div class="cm-grid3">
@@ -2575,24 +2579,23 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   </div>
   <div class="cm-grid2">
     <button class="cm-btn chip-violet" id="cm-parsec-web" onclick="parsecWebFromMenu()" title="파섹 웹 — 새 탭으로 열립니다. ★탭을 여러 개 열면 여러 대를 동시에 볼 수 있습니다★ (설치 불필요, 크롬 전용, H.264). web.parsec.app 에 한 번 로그인해 두면 이후 자동 접속">🌐 파섹 웹</button>
-    <button class="cm-btn chip-purple" id="cm-parsec-app" onclick="parsecAppFromMenu()" title="파섹 앱 — 이 브라우저를 띄운 PC(관제컴)에 설치된 파섹이 열립니다. 화질·지연이 웹보다 좋지만 ★창은 한 번에 하나★라 누를 때마다 그 창이 갈아탑니다">🎮 파섹 앱</button>
+    <!-- ★[🎮 파섹 앱] 제거 (2026-08-23 주인님 지시)★ — 창이 한 번에 하나뿐이라
+         여러 대를 동시에 못 본다. 본컴 보기는 [🌐 파섹 웹] 하나로 통일. -->
   </div>
-  <!-- ★본컴 보기(2026-08-16)★ — 위 두 버튼은 '관제컴이' 본컴에 붙지만, 이건 ★원격컴이★
-       자기 크롬으로 본컴에 붙어 그 화면을 찍어 올린다. 런처 계정전환 자동화의 눈이다. -->
-  <button class="cm-btn chip-amber" id="cm-bonview" style="margin-top:5px;width:100%;display:block"
-          onclick="bonComViewFromMenu()"
-          title="원격컴 크롬(CDP)이 파섹 웹으로 본컴에 붙어 3장 찍어 버그폴더에 올립니다. ★사냥 중이면 거부됩니다★ — 크롬 CDP가 아직 아니면 재기동이 필요해 게임이 끊기기 때문입니다. ■ 정지 후 누르세요">🖥 본컴 화면 받기</button>
+  <!-- ★[🖥 본컴 화면 받기] 제거 (2026-08-23 주인님 지시)★ — [🌐 파섹 웹] 이 같은
+       화면을 더 빠르게 보여준다. 함수 bonComViewFromMenu() 와 chrome_view 원격명령은
+       그대로 남는다(매크로가 자동화 안에서 쓴다). -->
   <!-- ★[🔄 본컴 계정 전환] 제거(2026-08-16)★ — 위 ACTION 의 [계정 1~4] 가 같은 일을
        ★더 정확하게★ 한다(목표 계정 번호를 알아 이메일 줄 템플릿으로 찾는다).
        이 버튼은 '몇 번째 줄'만 물어봐서 acct_no 가 안 실렸고, 실제로 계정1 을 원하는데
        계정2 로 가는 사고를 냈다(2026-08-16 로그: 대상=계정#1(계정None)). -->
   <div class="cm-sec">UPDATER · 프로세스</div>
-  <div class="cm-grid4">
-    <button class="cm-btn chip-green"  onclick="updaterCmd('start')" title="매크로 프로세스 시작 (크래시된 PC 살리기)">▶</button>
-    <button class="cm-btn chip-gray"   onclick="updaterCmd('stop')" title="매크로 프로세스 강제종료">■</button>
-    <button class="cm-btn chip-red"    onclick="updaterCmd('exit')" title="업데이터 자체 종료 (원격제어 끊김 — 주의)">✕</button>
-    <button class="cm-btn chip-yellow" onclick="updaterCmd('restart')" title="매크로 프로세스 재시작">↺</button>
-  </div>
+  <!-- ★[▶ ■ ✕ ↺] 아이콘 4개 제거 (2026-08-23 주인님 지시)★
+       · ↺ 는 위 MACRO 의 [↺ 재시작] 과 ★완전히 같은 함수★ updaterCmd('restart') 였다
+       · ▶ ■ 는 MACRO 의 [▶시작] [■정지] 와 역할이 겹쳐 직원이 헷갈렸다
+       · ✕ 는 ★업데이터 자체를 끄는★ 버튼이라 잘못 누르면 그 PC 원격제어가 끊긴다
+         — 없애는 것이 사고 예방이다
+       업데이트 두 줄([↑ 업데이트+재시작] [⬆ 업데이트만])은 그대로 남는다. -->
   <div class="cm-grid2">
     <button class="cm-btn chip-cyan cm-span2"   onclick="updaterCmd('update')">↑ 업데이트+재시작</button>
     <button class="cm-btn chip-purple cm-span2" onclick="updaterCmd('update_only')">⬆ 업데이트만</button>
