@@ -929,11 +929,20 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             _rs = _ROT.get(_rk)
             if _rs:
                 pc["_rot"] = str(_rs.get("stage") or "")
+                # ★작업 순환이면 무슨 작업인지도 싣는다 (2026-08-23)★ — 뱃지가
+                #   "🔄 계정 전환중" 만 뜨면 사냥 순환인지 회랑 순환인지 구분이 안 된다.
+                _tk = str(_rs.get("task") or "")
+                if _tk:
+                    pc["_rot_task"] = ROT_TASK_LABEL.get(_tk, _tk)
                 # ★전환 목표도 싣는다 (2026-08-21 주인님 요청 "전환중이라는 표시")★
                 #   stage 만으로는 '어디로' 가 안 보여서 화면에서 진단이 안 된다.
-                _tg = _rs.get("target")
+                # ★★2026-08-23 수리: target 은 'b' 같은 ★글자★ 인데 int() 로 읽고 있었다.★★
+                #   ValueError 가 이 for 문을 감싼 except 에 먹혀서, ★전환 중인 PC 가
+                #   한 대라도 있으면 그 뒤 카드들은 _rot 를 통째로 못 받았다.★
+                #   증상: 순환은 도는데 대시보드에 순환 뱃지가 안 보인다(= 진단 불가).
+                _tg = str(_rs.get("target") or "")
                 if _tg:
-                    pc["_rot_target"] = int(_tg)
+                    pc["_rot_target"] = ("abcd".index(_tg) + 1) if _tg in "abcd" else 0
     except Exception:
         pass
     return statuses
@@ -1649,6 +1658,15 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     padding:8px 10px 6px;border:1px solid rgba(99,102,241,.22);border-radius:12px;
     background:linear-gradient(160deg,rgba(20,26,48,.55),rgba(10,14,28,.6))}
   .cmd-group:hover{border-color:rgba(129,140,248,.45)}
+  /* ★2026-08-23 주인님: "위쪽상단에 순환용이랑 선택카드만 하는거 두개로 나눠있는게 낫겟네"★
+     같은 이름의 버튼이 두 줄로 늘어서므로 ★색 테두리로 갈라놔야★ 직원이 안 헷갈린다.
+     순환 = 하늘색(전 계정을 돈다) / 선택 = 회색(그 카드 한 번). */
+  .cmd-rot{border-color:rgba(56,189,248,.5);
+    background:linear-gradient(160deg,rgba(8,47,73,.55),rgba(8,14,28,.65))}
+  .cmd-rot:hover{border-color:rgba(56,189,248,.9)}
+  .cmd-rot .cmd-legend{color:#7dd3fc;border-color:rgba(56,189,248,.55)}
+  .cmd-one{border-color:rgba(148,163,184,.3)}
+  .cmd-one .cmd-legend{color:#cbd5e1;border-color:rgba(148,163,184,.4)}
   .cmd-legend{position:absolute;top:-8px;left:10px;padding:1px 7px;border-radius:5px;
     font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:8px;font-weight:600;letter-spacing:.24em;
     color:#a5b4fc;background:#0b0f1f;border:1px solid rgba(99,102,241,.35);pointer-events:none}
@@ -2278,9 +2296,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
             title="선택한 PC들을 한꺼번에 지정 계정(1~4)으로 통짜 전환 — 각 PC가 ★본컴 런처(파섹) → 원격컴 크롬 → 매크로 재시작★ 까지 (물리 PC당 1건, 이미 그 계정인 PC는 제외, 대당 1~2분)">🔁 계정전환</button>
   </div>
 
-  <!-- 그룹 3: 콘텐츠 -->
-  <div class="cmd-group">
-    <span class="cmd-legend">CONTENT</span>
+  <!-- ★그룹 3: 전 계정 순환 (2026-08-23 주인님 지시)★
+       "일일던전 악몽 각성 회랑 정보수집은 다 피씨의 전체계정순환으로 되야할거야"
+       한 계정에서 작업이 끝나면 서버가 스스로 다음 계정으로 통짜 전환해 또 시킨다.
+       계정을 한 바퀴 다 돌면 자동 종료(텔레그램 ✅). ★물리 PC당 1건★ 으로 접어 보낸다. -->
+  <div class="cmd-group cmd-rot">
+    <span class="cmd-legend">🔁 전 계정 순환</span>
+    <button onclick="rotCmd('daily_dungeon')" class="chip chip-purple" title="선택 PC의 ★모든 계정★ 을 돌며 일일던전. 한 계정이 끝나면 자동으로 다음 계정으로 전환합니다">일일던전</button>
+    <button onclick="rotCmd('nightmare')" class="chip chip-pink" title="선택 PC의 ★모든 계정★ 을 돌며 악몽">악몽</button>
+    <button onclick="rotCmd('awakening')" class="chip chip-orange" title="선택 PC의 ★모든 계정★ 을 돌며 각성전">각성</button>
+    <button onclick="rotCmd('corridor')" class="chip chip-blue" title="선택 PC의 ★모든 계정★ 을 돌며 어비스 회랑">회랑</button>
+    <button onclick="rotCmd('collect_info')" class="chip chip-sky" title="선택 PC의 ★모든 계정★ 을 돌며 캐릭터 정보수집">정보수집</button>
+  </div>
+
+  <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
+  <div class="cmd-group cmd-one">
+    <span class="cmd-legend">🎯 선택 카드만</span>
     <button onclick="selCmd('daily_dungeon')" class="chip chip-purple">일일던전</button>
     <button onclick="selCmd('nightmare')" class="chip chip-pink">악몽</button>
     <button onclick="selCmd('awakening')" class="chip chip-orange">각성</button>
@@ -3376,18 +3407,22 @@ const ROT_CHIP = {
   switching : {t:'🔄 계정 전환중', c:'bg-amber-700/85 text-amber-100 border-amber-400', p:true},
   starting  : {t:'▶ 사냥 시작중',  c:'bg-green-800/80 text-green-100 border-green-500', p:true},
   hunting   : {t:'🔁 순환 ON',     c:'bg-purple-900/60 text-purple-300 border-purple-700', p:false},
+  // ★작업 순환 (2026-08-23)★ — 무슨 작업인지는 pc._rot_task 로 뒤에 붙는다
+  tasking   : {t:'🔁 순환',        c:'bg-sky-800/85 text-sky-100 border-sky-400',       p:true},
 };
 function rotChip(pc) {
   const r = ROT_CHIP[pc._rot];
   if (!r) return '';
   const tgt = pc._rot_target ? ` → 계정${pc._rot_target}` : '';
+  const tk  = pc._rot_task ? ` ${pc._rot_task}` : '';
   const title = pc._rot === 'switching'
       ? `계정 자동순환: 지금 계정을 바꾸는 중입니다${tgt}. 본컴 런처 → 원격컴 크롬 → 매크로 재시작 순서로 진행됩니다`
+      : (pc._rot === 'tasking'    ? `전 계정 순환${tk}: 이 계정에서 작업이 끝나기를 기다리는 중입니다. 끝나면 다음 계정으로 전환합니다`
       : (pc._rot === 'collecting' ? '계정 자동순환: 완주를 감지해 캐릭터 정보를 수집하는 중입니다'
       : (pc._rot === 'starting'   ? '계정 자동순환: 전환이 끝나 사냥을 시작하는 중입니다'
-      : '계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다'));
+      : '계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다')));
   return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${r.c}${r.p?' pulse':''}"
-                title="${title}">${r.t}${esc(tgt)}</span>`;
+                title="${title}">${r.t}${esc(tk)}${esc(tgt)}</span>`;
 }
 function buildCard(pc) {
   const st = pc.status||'offline';
@@ -4085,6 +4120,49 @@ async function selCmd(command, args={}) {
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
+}
+
+// ─── 전 계정 순환 (2026-08-23 주인님 지시) ──────────────────────────────────
+// ★왜 selCmd 와 따로 있나★
+//   주인님: "카드 오른쪽클릭해서 나오는 메뉴는 전부다 선택된 카드 … 그 계정에만 해당되는
+//            일을 시키는거고 대시보드 위에 나와있는건 다들 순환구조 느낌"
+//            "위쪽상단에 순환용이랑 선택카드만 하는거 두개로 나눠있는게 낫겟네"
+//   selCmd 는 고른 카드 그 계정에 한 번 쏘고 끝이다. rotCmd 는 ★rotate:true★ 를 실어서
+//   서버 순환 엔진을 무장시킨다 — 서버가 작업 끝을 보고 다음 계정으로 전환해 또 시킨다.
+//
+// ★물리 PC당 1건★ — 같은 PC 의 계정 카드가 여러 장 골라져도 매크로는 한 대뿐이다.
+//   오프라인 카드로 보내면 아무도 안 가져가는 고아 명령이 되므로 살아있는 카드로 접는다
+//   (switchAccountSelected · selUpdaterCmd 와 같은 이유·같은 방식).
+const ROT_TASK_LABEL = {daily_dungeon:'일일던전', nightmare:'악몽', awakening:'각성',
+                        corridor:'회랑', collect_info:'정보수집'};
+async function rotCmd(command) {
+  if(!selectedPcs.size){alert('PC를 선택하세요');return;}
+  const label = ROT_TASK_LABEL[command] || command;
+  const byBase = {};
+  for (const id of selectedPcs) {
+    const b = baseId(id);
+    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
+  }
+  const targets = Object.values(byBase).map(x => {
+    const live = liveCardOf(baseId(x.id));
+    return live ? live.pc_id : x.id;
+  });
+  if(!confirm(`${targets.length}대 → 🔁 전 계정 순환 「${label}」
+
+` +
+              `각 PC가 지금 계정에서 ${label} 을 하고, 끝나면 ★다음 계정으로 통짜 전환★ 해서 또 합니다.
+` +
+              `계정을 한 바퀴 다 돌면 자동으로 끝나고 텔레그램으로 알립니다.
+` +
+              `(계정 하나 넘어갈 때마다 본컴 런처 + 원격컴 크롬 + 매크로 재시작 = 1~2분)
+
+` +
+              `진행할까요?`)) return;
+  await Promise.all(targets.map(id=>sendCmd(id, command, {rotate:true})));
+  showToast(`🔁 ${targets.length}대 전 계정 순환 「${label}」 시작`);
+  loadCmdHistory();
+  clearSelection();   // 명령 전송 완료 = 선택 자동 해제 (selCmd 와 같은 규칙)
 }
 
 // ─── 멀티계정: 선택 PC 일괄 자동 전환 (2026-08-15 사용자: "멀티선택해서 한꺼번에") ───
@@ -6452,6 +6530,14 @@ async def send_command(pc_id: str, request: Request):
             _rot_result = {"armed": _ok, "why": _why}
             if not _ok:
                 print(f"[순환] {pc_id} 무장 거부: {_why}")
+        elif command in ROT_TASKS and bool((args or {}).get("rotate")):
+            # ★전 계정 순환 작업 (2026-08-23)★ 상단 [🔁 전 계정 순환] 버튼만 rotate 를 싣는다.
+            #   카드 우클릭·[🎯 선택 카드만] 은 rotate 가 없으므로 예전처럼 한 번만 하고 끝난다.
+            _ok, _why = await _rot_arm(tenant, pc_id, task=command)
+            await _rot_save(force=True)
+            _rot_result = {"armed": _ok, "why": _why}
+            if not _ok:
+                print(f"[순환] {pc_id} 작업순환({command}) 무장 거부: {_why}")
         elif command in ("update", "update_only", "restart"):
             # ══════════════════════════════════════════════════════
             # ★★업데이트/재시작은 '사람이 껐다 켠 것' 이 아니다 (2026-08-23)★★
@@ -8141,6 +8227,30 @@ ROT_TTL          = 18 * 3600.0        # 무장 자체의 수명 [C6-②] — 넘
 ROT_MAX_HOPS     = 12                 # 한 번 무장에 허용하는 계정 전환 횟수(마지막 그물)
 ROT_ARM_GRACE    = 90.0               # ★무장 직후 유예★ — 매크로가 그 start 를 소화할 시간
 ROT_BOOT_DEBOUNCE = 60.0              # 옛 판(마커 없는) 매크로용 [BOOT] 디바운스 [S2]
+# ══════════════════════════════════════════════════════════════════════════════
+# ★★작업 순환 (2026-08-23 주인님 지시)★★
+#   원문: "일일던전 악몽 각성 회랑 정보수집은 다 피씨의 전체계정순환으로 되야할거야"
+#         "위쪽상단에 순환용이랑 선택카드만 하는거 두개로 나눠있는게 낫겟네"
+#   → 상단 명령바가 두 벌이다. [🎯 선택 카드만] 은 예전 그대로 그 계정 한 번(selCmd),
+#     [🔁 전 계정 순환] 은 그 PC 의 ★모든 계정을 돌며★ 같은 작업을 한다(rotCmd).
+#
+#   완주 순환(사냥)과 ★같은 상태기계를 쓰되 단계가 둘뿐★ 이다: tasking → switching → tasking
+#     tasking   : 그 계정에서 작업이 끝나기를 기다린다
+#     switching : 다음 계정으로 통짜 전환(본컴 런처 + 원격컴 크롬 + 매크로 재시작)
+#
+#   ★완료 판정은 '상태가 쉬는 자리로 돌아왔는가' 다★ — 네 모듈 모두 끝에서
+#   report_status("idle") 을 부르고 config.running=False 로 사냥까지 내린다(실측):
+#     dungeon.py:261/586 · corridor.py:1569/1623 · nightmare.py:423/1220 · awakening.py:139/492
+#   그래서 idle 이 ★안정된 종착역★ 이다(작업 뒤에 사냥이 되살아나 idle 을 덮지 않는다).
+#   awakening_wait / nightmare_wait 는 "오늘 더 못 한다"라서 같이 종착으로 친다.
+ROT_TASKS = ("daily_dungeon", "nightmare", "awakening", "corridor", "collect_info")
+ROT_TASK_LABEL = {"daily_dungeon": "일일던전", "nightmare": "악몽", "awakening": "각성",
+                  "corridor": "회랑", "collect_info": "정보수집"}
+# ★'쉬는 자리' 목록에 paused 를 넣지 않는다★ — 일시정지는 사람이 잠깐 세운 것이지
+#   작업이 끝난 게 아니다. 넣으면 주인님이 화면 보려고 멈춘 순간 계정이 넘어간다.
+ROT_IDLE_SET = ("idle", "awakening_wait", "nightmare_wait")
+ROT_TASK_GRACE = 150.0                # 명령을 보내고 '바빠지기' 를 기다리는 시간
+ROT_TASK_MAX   = 90 * 60.0            # 한 계정에서 한 작업의 절대 상한
 _ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
 _ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
 _ROT_SAVED = ""                       # 마지막으로 DB 에 쓴 직렬화본(변경 없으면 안 쓴다)
@@ -8358,8 +8468,11 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
 
 
 # ── 무장 / 해제 ──────────────────────────────────────────────────────────────
-async def _rot_arm(tenant: str, pc_id: str) -> tuple[bool, str]:
+async def _rot_arm(tenant: str, pc_id: str, task: str = "") -> tuple[bool, str]:
     """▶시작 버튼을 누르면 무장. ★부팅이 아니라 사람의 '시작' 이 방아쇠★ (사용자 지시).
+
+    ★task 를 주면 '작업 순환' 이다 (2026-08-23)★ — 사냥 완주가 아니라 그 작업
+    (일일던전·악몽·각성·회랑·정보수집)을 PC 의 전 계정에 한 번씩 돌린다.
 
     ★A7-① 방어★ 초판은 `command == "start"` 면 발신자를 안 가리고 무장했다. 그런데
     /command 로 start 를 쏘는 것은 대시보드 버튼만이 아니다 — 운영 스크립트
@@ -8380,10 +8493,19 @@ async def _rot_arm(tenant: str, pc_id: str) -> tuple[bool, str]:
     #   전환 도중 ▶시작을 한 번 더 누르면 hops/visits 가 0 으로 돌아가 계정1↔계정2
     #   무한 왕복 방지가 통째로 풀렸다.
     _old = _ROT.get(key) or {}
-    _ROT[key] = {"stage": "hunting", "since": _rot_now(),
+    # ★작업이 바뀌면 왕복 가드도 새로 센다★ — 일일던전 순환 뒤에 회랑 순환을 걸면
+    #   그건 새 일이다. 같은 작업을 다시 누른 것만 hops 를 이어받아 폭주를 막는다.
+    _same = str(_old.get("task") or "") == str(task or "")
+    _ROT[key] = {"stage": ("tasking" if task else "hunting"), "since": _rot_now(),
                  "armed_at": _rot_now(), "expect_restart": False, "target": "",
                  "day": _kst_today_key(),   # ★게임일 [C3]★
-                 "hops": int(_old.get("hops") or 0), "visits": dict(_old.get("visits") or {})}
+                 "task": str(task or ""),
+                 # 작업 순환 전용 — sent_at: 명령을 보낸 시각 / busy: 실제로 시작된 증거 /
+                 #                  tvisit: 이번 무장에서 작업을 보낸 계정 번호들
+                 "sent_at": _rot_now(), "busy": False,
+                 "tvisit": ([str(_rot_acct_no(pc_id))] if task else []),
+                 "hops": int(_old.get("hops") or 0) if _same else 0,
+                 "visits": dict(_old.get("visits") or {}) if _same else {}}
     # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
     #   _rot_note_boot 은 그 PC 지문을 ★처음 볼 때★ 판정을 보류한다(엉뚱한 해제 방지).
     #   그런데 무장 시점에 자리가 비어 있으면, 그 뒤 ★사람이 껐다 켠 첫 부팅★ 이
@@ -8595,6 +8717,34 @@ def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
     return 0, "남은 계정 없음"
 
 
+def _rot_next_acct_task(cards: list, active: dict, st: dict) -> tuple[int, str]:
+    """작업 순환에서 다음 계정. 반환 (번호, 사유). 0 = 갈 곳 없음(끝).
+
+    ★완주 순환과 규칙이 다르다 — 여기는 '한 계정 한 번' 이다★
+      완주 순환은 daily_progress(슬롯별 완료 + 완료시각)라는 ★서버가 볼 수 있는 근거★ 가
+      있어서 "미완이면 다시 간다" 가 가능했다. 그런데 일일던전·악몽·각성·회랑은 서버에
+      그런 계정별 완료 기록이 ★없다★ (일일던전만 dungeon_done_at 이 있고 나머지 셋은
+      아무것도 없다). 근거 없이 '미완' 을 추측하면 같은 계정을 밤새 왕복한다.
+      → 이 모드는 ★이번 무장에서 이미 작업을 보낸 계정(tvisit)을 다시 고르지 않는다.★
+
+    ★캐릭 이름(acct_names)은 요구하지 않는다★ — 완주 순환의 start 는 이름 목록이 있어야
+      슬롯을 돌지만, 이 작업들은 그렇지 않다. 특히 collect_info 는 ★그 이름을 만들러
+      가는★ 명령이라 이름을 요구하면 이름 없는 계정에 영영 못 간다.
+    """
+    ids = {}
+    for c in sorted(cards, key=lambda c: str(c.get("last_active") or "")):
+        ids.update(c.get("acct_ids") or {})
+    seen = {str(x) for x in (st.get("tvisit") or [])}
+    seen.add(str(_rot_acct_no(active.get("pc_id"))))
+    for n in range(1, 5):
+        if str(n) in seen:
+            continue
+        if not str(ids.get(str(n)) or "").strip():
+            continue                    # 자격증명 없는 계정 = 없는 계정
+        return n, ""
+    return 0, "남은 계정 없음"
+
+
 # ── 상태 기계 ────────────────────────────────────────────────────────────────
 async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) -> None:
     """순환 정지 + 알림. ★st 를 주면 '내가 아직 그 무장인가' 를 확인하고 지운다★
@@ -8641,11 +8791,19 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         return                                       # 카드가 사라진 PC — 아무것도 안 한다
     active = _rot_active(cards)
     stage = str(st.get("stage") or "")
-    if stage not in ("hunting", "collecting", "switching", "starting"):
+    _task = str(st.get("task") or "")                 # "" 면 완주(사냥) 순환
+    _tlabel = ROT_TASK_LABEL.get(_task, _task or "작업")
+    # ★작업 순환은 완주 순환의 단계를 쓰지 않는다★ — 옛 판이 디스크에 남긴 상태나
+    #   손상값이 섞여 들어와도 작업 모드의 단계는 tasking / switching 둘뿐이다.
+    if _task and stage in ("hunting", "collecting", "starting"):
+        print(f"[순환] {key} 작업모드({_task})인데 stage='{stage}' → tasking 으로 복구")
+        st.update({"stage": "tasking", "since": _rot_now()})
+        stage = "tasking"
+    if stage not in ("hunting", "collecting", "switching", "starting", "tasking"):
         # ★미지 stage 는 조용히 굳지 않는다 [S9]★ — 옛 포맷/손상값이 들어오면 영구 정지였다.
-        print(f"[순환] {key} 알 수 없는 stage='{stage}' → hunting 으로 복구")
-        st.update({"stage": "hunting", "since": _rot_now()})
-        stage = "hunting"
+        print(f"[순환] {key} 알 수 없는 stage='{stage}' → 처음 단계로 복구")
+        st.update({"stage": ("tasking" if _task else "hunting"), "since": _rot_now()})
+        stage = "tasking" if _task else "hunting"
     age = _rot_now() - float(st.get("since") or 0)
 
     # ── ★게임일이 바뀌면 왕복 가드를 새로 센다 [C3]★ ───────────────────────
@@ -8668,6 +8826,72 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         await _rot_stop(tenant, base,
                         f"⛔ 순환 무장이 {int(ROT_TTL/3600)}시간을 넘겨 자동 해제했습니다 — "
                         f"계속하려면 ▶시작을 다시 눌러주세요")
+        return
+
+    # ── ⑤ 작업 순환: 이 계정에서 작업이 끝나기를 기다린다 (2026-08-23) ──────
+    #   ★'보냈다' 와 '했다' 는 다르다 (§A2)★ — 명령을 큐에 넣은 것만으로 넘어가면
+    #   매크로가 그 명령을 거부했을 때(다른 세션 진행 중 등) 아무 일도 안 하고
+    #   순환만 다음 계정으로 굴러간다. 그래서 ★한 번 바빠진 것을 본 뒤에★ 쉬는 자리로
+    #   돌아온 것만 완료로 친다(busy 플래그). 끝내 안 바빠지면 유예 뒤 사유를 남기고 넘어간다.
+    if stage == "tasking":
+        if age > ROT_TASK_MAX:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — {_tlabel} 이 {int(age/60)}분째 안 끝났습니다. "
+                            f"화면 확인 필요")
+            return
+        if not active:
+            return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
+        _s = str(active.get("status") or "")
+        if _s not in ROT_IDLE_SET:
+            if not st.get("busy"):
+                st["busy"] = True                    # ★작업이 실제로 시작된 증거★
+                print(f"[순환] {key} {_tlabel} 진행 확인(status={_s})")
+            return
+        # ── 여기부터 '쉬는 자리' — 끝났거나, 아직 시작을 안 했거나 둘 중 하나다
+        if not st.get("busy"):
+            if _rot_now() - float(st.get("sent_at") or st.get("since") or 0) < ROT_TASK_GRACE:
+                return                               # 아직 시작 전일 수 있다 — 기다린다
+            await _rot_say(tenant, base,
+                           f"계정{_rot_acct_no(active.get('pc_id'))} 는 {_tlabel} 할 게 "
+                           f"없었습니다(status={_s}) — 다음 계정으로")
+        nxt, why = _rot_next_acct_task(cards, active, st)
+        if nxt == 0:
+            await _rot_stop(tenant, base,
+                            f"✅ 순환 종료 — {_tlabel} 전 계정 완료 "
+                            f"({len(st.get('tvisit') or [])}개 계정)")
+            return
+        if int(st.get("hops") or 0) + 1 > ROT_MAX_HOPS:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — 계정 전환을 {ROT_MAX_HOPS}회 했습니다(상한). 확인 필요")
+            return
+        if not _alive():
+            return
+        # ★peer_id 없으면 반쪽 전환이 된다 — 완주 순환과 같은 방어 (2026-08-20 PC-22 실사고)★
+        try:
+            _pm = await _get_parsec_map(tenant)
+            _num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
+            if not (_pm.get(_num) or _pm.get(base)):
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — 파섹 주소록에 {base} 의 peer_id 가 없습니다. "
+                                f"본컴 런처를 못 바꿔 반쪽 전환이 됩니다. "
+                                f"관제컴에서 parsec_multi.py push 후 다시 눌러주세요")
+                return
+        except Exception as _pe:
+            print(f"[순환] {base} 주소록 확인 실패(계속 진행): {_pe}")
+        # acct_index 는 1 고정 [S11] — 완주 순환과 같은 이유(런처 드롭다운의 '다른 계정' 줄 번호)
+        ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
+            "acct_index": 1, "acct_no": nxt,
+            "acct_label": f"계정{nxt}", "chrome_label": "abcd"[nxt - 1], "launch": True,
+        })
+        if not ok or not _alive():
+            return
+        st.setdefault("tvisit", []).append(str(nxt))
+        st.update({"stage": "switching", "since": _rot_now(),
+                   "expect_restart": True,
+                   "expect_until": _rot_now() + ROT_SWITCH_MAX,
+                   "target": "abcd"[nxt - 1],
+                   "hops": int(st.get("hops") or 0) + 1})
+        await _rot_say(tenant, base, f"{_tlabel} 끝 → 계정{nxt} 로 전환")
         return
 
     # ── ① 사냥 중 — 완주를 기다린다 ────────────────────────────────────────
@@ -8880,6 +9104,28 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     if stage == "switching":
         want = str(st.get("target") or "")
         want_no = ("abcd".index(want) + 1) if want in "abcd" else 0
+        # ★작업 순환은 전환이 끝나면 start 가 아니라 ★그 작업★ 을 보낸다 (2026-08-23)★
+        #   여기서 완주 순환 코드로 흘려보내면 사냥만 시작하고 작업은 영영 안 한다
+        #   = "버튼은 있는데 안 도는" 반쪽 실행(§A4). 그래서 이 분기는 자기 상한까지
+        #   전부 들고 ★반드시 return 한다.★
+        if _task:
+            _s = str((active or {}).get("status") or "")
+            if active and _rot_acct_no(active.get("pc_id")) == want_no                     and _s in ("idle", "hunting", "moving"):
+                if not _alive():
+                    return
+                if not await _rot_send(tenant, str(active.get("pc_id")), _task, {}):
+                    return                           # ★송신 실패면 단계를 넘기지 않는다 [S13]★
+                if not _alive():
+                    return
+                st.update({"stage": "tasking", "since": _rot_now(), "sent_at": _rot_now(),
+                           "busy": False, "expect_restart": False})   # ★전환 확인 → 기대 소비 [C2]★
+                await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작")
+                return
+            if age > ROT_SWITCH_MAX:
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — 계정{want_no} 전환이 {int(age/60)}분째 "
+                                f"안 끝났습니다(status={_s or '카드 없음'}). 화면 확인 필요")
+            return
         if active and _rot_acct_no(active.get("pc_id")) == want_no:
             s = str(active.get("status"))
             if s in ("hunting", "moving"):
