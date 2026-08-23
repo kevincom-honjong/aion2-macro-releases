@@ -2415,10 +2415,14 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="stat-num text-indigo-400" id="cnt-awakening">–</div>
       <div class="stat-label">각성전</div>
     </div>
-    <div class="stat-tile tile-purple" title="일일던전(계정 티켓)이 남은 계정 수 — 🏰 뱃지 없는 PC">
+    <!-- ★★설명을 사실대로 (2026-08-24)★★ 이 숫자는 ★PC 대수가 아니라 계정 카드 수★ 다.
+         일일던전 티켓은 계정마다 따로 있어서 계정 단위로 세는 게 맞다. 그런데 설명에
+         "PC" 라고 적혀 있어서 24대 함대에 30 이 뜨니 주인님이 이상하게 보실 수밖에 없었다.
+         (2026-08-24 01:24 실측: 카드 53장 중 30장이 이번 주 티켓 미소진) -->
+    <div class="stat-tile tile-purple" title="일일던전 티켓이 남은 ★계정★ 수 (PC 대수 아님 — 티켓은 계정마다 따로)&#10;아직 안 열어본 계정 카드도 포함 · 수요일 05시 초기화">
       <div class="stat-icon">🏰</div>
       <div class="stat-num text-purple-400" id="cnt-dungeon-left">–</div>
-      <div class="stat-label">일일던전 남음</div>
+      <div class="stat-label">일일던전 남음<span style="opacity:.55">(계정)</span></div>
     </div>
     <div class="stat-tile tile-blue" title="회랑을 아직 다 못 돈 캐릭터 수 (적 진영 제외, 함대 합계 · 수·토 22시 리셋)">
       <div class="stat-icon">🌀</div>
@@ -3210,8 +3214,10 @@ function isAwakenDone(pc_id){
 function isCorridorDone(pc_id){
   // 어비스 회랑 완료 = 매크로가 보고한 '남은 캐릭 수'가 0 (적 진영 제외 기준, 수·토 22시 리셋).
   // corridorRemaining은 /corridor/progress + WS로 채워진다. 보고가 없으면 뱃지 없음.
+  // ★stale 이면 그 0 은 ★지난 판★ 의 0 이다 — 뱃지를 달면 2026-08-05 사고 재발.
+  //   (서버가 만료본도 보내기 시작했으므로 여기서 명시적으로 막는다 — 2026-08-24)
   const v = corridorRemaining[pc_id];
-  return !!v && typeof v.remaining === 'number' && v.remaining === 0;
+  return !!v && !v.stale && typeof v.remaining === 'number' && v.remaining === 0;
 }
 function isDungeonDone(pc){
   // 일일던전(계정 티켓 14장) 소진 — 매크로가 소진 시각(dungeon_done_at)을 보고.
@@ -4696,19 +4702,39 @@ function connectWS() {
 setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
-let corridorRemaining={};   // {pc_id: {remaining, total}}
+let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
+// ★★'안 돈 PC' 를 0 으로 세지 않는다 (2026-08-24 주인님 지적)★★
+//   만료 스냅샷(stale) = 수·토 22시 리셋을 지난 옛 판 → 이번 판은 ★한 칸도 안 돌았다.★
+//   그러니 남은 수는 remaining(옛 값)이 아니라 ★total★ 이다.
+//   실측 2026-08-24 01:24 — 고치기 전 29 / 참값 102(만료 14대가 통째로 0이었다).
+//   ★자기 검증 장치★: 타일 title 에 '신선 n대 + 미착수 m대' 를 적어 둔다.
+//   숫자가 또 이상해 보이면 마우스만 올리면 어느 쪽이 부풀었는지 바로 갈린다.
 function updateCorridorTile(){
-  let rem=0,has=false;
+  let rem=0,has=false,nFresh=0,nStale=0,remStale=0;
   Object.values(corridorRemaining).forEach(v=>{
-    if(v&&typeof v.remaining==='number'){has=true;rem+=v.remaining;}});
+    if(!v) return;
+    if(v.stale){
+      if(typeof v.total==='number'){has=true;nStale++;remStale+=v.total;rem+=v.total;}
+    } else if(typeof v.remaining==='number'){has=true;nFresh++;rem+=v.remaining;}
+  });
   const el=document.getElementById('cnt-corridor');
-  if(el)el.textContent=has?String(rem):'–';
+  if(el){
+    el.textContent=has?String(rem):'–';
+    const t=el.closest('.stat-tile');
+    // ★줄바꿈은 String.fromCharCode(10) 으로 만든다★ — 이 파일은 파이썬 문자열 안에
+    //   들어 있어서 백슬래시 이스케이프가 중간 도구에 먹히는 일이 잦다(실제로 먹혔다).
+    const NL = String.fromCharCode(10);
+    if(t)t.title = '회랑을 아직 다 못 돈 캐릭터 수 (적 진영 제외 · 수·토 22시 리셋)'
+      + NL + `· 이번 판에 보고한 ${nFresh}대: 남은 ${rem-remStale}`
+      + NL + `· 리셋 뒤 아직 시작 안 한 ${nStale}대: 남은 ${remStale} (지난 판 정원 기준)`
+      + NL + '※ 회랑을 한 번도 보고한 적 없는 PC 는 아직 여기에 안 들어갑니다';
+  }
 }
 async function loadCorridorSummary(){
   try{
     const r=await fetch('/corridor/progress');if(!r.ok)return;
     const d=await r.json();corridorRemaining={};
-    Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total};});
+    Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total,stale:!!v.stale};});
     updateCorridorTile();
     scheduleRender();   // 🌀 뱃지도 갱신 (만료로 사라진 PC 반영)
   }catch(e){}
@@ -4717,7 +4743,7 @@ async function loadCorridorSummary(){
 // 페이지를 안 새로고침해도 뱃지·타일이 5분 안에 따라오게 한다 (2026-08-05 "뱃지 안 사라짐" 사고)
 setInterval(loadCorridorSummary,300000);
 function handleCorridorMsg(msg){
-  corridorRemaining[msg.pc_id]={remaining:(msg.data||{}).remaining,total:(msg.data||{}).total};
+  corridorRemaining[msg.pc_id]={remaining:(msg.data||{}).remaining,total:(msg.data||{}).total,stale:false};  // 방금 온 보고 = 신선
   updateCorridorTile();
   scheduleRender();  // 카드 🌀 회랑 완료 뱃지 즉시 반영
   loadCharTable();   // 스프레드 '회랑' 열 갱신 (악몽 진행도와 같은 패턴)
@@ -7880,13 +7906,33 @@ async def all_corridor_progress(request: Request):
     tenant = check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
+    # ══════════════════════════════════════════════════════════════════
+    # ★★만료 스냅샷을 버리면 그 PC 가 "남은 것 0" 으로 세어진다 (2026-08-24)★★
+    #
+    # ★주인님 지적★ "대시보드 집계도 좀 이상한거같은데 일일던전 남은거 회랑남은거"
+    #
+    # ★무엇이 틀렸나★ 초판은 리셋 경계보다 오래된 스냅샷을 ★통째로 뺐다.★
+    #   그 의도는 옳았다 — 옛 "다 돌았음(0)" 이 🌀 뱃지로 눌어붙던 사고(2026-08-05)
+    #   를 막으려던 것이다. 그런데 전광판 합계까지 같은 목록을 쓰는 바람에,
+    #   ★이번 판에 회랑을 아직 시작도 안 한 PC 가 합계에서 사라졌다.★
+    #   실측 2026-08-24 01:24 — 화면 29, 참값 102. 신선 6대 remaining 합 29 뿐이고
+    #   만료 14대(total 합 73)가 전부 0 으로 세어졌다. ★안 돈 PC 가 가장 많이 남은 PC 인데
+    #   그게 0 으로 세어지니 숫자가 클수록 일이 줄어드는 거꾸로 지표였다.★
+    #
+    # ★고치는 법★ 버리지 말고 `stale` 을 붙여 보낸다. 판단은 화면이 한다:
+    #   · 뱃지(🌀 완료)  = 신선한 0 일 때만  → 2026-08-05 사고 방어는 그대로 유지
+    #   · 합계(회랑 남음) = 신선이면 remaining, 만료면 ★total★ (리셋됐으니 전부 남음)
+    #   만료 스냅샷의 total 은 ★적 진영을 이미 뺀 값★ 이라 캐릭수보다 정확한 분모다.
+    # ══════════════════════════════════════════════════════════════════
     out = {}
     cutoff = _corridor_cutoff()
     for k, v in CORRIDOR_PROG.items():
         t, raw = split_ns(k)
-        if t == tenant and (v.get("ts") or 0) >= cutoff:   # 리셋 경계 지난 스냅샷 제외
-            out[raw] = {"remaining": v.get("remaining"), "total": v.get("total"),
-                        "ts": v.get("ts")}
+        if t != tenant:
+            continue
+        ts = v.get("ts") or 0
+        out[raw] = {"remaining": v.get("remaining"), "total": v.get("total"),
+                    "ts": ts, "stale": ts < cutoff}
     return JSONResponse({"pcs": out})
 
 
