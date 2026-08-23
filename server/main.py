@@ -4235,13 +4235,26 @@ function openCardMenu(pc_id, e) {
   refreshAcctButtons(pc_id);   // 계정 1~4 버튼 활성/비활성 (있는 계정만, 현재 계정 ✓)
   refreshParsecButtons(pc_id); // 파섹 주소 없는 PC는 눌러도 소용없으니 흐리게
   menu.classList.remove('hidden');
-  let left=e.clientX;
-  if(left+246>window.innerWidth) left=window.innerWidth-250;   // 메뉴 v2 폭 238px
+  // ★★폭도 ★실측★ 한다 (2026-08-23 주인님 지적)★★
+  //   원문: "카드에 오른쪽클릭할때 창을 넘어가서 가릴때가잇는데"
+  //   ★내가 만든 회귀다★ — 여기 폭이 상수 246/250 으로 박혀 있었는데(옛 폭 238px),
+  //   같은 날 패널을 238 → 360px 로 키우면서 이 숫자를 안 고쳤다. 약 120px 넘쳤다.
+  //   ★바로 아래 주석이 "높이는 상수로 박지 말고 실측한다" 고 말하고 있는데
+  //     폭에는 그게 적용이 안 돼 있었다★ — 같은 함정이 한 칸 옆에 남아 있던 것이다.
+  //   offsetWidth 는 hidden 을 벗긴 뒤라 실제 값을 준다 → 앞으로 폭을 바꿔도 안 깨진다.
+  const mw = menu.offsetWidth;
+  let left = e.clientX;
+  if(left + mw > window.innerWidth - 8) left = window.innerWidth - 8 - mw;
+  if(left < 8) left = 8;
   // ★높이는 상수로 박지 말고 실측한다(2026-08-15 리뷰)★ — 예전엔 '472px' 같은 상수를
   //   손으로 적어뒀는데, 메뉴에 줄이 추가될 때마다 상수가 뒤처져서 화면 아래쪽 카드를 누르면
   //   맨 밑 버튼들(업데이트·삭제)이 화면 밖으로 나가 클릭도 스크롤도 안 됐다.
   //   hidden 을 벗긴 뒤라 offsetHeight 가 실제 값을 준다 → 앞으로 줄이 늘어도 안 깨진다.
-  const mh = menu.offsetHeight;
+  // ★메뉴가 화면보다 길면 스크롤 (2026-08-23)★ — 예전엔 top 을 8 로 밀어붙였는데,
+  //   그래도 화면보다 길면 ★아래쪽 버튼이 잘려서 못 누른다.★ 잘리느니 스크롤이 낫다.
+  menu.style.maxHeight = (window.innerHeight - 16) + 'px';
+  menu.style.overflowY = 'auto';
+  const mh = Math.min(menu.offsetHeight, window.innerHeight - 16);
   let top = e.clientY + 4;
   if(top + mh > window.innerHeight - 8) top = window.innerHeight - 8 - mh;
   if(top < 8) top = 8;
