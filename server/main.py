@@ -656,10 +656,12 @@ async def lifespan(app: FastAPI):
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     # ★계정 자동순환 엔진 (2026-08-20)★ — 무장된 PC 가 하나도 없으면 아무 일도 안 한다.
     rot_task = asyncio.create_task(_rot_engine())
+    # ★효율 저하 감시 (2026-08-24 주인님 지시)★ — 순환 무장과 무관하게 항상 돈다.
+    eff_task = asyncio.create_task(_eff_watch())
     try:
         yield
     finally:
-        for _t in (tg_task, rot_task):
+        for _t in (tg_task, rot_task, eff_task):
             if _t:
                 _t.cancel()
                 try:
@@ -9307,6 +9309,135 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                             f"화면 확인 필요")
         return
 
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★★효율 저하 감시 (2026-08-24 주인님 지시)★★
+#
+#   원문: "효율이 비정상적으로 오랫동안 낮은건 알람띄우는것도 해놔"
+#
+# ★왜 서버에 넣나★ 매크로에 넣으면 함대 24대가 업데이트를 받아야 켜진다(§A7 — 그건
+#   주인님이 누르는 일이다). 서버는 이미 30초마다 모든 PC 의 efficiency 를 받고 있으니
+#   여기서 보면 ★배포 없이 오늘부터★ 전 함대에 적용된다.
+#
+# ★임계값은 실측으로 잡았다 (2026-08-24 01:40 함대 스냅샷)★
+#   정상 사냥: 67.7 · 71.9 · 71.9 · 83.9 · 83.9 %/h
+#   의심 상태: PC-24c 0.0(hunting 인데 진행 0) · PC-16b 14.1
+#   → 15 %/h 아래를 '낮다' 로 본다. 정상값과 4배 이상 떨어져 있어 경계가 넉넉하다.
+#
+# ★45분이나 기다리는 이유 (제일 중요)★
+#   효율은 analytics.py 가 ★20분 슬라이딩 윈도우★ 로 계산한다. 슬롯이 바뀌거나
+#   계정을 전환하면 _samples 가 비워져서 ★한동안 0 이 정상★ 이다. 20분보다 짧게 잡으면
+#   '방금 시작한 캐릭' 마다 알람이 울리고, 그러면 주인님이 알람을 통째로 무시하게 된다
+#   (2026-08-23~24 알람 다이어트를 두 번 한 이유가 정확히 그것이다).
+#   → 워밍업의 2배 이상인 45분을 쓴다.
+#
+# ★사냥(hunting)만 본다★ 던전·회랑·악몽·각성은 진행도 막대가 안 오르는 게 정상이라
+#   같은 잣대를 대면 전부 오탐이 된다. 상태가 사냥이 아니면 카운터를 지운다
+#   (= 전환·던전을 다녀오면 시계가 0 부터 다시 간다).
+# ═════════════════════════════════════════════════════════════════════════════
+EFF_LOW_PCT  = 15.0            # %/h — 이 아래면 '낮다'
+EFF_LOW_SEC  = 45 * 60.0       # 이만큼 계속 낮으면 알람 (20분 워밍업의 2배 이상)
+EFF_RENOTIFY = 3 * 3600.0      # 같은 PC 재알람 간격 — 안 고치면 3시간마다 한 번 더
+EFF_TICK     = 120.0           # 감시 주기(초)
+_EFF: dict = {}                # ns키 → {'since': ts, 'last': ts, 'worst': float}
+
+
+async def _eff_say(tenant: str, pc_id: str, text: str) -> None:
+    """효율 알람 — 로그 + 텔레그램. _rot_say 와 ★같은 로그 포맷★ 을 쓴다.
+
+    ★포맷을 흉내내는 이유★ ops/watch_all.py 는 '[텔레그램] 중계 전송' 이라는
+      문자열로 알람을 줍는다. 접두 [YYYY-MM-DD HH:MM:SS] 가 없으면 tg_sweep 이
+      시각을 못 뽑아 '최근 N분' 에서 통째로 빠진다(_rot_say N3 주석과 같은 함정).
+    """
+    base = _base_pc(pc_id)
+    _ts = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime('%Y-%m-%d %H:%M:%S')
+    _chat = (TENANTS.get(tenant) or {}).get('chat_id') or ''
+    # ⚠ 효율 저하는 '멈춘 것' 에 준한다 — 음소거된 PC 라도 보낸다(_rot_say 의 hard 와 같은 취급)
+    _will = bool(_chat) and tg_enabled()
+    _line = (f'[{_ts}] [텔레그램] '
+             + ('중계 전송' if _will else '중계 생략(미설정)')
+             + f': {base} | [효율] {text}')
+    _targets = {base}
+    if str(pc_id) != base:
+        _targets.add(str(pc_id))
+    for _t in _targets:
+        try:
+            await insert_log(ns(tenant, _t), 'warn', _line)
+        except Exception:
+            pass
+    try:
+        await push_alert(tenant, str(pc_id), 'warn', f'효율 저하 — {text}',
+                         speak=True, say='효율이 오래 낮습니다')
+    except Exception:
+        pass
+    if not _will:
+        print(f'[효율] {base} 텔레그램 생략(미설정): {text}')
+        return
+    try:
+        await tg_send_text(_chat, f'📉 {base} · {text}')
+    except Exception as e:
+        print(f'[효율] 텔레그램 실패(무시): {e}')
+
+
+async def _eff_watch() -> None:
+    """사냥 중인데 효율이 EFF_LOW_SEC 넘게 EFF_LOW_PCT 미만이면 알람."""
+    await asyncio.sleep(90)          # 부팅 직후 상태가 채워질 여유
+    print('[효율] 감시 시작')
+    while True:
+        try:
+            now = time.time()
+            for tenant in list(TENANTS):
+                try:
+                    pcs = await _build_full_state(tenant)
+                except Exception:
+                    continue
+                # 함대 중앙값 — 알람 문구에 같이 실어 '나만 낮은가' 를 바로 보이게 한다
+                vals = sorted(float(p.get('efficiency'))
+                              for p in pcs
+                              if p.get('status') == 'hunting'
+                              and isinstance(p.get('efficiency'), (int, float)))
+                med = vals[len(vals) // 2] if vals else 0.0
+                alive = set()
+                for p in pcs:
+                    pid = str(p.get('pc_id') or '')
+                    key = ns(tenant, pid)
+                    eff = p.get('efficiency')
+                    # ★사냥이 아니거나 값이 없으면 시계를 지운다★
+                    #   (전환·던전·회랑을 다녀오면 0부터 다시 — 오탐의 최대 원인)
+                    if p.get('status') != 'hunting' or not isinstance(eff, (int, float)):
+                        _EFF.pop(key, None)
+                        continue
+                    alive.add(key)
+                    if float(eff) >= EFF_LOW_PCT:
+                        _EFF.pop(key, None)      # 회복 → 시계 리셋
+                        continue
+                    st = _EFF.get(key)
+                    if not st:
+                        _EFF[key] = {'since': now, 'last': 0.0, 'worst': float(eff)}
+                        continue
+                    st['worst'] = min(st['worst'], float(eff))
+                    dur = now - st['since']
+                    if dur < EFF_LOW_SEC:
+                        continue
+                    if now - st.get('last', 0.0) < EFF_RENOTIFY:
+                        continue
+                    st['last'] = now
+                    await _eff_say(tenant, pid,
+                                   f'⚠️ 효율이 {int(dur // 60)}분째 낮습니다 — '
+                                   f'지금 {float(eff):.1f}%/h (가장 낮았을 때 {st["worst"]:.1f}) · '
+                                   f'사냥 중인 다른 PC 중앙값 {med:.1f}%/h · 화면 확인 필요')
+                # ★사라진 카드 청소 — 접두사가 아니라 split_ns 로 판정한다★
+                #   ns() 는 main 테넌트에 접두사를 ★안 붙인다★(기존 데이터 호환).
+                #   그래서 startswith(tenant+'::') 로 거르면 main 에서는 영영 안 걸리고,
+                #   사라진 카드의 since 가 남아 있다가 그 카드가 다시 뜨는 순간
+                #   '몇 시간째 낮음' 으로 ★즉시 오알람★ 이 된다. (자기 리뷰에서 잡음)
+                for k in [k for k in _EFF if split_ns(k)[0] == tenant and k not in alive]:
+                    _EFF.pop(k, None)
+        except Exception as e:
+            print(f'[효율] 감시 예외(무시): {e}')
+        await asyncio.sleep(EFF_TICK)
 
 async def _rot_engine() -> None:
     """계정 자동순환 엔진 — 무장된 PC 만 본다. 무장이 없으면 아무 일도 안 한다."""
