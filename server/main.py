@@ -8958,7 +8958,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     if stage == "tasking":
         # ★★상한은 "총 소요시간" 이 아니라 "무진전 시간" 이다 (2026-08-24 사고 177)★★
         #   진행 지문이 바뀌면 시계를 0 으로. 캐릭이 9개라 오래 걸리는 PC 를 안 끊는다.
-        _fp = _rot_progress_fp(tenant, active) if active else ""
+        _fp = (await _rot_progress_fp(tenant, active)) if active else ""
         if _fp and _fp != st.get("fp"):
             st["fp"] = _fp
             st["fp_at"] = _rot_now()                 # ★앞으로 갔다 → 시계 리셋★
@@ -9477,7 +9477,51 @@ async def _eff_watch() -> None:
 #   그건 "몇 분이면 충분한가" 라는 ★또 다른 추측★ 을 낳는다(캐릭당 12분? 15분?).
 #   진행 지문은 추측이 필요 없다 — 게임이 느려지든 캐릭이 늘든 그대로 맞는다.
 # ═════════════════════════════════════════════════════════════════════════════
-def _rot_progress_fp(tenant: str, active: dict) -> str:
+# ★★진행 지문에 ★악몽★ 이 빠져 있었다 (2026-08-24 주인님 지적, 사고 177-b)★★
+#
+#   주인님: "악몽은 계정단위가 아니라 캐릭단위인건 알고있지?"
+#
+# ★무엇이 틀렸나★ 초판 지문은 status | current_slot | 사냥완료칸 | 회랑남은수 였다.
+#   그런데 악몽이 도는 동안 이 넷이 ★하나도 안 바뀐다★:
+#     · status        = "nightmare" 로 고정
+#     · current_slot  = ★None★ (실측 PC-17: `PC-17 | nightmare | slot None`)
+#     · 사냥 완료 칸  = 악몽은 daily_progress 를 안 건드린다
+#     · 회랑 남은 수  = 악몽과 무관
+#   → 악몽은 잘 돌아도 90분이면 ★무조건★ ⛔ 오탐이 난다. 사고 177 을 고치면서
+#     같은 부류의 구멍을 하나 남긴 것이다.
+#
+# ★고치는 법 — 악몽의 진짜 진행 신호는 캐릭별 보스 클리어 수다★
+#   매크로가 캐릭(slot)×탭마다 /nightmare/progress 를 올린다
+#   (nightmare.py:384 `key = (char_slot, tab_idx)` · :218 캐릭별로 즉시 전송).
+#   서버도 (pc_id, slot) 로 저장한다 — ★계정 단위 완료 도장은 어디에도 없다.★
+#   그 클리어 총합을 지문에 넣으면 "3번 캐릭이 한 보스를 깼다" 가 바로 진행으로 잡힌다.
+#
+# ★DB 를 PC 마다 읽지 않는다★ — 틱(30초)당 한 번만 읽어 캐시한다. 순환이 무장된
+#   PC 가 20대여도 조회는 1회다.
+_NM_FP_CACHE: dict = {}          # {"at": ts, "map": {ns키 → 클리어 총합}}
+
+
+async def _rot_nm_clears(tenant: str) -> dict:
+    """{ns(pc_id) → 그 PC 의 전 캐릭 보스 클리어 총합}. 틱당 1회만 DB 를 읽는다."""
+    now = _rot_now()
+    if now - float(_NM_FP_CACHE.get("at") or 0) < ROT_TICK - 1:
+        return _NM_FP_CACHE.get("map") or {}
+    out: dict = {}
+    try:
+        for n in await get_all_nightmare_progress():
+            k = str(n.get("pc_id") or "")
+            bosses = n.get("bosses") or {}
+            out[k] = out.get(k, 0) + sum(1 for b in bosses.values()
+                                         if (b or {}).get("cleared"))
+    except Exception as e:
+        print(f"[순환] 악몽 진행 조회 실패(무시): {e}")
+        return _NM_FP_CACHE.get("map") or {}
+    _NM_FP_CACHE["at"] = now
+    _NM_FP_CACHE["map"] = out
+    return out
+
+
+async def _rot_progress_fp(tenant: str, active: dict) -> str:
     """이 PC 가 "앞으로 가고 있나" 를 한 줄로. 값이 바뀌면 진행한 것이다."""
     try:
         pid = str((active or {}).get("pc_id") or "")
@@ -9489,7 +9533,14 @@ def _rot_progress_fp(tenant: str, active: dict) -> str:
             cor = str(v.get("remaining"))
         except Exception:
             cor = ""
-        return "%s|%s|%d|%s" % (active.get("status"), active.get("current_slot"), done, cor)
+        nm = ""
+        try:
+            # ★악몽은 캐릭 단위★ — 전 캐릭 보스 클리어 총합이 늘면 앞으로 간 것이다
+            nm = str((await _rot_nm_clears(tenant)).get(ns(tenant, pid)))
+        except Exception:
+            nm = ""
+        return "%s|%s|%d|%s|%s" % (active.get("status"),
+                                   active.get("current_slot"), done, cor, nm)
     except Exception:
         return ""
 
