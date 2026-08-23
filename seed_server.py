@@ -38,6 +38,83 @@ MAP = {"macro": ("exe", "혼종_통합_자동.exe"),
 # ─────────────────────────────────────────────────────────────────────────────
 CONTROL_URL = os.getenv("AION2_BASE") or "https://web-production-8d4c.up.railway.app"
 CHECK_EVERY = 300     # 초 — 내부망 IP 변화 감시 주기
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★★사고 183 (2026-08-24) — 올바른 exe 를 손에 쥐고도 거절했다★★
+#
+# ★주인님 로그★
+#   [업데이트] 매크로 exe: 1.1.656 → 1.1.657
+#   [다운로드] 시드 실패(404 version mismatch ... macro-1.1.657.exe) → GitHub 폴백
+#   주인님: "자꾸 내부망 실패뜨네"
+#
+# ★무엇이 틀렸나★ 이 서버는 ★로컬 version.json★ 을 읽어 요청 버전과 비교했다.
+#   그런데 배포 흐름은 이렇다:
+#     ① 내가 exe 를 푸시      → 디스크의 exe 는 ★이미 새 빌드★
+#     ② CI 가 version.json 을 ★원격에★ 올린다 (1.1.657)
+#     ③ 함대가 /check 로 1.1.657 을 알고 시드에 달라고 한다
+#     ④ 그런데 이 PC 의 로컬 version.json 은 아직 1.1.656 (pull 안 했으니까)
+#   → ★파일은 맞는데 표가 낡아서 404.★ 실측 2026-08-24 04:17 exe = 657 빌드,
+#     로컬 version.json = 656, 원격 = 657.
+#   ★배포할 때마다 난다★ — '푸시 뒤 git pull' 은 사람 기억에 의존하는 절차라
+#   반드시 빠뜨린다(§A6). 그래서 코드로 막는다.
+#
+# ★고치는 법 — 버전 문자열이 아니라 ★실제 바이트★ 로 판정한다★
+#   원격(origin/main)의 version.json 을 fetch 해서 읽고(작업 트리는 안 건드린다),
+#   거기 적힌 sha256 과 ★디스크 exe 의 실제 sha256★ 이 같을 때만 준다.
+#   이게 더 안전하다 — 버전 문자열이 맞아도 파일이 옛것이면 함대가 받아가서
+#   업데이터의 해시 검증에서 튕긴다(사고 38 계열). 여기서 미리 막는다.
+#
+# ★git pull 을 안 쓰는 이유★ 이 PC 는 내가 계속 커밋·리베이스를 하는 개발 PC 다.
+#   백그라운드에서 작업 트리를 바꾸면 내 작업과 충돌한다. fetch + show 는 읽기만 한다.
+# ═════════════════════════════════════════════════════════════════════════════
+REMOTE_REF = 'origin/main'
+_remote_cache = {'at': 0.0, 'data': None}
+_sha_cache = {}          # path → (mtime, size, sha256)
+
+
+def _remote_version_json(max_age: float = 120.0):
+    """원격 version.json — fetch 후 show 로 읽는다(작업 트리 무변경). 실패하면 None."""
+    import subprocess
+    now = time.time()
+    if _remote_cache['data'] is not None and now - _remote_cache['at'] < max_age:
+        return _remote_cache['data']
+    try:
+        subprocess.run(['git', '-C', BASE, 'fetch', '-q', 'origin', 'main'],
+                       timeout=60, capture_output=True)
+        out = subprocess.run(['git', '-C', BASE, 'show', REMOTE_REF + ':version.json'],
+                             timeout=30, capture_output=True)
+        if out.returncode != 0:
+            return None
+        data = json.loads(out.stdout.decode('utf-8'))
+    except Exception as e:
+        print(f'[시드] 원격 version.json 읽기 실패(로컬로 폴백): {e}', flush=True)
+        return None
+    _remote_cache['at'] = now
+    _remote_cache['data'] = data
+    return data
+
+
+def _file_sha256(path: str) -> str:
+    """파일 sha256 — (mtime, size) 가 같으면 캐시. 76MB 를 매 요청 해싱하지 않는다."""
+    import hashlib
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ''
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _sha_cache.get(path)
+    if hit and hit[0] == key:
+        return hit[1]
+    h = hashlib.sha256()
+    try:
+        with open(path, 'rb') as f:
+            for blk in iter(lambda: f.read(1 << 20), b''):
+                h.update(blk)
+    except OSError:
+        return ''
+    v = h.hexdigest()
+    _sha_cache[path] = (key, v)
+    return v
 _SECRET_FILE = os.path.join(BASE, "seed_secret.txt")
 
 
@@ -157,21 +234,42 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         kind, req_ver = m.group(1), m.group(2)
-        try:
-            ver = json.load(open(VERSION_JSON, encoding="utf-8"))
-        except Exception:
-            self.send_error(503)
-            return
         section, fname = MAP[kind]
-        cur_ver = (ver.get(section) or {}).get("version")
-        if req_ver != cur_ver:
-            # 요청 버전 ≠ 로컬 최신 = 이 시드가 낡았거나(배포 직후 pull 전) 요청이 낡음 → GitHub로
-            self.send_error(404, "version mismatch")
-            return
         path = os.path.join(EXE_DIR, fname)
         if not os.path.exists(path):
-            self.send_error(404)
+            self.send_error(404, "no local exe")
             return
+        # ★★버전 문자열이 아니라 ★실제 바이트★ 로 판정한다 (사고 183)★★
+        #   원격 version.json 이 우선. 못 읽으면 로컬로 폴백(옛 동작).
+        ver = _remote_version_json()
+        _src = 'origin'
+        if ver is None:
+            try:
+                ver = json.load(open(VERSION_JSON, encoding='utf-8'))
+                _src = 'local'
+            except Exception:
+                self.send_error(503)
+                return
+        sec = ver.get(section) or {}
+        want_sha = str(sec.get('sha256') or '').lower()
+        if not want_sha:
+            # 해시가 없는 옛 포맷 → 예전처럼 버전 문자열로만
+            if req_ver != sec.get('version'):
+                self.send_error(404, 'version mismatch')
+                return
+        else:
+            have_sha = _file_sha256(path)
+            if have_sha != want_sha:
+                # ★파일이 아직 그 버전이 아니다★ — 빌드 중이거나 복사 전.
+                #   이때는 GitHub 로 보내는 게 맞다(반쪽 파일을 주면 더 나쁘다).
+                print(f'[시드] {req_ver} 요청 — 디스크 exe 해시 불일치({_src} 기준) → GitHub 로',
+                      flush=True)
+                self.send_error(404, 'exe hash mismatch')
+                return
+            if req_ver != sec.get('version'):
+                # 바이트는 맞는데 버전표만 다르다 = 요청이 낡은 것. 그래도 주면 안 된다.
+                self.send_error(404, 'version mismatch')
+                return
         size = os.path.getsize(path)
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
