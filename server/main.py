@@ -1666,24 +1666,25 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
   /* ── 카드 컨텍스트 메뉴 v2 ── */
-  .cm-panel{width:238px;padding:9px;border-radius:14px;
+  .cm-panel{width:300px;padding:12px;border-radius:16px;
     background:linear-gradient(165deg,rgba(17,23,45,.97),rgba(8,12,26,.98));
     border:1px solid rgba(99,102,241,.4);
     box-shadow:0 18px 50px -12px rgba(0,0,0,.85),0 0 30px -10px rgba(99,102,241,.5);
     backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-  .cm-head{display:flex;align-items:center;gap:7px;padding:2px 3px 8px;margin-bottom:2px;
-    border-bottom:1px solid rgba(99,102,241,.28);font-size:13px}
-  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:8px;font-weight:600;letter-spacing:.24em;
-    color:#818cf8;opacity:.95;margin:8px 2px 4px}
-  .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-  .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
-  .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:5px}
+  .cm-head{display:flex;align-items:center;gap:8px;padding:3px 3px 10px;margin-bottom:3px;
+    border-bottom:1px solid rgba(99,102,241,.28);font-size:15px;font-weight:700}
+  /* ★2026-08-23 주인님: "너무 작아보여 눈에도 잘안들어온다" → 전반 확대★ */
+  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:10px;font-weight:700;letter-spacing:.20em;
+    color:#a5b4fc;opacity:1;margin:11px 2px 6px}
+  .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
+  .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:7px}
   .cm-span2{grid-column:span 2}
   /* ★--c 를 여기서 선언하면 안 된다(2026-08-15 리뷰)★ — .cm-btn 이 .chip-* 팔레트보다 뒤에
      오는데 특정도가 같아서(둘 다 클래스 1개) 나중 것이 이긴다. 그래서 chip-teal/violet 등을
      붙여도 전부 회색으로 렌더됐다(파섹 버튼만이 아니라 카드 메뉴 전체가 그랬음).
      선언 대신 var() 폴백으로 두면 팔레트가 있으면 팔레트, 없으면 회색이 된다. */
-  .cm-btn{padding:5px 6px;border-radius:8px;font-size:11.5px;font-weight:700;text-align:center;
+  .cm-btn{padding:10px 8px;border-radius:10px;font-size:14px;font-weight:800;text-align:center;
     color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
     background:rgba(var(--c,148,163,184),.08);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2531,10 +2532,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="cm-head" id="menu-pc-label">PC-??</div>
   <div class="cm-sec">MACRO</div>
   <div class="cm-grid2">
-    <button class="cm-btn chip-green"  onclick="cardCmd('start')">▶ 시작</button>
-    <button class="cm-btn chip-gray"   onclick="cardCmd('stop')">■ 정지</button>
-    <button class="cm-btn chip-red"    onclick="cardCmd('exit')">✕ 종료</button>
-    <button class="cm-btn chip-yellow" onclick="updaterCmd('restart')" title="매크로 프로세스 재시작 (업데이터 경유 — 진짜 재시작)">↺ 재시작</button>
+    <!-- ★★버튼 이름을 '실제로 하는 일' 로 바꿨다 (2026-08-23 주인님 지시)★★
+         이름은 코드를 실측해서 붙였다 — 이름과 동작이 다르면 그게 거짓말이다.
+           start   → loot.py: config.running = True            = 사냥을 시작한다
+           stop    → loot.py: config.running = False (프로세스는 살아 있다) = 일시정지
+           exit    → loot.py: should_exit + mark_no_restart    = 매크로만 종료
+                     ★업데이터는 안 죽는다★ (그래서 원격으로 다시 켤 수 있다)
+           restart → updater.py: stop_macro() → 2초 → start_macro()
+                     꺼져 있으면 stop 은 무해하고 start 가 켠다 = ★주인님이 원한 그대로★ -->
+    <button class="cm-btn chip-green"  onclick="cardCmd('start')"
+            title="사냥을 시작합니다 (running=True). 프로그램이 이미 떠 있어야 합니다">▶ 사냥 시작</button>
+    <button class="cm-btn chip-gray"   onclick="cardCmd('stop')"
+            title="사냥만 멈춥니다 — 프로그램은 살아 있어서 ▶ 사냥 시작으로 바로 재개됩니다">⏸ 일시정지</button>
+    <button class="cm-btn chip-red"    onclick="cardCmd('exit')"
+            title="매크로 프로그램을 끕니다. ★업데이터는 안 끕니다★ — 그래서 ↺ 로 다시 켤 수 있습니다">✕ 프로그램 종료</button>
+    <button class="cm-btn chip-yellow" onclick="updaterCmd('restart')"
+            title="꺼져 있으면 켜고, 켜져 있으면 껐다 켭니다 (업데이터 경유 — 진짜 재기동)">↺ 껐다 켜기</button>
   </div>
   <div class="cm-sec">ACTION</div>
   <div class="cm-grid2">
