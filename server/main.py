@@ -1666,7 +1666,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
   /* ── 카드 컨텍스트 메뉴 v2 ── */
-  .cm-panel{width:300px;padding:12px;border-radius:16px;
+  .cm-panel{width:330px;padding:13px;border-radius:16px;
     background:linear-gradient(165deg,rgba(17,23,45,.97),rgba(8,12,26,.98));
     border:1px solid rgba(99,102,241,.4);
     box-shadow:0 18px 50px -12px rgba(0,0,0,.85),0 0 30px -10px rgba(99,102,241,.5);
@@ -1674,8 +1674,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .cm-head{display:flex;align-items:center;gap:8px;padding:3px 3px 10px;margin-bottom:3px;
     border-bottom:1px solid rgba(99,102,241,.28);font-size:15px;font-weight:700}
   /* ★2026-08-23 주인님: "너무 작아보여 눈에도 잘안들어온다" → 전반 확대★ */
-  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:10px;font-weight:700;letter-spacing:.20em;
-    color:#a5b4fc;opacity:1;margin:11px 2px 6px}
+  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:11px;font-weight:700;letter-spacing:.18em;
+    color:#a5b4fc;opacity:1;margin:12px 2px 7px}
   .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
   .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
   .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:7px}
@@ -1684,7 +1684,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      오는데 특정도가 같아서(둘 다 클래스 1개) 나중 것이 이긴다. 그래서 chip-teal/violet 등을
      붙여도 전부 회색으로 렌더됐다(파섹 버튼만이 아니라 카드 메뉴 전체가 그랬음).
      선언 대신 var() 폴백으로 두면 팔레트가 있으면 팔레트, 없으면 회색이 된다. */
-  .cm-btn{padding:10px 8px;border-radius:10px;font-size:14px;font-weight:800;text-align:center;
+  .cm-btn{padding:11px 6px;border-radius:10px;font-size:15.5px;font-weight:800;text-align:center;
     color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
     background:rgba(var(--c,148,163,184),.08);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -2563,11 +2563,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          ★짝이 안 맞아 스트림이 영영 안 뜬다★. 이제 한 번 누르면
          본컴 런처(파섹) → 원격컴 크롬 → 재시작 까지 이어서 간다.
          openCardMenu 가 열 때마다 있는 계정만 활성화 -->
-    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="본컴 런처 + 원격컴 크롬을 계정 1로 (파섹 경유, 1~2분)">계정 1</button>
-    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="본컴 런처 + 원격컴 크롬을 계정 2로 (파섹 경유, 1~2분)">계정 2</button>
-    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="본컴 런처 + 원격컴 크롬을 계정 3으로 (파섹 경유, 1~2분)">계정 3</button>
-    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="본컴 런처 + 원격컴 크롬을 계정 4로 (파섹 경유, 1~2분)">계정 4</button>
-    <button class="cm-btn chip-cyan cm-span2" onclick="chromeCdpFromMenu()" title="크롬을 제어 모드(CDP)로 재기동 — ★게임이 1회 끊겼다 자동 재접속됩니다★. 성공하면 이 PC는 자동전환·재연결개선·계정게이트가 실전 가동됩니다 (v1.1.413+)">🌐 크롬 제어모드 전환</button>
+    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 1 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 1</button>
+    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 2 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 2</button>
+    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 3 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 3</button>
+    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 4 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분)">계정 4</button>
+    <!-- ★[🌐 크롬 제어모드 전환] 제거 (2026-08-23 주인님 지시)★
+         함수 chromeCdpFromMenu() 와 chrome_cdp 원격명령은 남는다 —
+         CDP 없는 PC 를 살릴 때 ops 스크립트로 여전히 쓴다. -->
     <!-- ★계정 순회(2026-08-17)★ — 계정을 바꾸면 매크로가 재시작되므로 순회는 한 프로세스
          안에 못 둔다. 매크로가 C:\auto\acct_tour.json 에 진행도를 남기고 부팅 때 이어받는다.
          그래서 이 버튼은 '시작 신호' 하나만 보내고, 진행은 텔레그램으로 온다. -->
@@ -2586,12 +2588,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button class="cm-btn chip-pink"   onclick="screenshotFromMenu()">📸 스샷</button>
   </div>
   <div class="cm-sec">화면 · 원격</div>
-  <div class="cm-grid2" style="margin-bottom:5px">
+  <!-- ★한 줄 3칸 (2026-08-23 주인님 지시)★ — "화면 내부망원격 파섹웹 이거 보기 안좋아
+       줄나눠줘서 … 화면, 원격, 파섹 이렇게 이름 바꾸고 한줄에 나오게해"
+       긴 이름은 title 로 내렸다 — 버튼은 짧게, 설명은 마우스를 올리면 나온다. -->
+  <div class="cm-grid3">
     <button class="cm-btn chip-emerald" onclick="liveFromMenu()" title="실시간 화면 — 어디서나 됨 (Railway 경유, 960x540 · 3fps)">🖵 화면</button>
-    <button class="cm-btn chip-teal" id="cm-lan" onclick="lanFromMenu()" title="내부망 직결 — 원본 해상도 + 원격 조작 (같은 내부망에서만)">⚡ 내부망 원격</button>
-  </div>
-  <div class="cm-grid2">
-    <button class="cm-btn chip-violet" id="cm-parsec-web" onclick="parsecWebFromMenu()" title="파섹 웹 — 새 탭으로 열립니다. ★탭을 여러 개 열면 여러 대를 동시에 볼 수 있습니다★ (설치 불필요, 크롬 전용, H.264). web.parsec.app 에 한 번 로그인해 두면 이후 자동 접속">🌐 파섹 웹</button>
+    <button class="cm-btn chip-teal" id="cm-lan" onclick="lanFromMenu()" title="내부망 직결 원격 — 원본 해상도 + 마우스/키보드 조작 (같은 내부망에서만)">⚡ 원격</button>
+    <button class="cm-btn chip-violet" id="cm-parsec-web" onclick="parsecWebFromMenu()" title="파섹 웹으로 ★본컴★ 보기 — 새 탭으로 열립니다. 탭을 여러 개 열면 여러 대를 동시에 볼 수 있습니다 (설치 불필요, 크롬 전용, H.264)">🌐 파섹</button>
     <!-- ★[🎮 파섹 앱] 제거 (2026-08-23 주인님 지시)★ — 창이 한 번에 하나뿐이라
          여러 대를 동시에 못 본다. 본컴 보기는 [🌐 파섹 웹] 하나로 통일. -->
   </div>
