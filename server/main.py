@@ -8956,10 +8956,17 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     #   순환만 다음 계정으로 굴러간다. 그래서 ★한 번 바빠진 것을 본 뒤에★ 쉬는 자리로
     #   돌아온 것만 완료로 친다(busy 플래그). 끝내 안 바빠지면 유예 뒤 사유를 남기고 넘어간다.
     if stage == "tasking":
-        if age > ROT_TASK_MAX:
+        # ★★상한은 "총 소요시간" 이 아니라 "무진전 시간" 이다 (2026-08-24 사고 177)★★
+        #   진행 지문이 바뀌면 시계를 0 으로. 캐릭이 9개라 오래 걸리는 PC 를 안 끊는다.
+        _fp = _rot_progress_fp(tenant, active) if active else ""
+        if _fp and _fp != st.get("fp"):
+            st["fp"] = _fp
+            st["fp_at"] = _rot_now()                 # ★앞으로 갔다 → 시계 리셋★
+        _stall = _rot_now() - float(st.get("fp_at") or st.get("sent_at") or st.get("since") or 0)
+        if _stall > ROT_TASK_MAX:
             await _rot_stop(tenant, base,
-                            f"⛔ 순환 정지 — {_tlabel} 이 {int(age/60)}분째 안 끝났습니다. "
-                            f"화면 확인 필요")
+                            f"⛔ 순환 정지 — {_tlabel} 이 {int(_stall/60)}분째 "
+                            f"★아무 진전이 없습니다★(총 {int(age/60)}분 경과). 화면 확인 필요")
             return
         if not active:
             return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
@@ -9438,6 +9445,53 @@ async def _eff_watch() -> None:
         except Exception as e:
             print(f'[효율] 감시 예외(무시): {e}')
         await asyncio.sleep(EFF_TICK)
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★★사고 177 (2026-08-24 PC-19) — "오래 걸린다" 와 "멈췄다" 는 다르다★★
+#
+# ★무엇이 있었나★ PC-19 에 ⛔ "회랑 이 90분째 안 끝났습니다. 화면 확인 필요" 가 떴다.
+#   그런데 그 순간에도 로그가 계속 흐르고 있었다(02:21~02:22 실측):
+#     [회랑] middle 진입 ✓ / 세력 현황 — 우리 3 : 적 0 /
+#     [회랑] 아티팩트 3: 우리 진영 + 이용 가능 = 진행 대상 / middle 아티팩트 1 — 시도 1/3
+#   PC-19 는 ★캐릭이 9개(함대 최다)★ 라 회랑이 오래 걸릴 뿐이었다.
+#   주인님: "19번은 캐릭터가많아서 회랑이 오래걸리는것뿐이네 잘하고잇네"
+#
+# ★왜 나쁜가★ 잘 도는 PC 를 순환에서 빼버린다. 그리고 이런 알람이 몇 번 반복되면
+#   주인님이 ⛔ 를 무시하게 된다 — 그러면 ★진짜 멈춘 PC 를 놓친다.★
+#   (2026-08-23~24 알람 다이어트를 두 번 한 이유가 정확히 그것이다)
+#
+# ★고치는 법 — 시간이 아니라 ★진행★ 을 본다★
+#   서버는 30초마다 각 PC 의 상태를 받는다. 거기서 "이 PC 가 앞으로 가고 있나" 를
+#   말해주는 값들을 모아 지문을 만든다:
+#     · status        (사냥/던전/회랑… 무엇을 하는 중인가)
+#     · current_slot  (몇 번째 캐릭인가 — 캐릭이 넘어가면 확실히 진행)
+#     · 완료 칸 수    (daily_progress 에서 completed 인 칸)
+#     · 회랑 남은 수  (CORRIDOR_PROG, 회랑 작업일 때 가장 직접적인 신호)
+#   지문이 바뀌면 ★시계를 0 으로 되돌린다.★ 그러면 상한은
+#   "총 소요시간" 이 아니라 ★"아무 진전 없이 흐른 시간"★ 을 재게 된다.
+#   캐릭이 9개든 20개든 앞으로 가고 있으면 안 끊고, 진짜로 굳으면 90분에 끊는다.
+#
+# ★캐릭 수로 상한을 늘리지 않은 이유★
+#   그건 "몇 분이면 충분한가" 라는 ★또 다른 추측★ 을 낳는다(캐릭당 12분? 15분?).
+#   진행 지문은 추측이 필요 없다 — 게임이 느려지든 캐릭이 늘든 그대로 맞는다.
+# ═════════════════════════════════════════════════════════════════════════════
+def _rot_progress_fp(tenant: str, active: dict) -> str:
+    """이 PC 가 "앞으로 가고 있나" 를 한 줄로. 값이 바뀌면 진행한 것이다."""
+    try:
+        pid = str((active or {}).get("pc_id") or "")
+        dp = (active or {}).get("daily_progress") or []
+        done = sum(1 for c in dp if (c or {}).get("completed"))
+        cor = ""
+        try:
+            v = CORRIDOR_PROG.get(ns(tenant, pid)) or {}
+            cor = str(v.get("remaining"))
+        except Exception:
+            cor = ""
+        return "%s|%s|%d|%s" % (active.get("status"), active.get("current_slot"), done, cor)
+    except Exception:
+        return ""
 
 async def _rot_engine() -> None:
     """계정 자동순환 엔진 — 무장된 PC 만 본다. 무장이 없으면 아무 일도 안 한다."""
