@@ -1666,16 +1666,16 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
     border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
   /* ── 카드 컨텍스트 메뉴 v2 ── */
-  .cm-panel{width:330px;padding:13px;border-radius:16px;
+  .cm-panel{width:360px;padding:14px;border-radius:16px;
     background:linear-gradient(165deg,rgba(17,23,45,.97),rgba(8,12,26,.98));
     border:1px solid rgba(99,102,241,.4);
     box-shadow:0 18px 50px -12px rgba(0,0,0,.85),0 0 30px -10px rgba(99,102,241,.5);
     backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-  .cm-head{display:flex;align-items:center;gap:8px;padding:3px 3px 10px;margin-bottom:3px;
-    border-bottom:1px solid rgba(99,102,241,.28);font-size:15px;font-weight:700}
+  .cm-head{display:flex;align-items:center;gap:9px;padding:4px 3px 11px;margin-bottom:4px;
+    border-bottom:1px solid rgba(99,102,241,.28);font-size:17px;font-weight:800}
   /* ★2026-08-23 주인님: "너무 작아보여 눈에도 잘안들어온다" → 전반 확대★ */
-  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:11px;font-weight:700;letter-spacing:.18em;
-    color:#a5b4fc;opacity:1;margin:12px 2px 7px}
+  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:12px;font-weight:700;letter-spacing:.16em;
+    color:#a5b4fc;opacity:1;margin:13px 2px 8px}
   .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
   .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
   .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:7px}
@@ -1684,7 +1684,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      오는데 특정도가 같아서(둘 다 클래스 1개) 나중 것이 이긴다. 그래서 chip-teal/violet 등을
      붙여도 전부 회색으로 렌더됐다(파섹 버튼만이 아니라 카드 메뉴 전체가 그랬음).
      선언 대신 var() 폴백으로 두면 팔레트가 있으면 팔레트, 없으면 회색이 된다. */
-  .cm-btn{padding:11px 6px;border-radius:10px;font-size:15.5px;font-weight:800;text-align:center;
+  .cm-btn{padding:12px 6px;border-radius:10px;font-size:17px;font-weight:800;text-align:center;
     color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
     background:rgba(var(--c,148,163,184),.08);
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
