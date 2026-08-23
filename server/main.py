@@ -1668,14 +1668,22 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ★2026-08-23 주인님: "위쪽상단에 순환용이랑 선택카드만 하는거 두개로 나눠있는게 낫겟네"★
      같은 이름의 버튼이 두 줄로 늘어서므로 ★색 테두리로 갈라놔야★ 직원이 안 헷갈린다.
      순환 = 하늘색(전 계정을 돈다) / 선택 = 회색(그 카드 한 번). */
-  .cmd-rot{border-color:rgba(56,189,248,.5);
-    background:linear-gradient(160deg,rgba(8,47,73,.55),rgba(8,14,28,.65))}
-  .cmd-rot:hover{border-color:rgba(56,189,248,.9)}
-  .cmd-rot .cmd-legend{color:#7dd3fc;border-color:rgba(56,189,248,.55)}
-  .cmd-one{border-color:rgba(148,163,184,.3)}
-  .cmd-one .cmd-legend{color:#cbd5e1;border-color:rgba(148,163,184,.4)}
-  .cmd-legend{position:absolute;top:-8px;left:10px;padding:1px 7px;border-radius:5px;
-    font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:8px;font-weight:600;letter-spacing:.24em;
+  /* 순환 = 하늘색 굵은 테두리(전 계정을 돈다) / 선택 = 회색 점선(그 카드 한 번) */
+  .cmd-rot{border:2px solid rgba(56,189,248,.75);
+    background:linear-gradient(160deg,rgba(8,47,73,.75),rgba(8,20,38,.8));
+    box-shadow:inset 0 0 24px -14px rgba(56,189,248,.9)}
+  .cmd-rot:hover{border-color:rgba(56,189,248,1)}
+  .cmd-rot .cmd-legend{color:#0b0f1f;background:#7dd3fc;border-color:#7dd3fc}
+  .cmd-one{border:1px dashed rgba(148,163,184,.45);background:rgba(255,255,255,.02)}
+  .cmd-one .cmd-legend{color:#cbd5e1;border-color:rgba(148,163,184,.45)}
+  /* ★버튼 자체에도 표식★ — 그룹 테두리를 안 봐도 버튼만으로 갈린다 */
+  .cmd-rot .chip::before{content:'🔁 ';font-size:11px}
+  /* ★★그룹 라벨은 ★읽히라고★ 있는 것이다 (2026-08-24 주인님 지적)★★
+     주인님: "순환용이랑 비순환용 만들어놓으라햇잖아 근데 다 순환용 처럼 보이는데"
+     8px + letter-spacing .24em 은 장식이지 글자가 아니었다. 버튼 이름·색까지 두 그룹이
+     똑같으니 ★무엇으로도 구분이 안 됐다.★ 라벨을 키우고, 아래에서 버튼에도 표식을 단다. */
+  .cmd-legend{position:absolute;top:-10px;left:10px;padding:2px 9px;border-radius:6px;
+    font-size:12px;font-weight:800;letter-spacing:.02em;
     color:#a5b4fc;background:#0b0f1f;border:1px solid rgba(99,102,241,.35);pointer-events:none}
   .chip{--c:148,163,184;padding:4px 11px;border-radius:9px;font-size:12px;font-weight:700;line-height:1.25;
     color:rgb(var(--c));border:1px solid rgba(var(--c),.45);background:rgba(var(--c),.09);
@@ -2267,16 +2275,19 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <a href="#" onclick="window.open('/manual?t='+Date.now(),'_blank');return false;" class="px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-800/70 hover:bg-indigo-600 text-indigo-100 transition-colors whitespace-nowrap" title="이용 매뉴얼 PDF 열기 / 내려받기 (항상 최신본)">📘 매뉴얼</a>
     <a href="/updater.exe" class="px-3 py-1 rounded-lg text-xs font-semibold bg-teal-800/70 hover:bg-teal-600 text-teal-100 transition-colors whitespace-nowrap" title="설치용 업데이터 내려받기 — 로그인 계정에 맞는 파일명으로 받아집니다 (본판 updater.exe / 렌탈 rental_updater.exe)">⬇ 업데이터</a>
     <button onclick="openAcctModal()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-violet-900/70 hover:bg-violet-700 text-violet-100 transition-colors whitespace-nowrap" title="계정 세부정보 — PC별 계정 아이디·이메일·휴대폰 (info.txt 에서 모아옵니다)">📇 계정정보</button>
-<!-- ★[🛑 렌탈] 버튼 제거됨 (2026-08-16 사용자 지시 "렌탈 킬버튼은 없애라 이제")★
-     ★킬스위치 자체는 살아 있다★ — 서버 설정 rental_kill 은 그대로고 렌탈 테넌트는 계속
-     차단 상태다. 버튼(화면)만 뺀 것이지 차단을 푼 게 아니다.
-     되살리려면 아래 한 줄을 주석에서 꺼내면 된다 (openRentalModal·#rental-modal·
-     loadRentalTenants 는 전부 그대로 남아 있다. loadRentalTenants 는 btn 이 없으면
-     아무 것도 안 하도록 이미 가드가 있어 무해하다):
-  <!-- ★[🛑 렌탈] 버튼 제거 (2026-08-23 주인님 지시)★ — 렌탈 사업 폐기.
-       ★모달과 킬스위치 서버 코드는 지우지 않는다★ (48h 유예 함정 — 지우면
-       휴면 테넌트가 다시 살아난다). 되살리려면 이 버튼만 다시 붙이면 된다. -->
-     화면 없이 차단을 켜고 끄려면: POST /setting/rental_kill  {"value":"친구A"} / 해제 {"value":""} -->
+<!-- ★[🛑 렌탈] 버튼 제거 (2026-08-16 → 2026-08-23 렌탈 사업 폐기)★
+     ★킬스위치 자체는 살아 있다★ — 버튼(화면)만 뺀 것이지 차단을 푼 게 아니다.
+     ★모달·서버 코드는 지우지 않는다★ (48h 유예 함정 — 지우면 휴면 테넌트가 되살아난다).
+     되살리려면 이 자리에 버튼 한 줄만 다시 붙이면 된다
+     (openRentalModal · #rental-modal · loadRentalTenants 전부 남아 있고,
+      loadRentalTenants 는 btn 이 없으면 아무 것도 안 하는 가드가 있어 무해하다).
+
+     ★★2026-08-24 수리 — 여기 주석이 ★중첩★ 돼 있었다★★
+     HTML 주석은 중첩이 안 된다. 안쪽 주석의 닫는 태그가 바깥 주석까지 닫아버려
+     그 뒤 문장이 ★대시보드 화면에 그대로 출력★ 됐다(주인님 발견). 게다가 새어나온 줄이
+     하필 rental_kill 엔드포인트 사용법이라 ★운영 정보가 화면에 노출★ 됐다.
+     → HTML 주석 안에 주석 기호를 절대 쓰지 않는다(이 문장을 쓰면서 또 그랬다).
+     조작법은 파이썬 코드 주석(파일 상단 83~85행)에만 둔다. -->
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
@@ -2308,7 +2319,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
        한 계정에서 작업이 끝나면 서버가 스스로 다음 계정으로 통짜 전환해 또 시킨다.
        계정을 한 바퀴 다 돌면 자동 종료(텔레그램 ✅). ★물리 PC당 1건★ 으로 접어 보낸다. -->
   <div class="cmd-group cmd-rot">
-    <span class="cmd-legend">🔁 전 계정 순환</span>
+    <span class="cmd-legend">🔁 전 계정 순환 (PC의 계정 전부)</span>
     <button onclick="rotCmd('daily_dungeon')" class="chip chip-purple" title="선택 PC의 ★모든 계정★ 을 돌며 일일던전. 한 계정이 끝나면 자동으로 다음 계정으로 전환합니다">일일던전</button>
     <button onclick="rotCmd('nightmare')" class="chip chip-pink" title="선택 PC의 ★모든 계정★ 을 돌며 악몽">악몽</button>
     <button onclick="rotCmd('awakening')" class="chip chip-orange" title="선택 PC의 ★모든 계정★ 을 돌며 각성전">각성</button>
@@ -2318,7 +2329,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
   <div class="cmd-group cmd-one">
-    <span class="cmd-legend">🎯 선택 카드만</span>
+    <span class="cmd-legend">🎯 선택한 카드 1개만</span>
     <button onclick="selCmd('daily_dungeon')" class="chip chip-purple">일일던전</button>
     <button onclick="selCmd('nightmare')" class="chip chip-pink">악몽</button>
     <button onclick="selCmd('awakening')" class="chip chip-orange">각성</button>
