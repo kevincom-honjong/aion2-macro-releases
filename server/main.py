@@ -750,7 +750,14 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 if fname.endswith(".png"):
                     m = re.match(r"^(.+?)_\d{8}_\d{6}_", fname)
                     if m:
-                        pid = m.group(1)
+                        # ★★버그 스샷은 ★PC 단위★ 다 (2026-08-23 주인님 지적)★★
+                        #   주인님: "대시보드에 스크린샷 아직도 컴퓨터 단위아닌거같은데"
+                        #   매크로는 파일을 ★베이스 pc_id★ 로 올린다(PC-24_...). 그런데
+                        #   여기서 그대로 세면 그 수가 ★계정1 카드에만★ 붙는다.
+                        #   스샷은 그 물리 PC 의 화면이지 계정의 것이 아니다 —
+                        #   계정2 카드를 보고 있을 때도 같은 수가 보여야 한다.
+                        #   → 베이스로 세고, 아래에서 모든 계정 카드에 같은 값을 준다.
+                        pid = _base_pc(m.group(1))
                         bug_counts[pid] = bug_counts.get(pid, 0) + 1
     except Exception:
         pass
@@ -806,7 +813,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
         else:
             # base 카드인데 updater 기록 자체가 없으면 offline (기존 규칙)
             pc["status"] = "offline"
-        pc["_bug_count"] = bug_counts.get(pid, 0)
+        pc["_bug_count"] = bug_counts.get(_base_pc(pid), 0)   # ★PC 단위★ (2026-08-23)
         pc["deaths_30m"] = death_counts.get(pid, 0)
         pc["slot_filters"] = all_filters.get(pid, {})
         pc["_ws_live"] = ns(tenant, pid) in macro_ws_connections   # 2차 패스(한 PC=한 매크로)용
@@ -847,7 +854,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 "status":           "offline",
                 "_updater_state":   u.get("macro_state", "unknown"),
                 "_updater_version": u.get("updater_version", ""),
-                "_bug_count":       bug_counts.get(pid, 0),
+                "_bug_count":       bug_counts.get(_base_pc(pid), 0),   # ★PC 단위★
                 "deaths_30m":       death_counts.get(pid, 0),
             }
             # ★여기도 char_info를 붙인다(2026-07-28): 매크로가 죽어 pc_status 행이 없는 PC는
@@ -7200,7 +7207,10 @@ def _list_bug_files(tenant: str, pc_id: Optional[str] = None) -> list[dict]:
             continue
         if pc_id:
             m = re.match(r'^(.+?)_\d{8}_\d{6}_', fname)
-            if not m or m.group(1) != pc_id:
+            # ★★베이스끼리 비교한다 (2026-08-23)★★ — 예전엔 정확일치라
+            #   `PC-24b` 로 물어보면 `PC-24_...` 파일이 하나도 안 걸렸다.
+            #   묻는 쪽이 접미사를 달고 오든 아니든, 스샷은 그 PC 의 것이다.
+            if not m or _base_pc(m.group(1)) != _base_pc(pc_id):
                 continue
         path = os.path.join(bdir, fname)
         try:
