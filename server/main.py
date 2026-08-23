@@ -5306,16 +5306,29 @@ async function updaterCmd(command, args={}) {
 let bugModalPc = null;
 
 async function openBugsModal(pc_id) {
-  bugModalPc = pc_id;
-  document.getElementById('bug-modal-title').textContent = `버그 스크린샷 — ${pc_id}`;
+  // ══════════════════════════════════════════════════════════
+  // ★★스샷은 ★계정 스택 공통★ 이다 (2026-08-23 주인님 지적)★★
+  //   원문: "지금 계정2가 돌가잇는데 카드에다가 스샷을 요청했는데 이게 꼭 계정1에만
+  //          스샷 관련이떠잇네? 이건 공통으로 뜨게해야하는데"
+  //
+  //   ★왜 그랬나★ 매크로는 스샷을 ★base pc_id★ 로 올린다(파일명 실측:
+  //   `PC-24_20260822_222222_PC-24b_...` — 앞이 base, 뒤가 그때 슬롯).
+  //   그런데 조회는 `/bugs/${pc_id}` 라 계정2 카드는 `PC-20b` 로 물어보고
+  //   ★빈 목록★ 을 받았다. 스샷은 그 PC 한 대의 것이지 계정별로 나뉘지 않는다.
+  //   → 조회를 base 로 통일한다. 어느 계정 카드에서 눌러도 같은 목록이 나온다.
+  // ══════════════════════════════════════════════════════════
+  const _base = (typeof baseId === 'function') ? baseId(pc_id) : String(pc_id).replace(/[bcd]$/, '');
+  bugModalPc = _base;
+  document.getElementById('bug-modal-title').textContent =
+    `버그 스크린샷 — ${_base}` + (_base !== pc_id ? ` (${pc_id} 에서 열음 · 스택 공통)` : '');
   // href 대신 onclick으로 교체 (다운로드 후 모달 갱신)
   const dlBtn = document.getElementById('bug-download-link');
-  dlBtn.onclick = (e) => { e.preventDefault(); downloadAndClearBugs(pc_id); };
-  document.getElementById('bug-clear-btn').onclick = () => clearBugsOf(pc_id);
+  dlBtn.onclick = (e) => { e.preventDefault(); downloadAndClearBugs(_base); };
+  document.getElementById('bug-clear-btn').onclick = () => clearBugsOf(_base);
   document.getElementById('bug-modal').classList.remove('hidden');
   const el = document.getElementById('bug-list');
   el.innerHTML = '<div class="text-gray-600 text-sm">로딩 중...</div>';
-  const res = await fetch(`/bugs/${pc_id}`);
+  const res = await fetch(`/bugs/${_base}`);
   if (!res.ok) { el.innerHTML = '<div class="text-red-400 text-sm">로드 실패</div>'; return; }
   const data = await res.json();
   const bugs = data.bugs || [];
