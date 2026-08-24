@@ -5585,6 +5585,15 @@ async function loadCharTable() {
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
     renderCards();   // 각성완료 뱃지가 charTableData 기반 — 로드 후 카드 재렌더(내부에서 refreshSummary 호출)
+    // ★★AI 던전 추천도 같이 다시 그린다 (2026-08-24 주인님 지적)★★
+    //   aiBuildPlan() 은 charTableData 를 캐시 없이 매번 다시 읽는다. 그런데 이 함수가
+    //   renderCharTable/renderCards 만 부르고 renderAiPlan 은 안 불러서, ★모달을 열어둔 채★
+    //   정보수집이 끝나면 화면이 옛 오드에너지 그대로였다(직원분들은 이 모달을 띄워놓고 일한다).
+    //   모달이 닫혀 있으면 아무 일도 하지 않는다 — 열려 있을 때만 갱신한다.
+    try {
+      const _m = document.getElementById("ai-modal");
+      if (_m && !_m.classList.contains("hidden")) renderAiPlan();
+    } catch(e) { console.error("AI 추천 갱신 실패", e); }
   } catch(e) { console.error('캐릭터 테이블 로드 실패', e); }
 }
 
