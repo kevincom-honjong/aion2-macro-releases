@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.6"
+UPDATER_VERSION  = "3.1.7"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -1404,8 +1404,13 @@ def _cleanup_old_updaters():
 #     ⑤ 내가 모르는 칸은 [ 기타 ] 로 그대로 보존
 OWNER_CONTROL_KEY = "aion2_secret_2026"   # ★사용자 지시로 내장(2026-08-16)★ 공개 노출 인지·수용됨
 
-INFO_FORM = "3"          # 파일 양식 번호 — 1=옛 폼(칸이 흩어짐), 2=계정별 묶음 + 캐릭수 9칸 환산됨,
+INFO_FORM = "4"          # 파일 양식 번호 — 1=옛 폼(칸이 흩어짐), 2=계정별 묶음 + 캐릭수 9칸 환산됨,
 #                          3=계정N_플랫폼 칸 추가 (퍼플/스토브 등 — 아이디와 별개, 2026-08-16)
+#                          ★4=계정5 칸 추가 (2026-08-24 사고 196)★ — set_info 로 넣은
+#                            계정5_* 가 파일 ★끝에 낱줄★ 로만 붙어서 사람이 열면 칸이 안 보였다.
+#                            주인님: "info에 계정 5 칸이 없다". 폼을 올려 한 번 재구성한다.
+#                            ★재환산 위험 없음★ — _src_form(3) >= 2 라 _conv_slots 를 안 탄다.
+#                            (하네스: info_form4_test.py 로 실증)
 # ★폼을 올릴 때마다 _build_new_info 의 캐릭수 처리를 반드시 확인할 것★ — 환산(+10)은
 #   ★1→2 이관에서 단 한 번만★ 일어나야 한다. 폼 2 파일을 다시 환산하면 16이 26이 되어
 #   20대가 한 칸씩 밀린 캐릭으로 들어간다(_build_new_info 의 _src_form 가드 참조).
@@ -1471,10 +1476,18 @@ def _build_new_info(kv):
     # ★원본 파일의 양식 번호★ — 캐릭수 환산(+10)을 걸지 말지 정하는 유일한 근거.
     #   폼 1 → 2 에서 딱 한 번만 환산한다. 폼 2 이상인 파일을 다시 환산하면 16이 26이 되어
     #   전 함대가 한 칸 밀린 캐릭으로 들어간다. 폼 번호를 또 올릴 때도 이 가드가 지켜준다.
+    #   ★못 읽으면 1 로 떨어뜨리지 않는다 (2026-08-24 사고 196 적대리뷰)★
+    #     `info_form=` / `info_form=abc` / 줄 자체가 없음 → 예전엔 전부 _src_form=1 이 되어
+    #     ★이미 환산된 파일을 또 환산★ 했다(22→32, 16→26 = 전 계정이 한 칸씩 밀림).
+    #     그리고 missing 검사는 환산값을 conv_old 로 화이트리스트하므로 ★원리상 못 잡는다.★
+    #     실제 도달 경로: 렌탈 setup ZIP 의 info.txt 에 info_form 줄이 없고,
+    #     매뉴얼 4종이 "메모장으로 이렇게 적으세요" 양식에 info_form 을 안 넣는다.
+    #     → 폼을 확신할 수 없으면 ★환산을 아예 걸지 않는다★(None). 안 하는 쪽이 안전하다.
+    _raw_form = (kv.get("info_form") or "").strip()
     try:
-        _src_form = int((kv.get("info_form") or "1").strip() or "1")
+        _src_form = int(_raw_form) if _raw_form else None
     except ValueError:
-        _src_form = 1
+        _src_form = None
 
     def take(*names):
         """후보 중 ★처음 나오는 값★을 쓰되, 후보 전부를 '읽은 칸'으로 표시한다.
@@ -1528,7 +1541,8 @@ def _build_new_info(kv):
         _slots_raw = (kv.get(f"계정{n}_캐릭수") or kv.get(_legacy_key) or "").strip()
         used.add(f"계정{n}_캐릭수")
         # ★환산은 옛 폼(1)에서 올라올 때만★ — 폼 2 이상은 이미 9칸 기준이라 그대로 둔다.
-        _new = _conv_slots(_slots_raw) if _src_form < 2 else _slots_raw
+        # _src_form 이 None(=폼 불명) 이면 환산하지 않는다 — 위 주석 참조
+        _new = _conv_slots(_slots_raw) if (_src_form is not None and _src_form < 2) else _slots_raw
         out[f"계정{n}_캐릭수"] = _new
         if _slots_raw and _new != _slots_raw:
             conv[f"계정{n}_캐릭수"] = (_slots_raw, _new)
@@ -1595,8 +1609,34 @@ def ensure_info_txt():
             log("[업데이터] ※ pc_id 와 계정1_아이디/비번을 채우고 updater를 재시작하세요")
             return
 
-        with open(INFO_TXT, encoding="utf-8-sig", errors="replace") as f:
-            old = f.read()
+        # ══════════════════════════════════════════════════════════
+        # ★★인코딩 3단 방어 — 없으면 파일을 파괴한다 (2026-08-24 사고 196 적대리뷰)★★
+        #   예전엔 utf-8-sig + errors="replace" 하나뿐이었다. 메모장 "ANSI 저장"(CP949)
+        #   파일을 그렇게 읽으면 ★한글 키가 전부 U+FFFD 로 깨져★ take() 가 못 알아보고,
+        #   계정1_아이디/비번/PIN/캐릭 이 통째로 빈 채 재작성된다.
+        #   더 나쁜 건 ★검사를 통과한다★ 는 것 — 깨진 값이 [기타] 에 남아 있어
+        #   `v in newvals` 가 참이 되기 때문이다. 로그는 "정리했습니다" 만 찍는다.
+        #   pc_id·API키는 ASCII 라 살아남으므로 ★PC 는 멀쩡히 붙어 있는데 로그인만 안 된다.★
+        #   그리고 계정1_캐릭수가 기본값 15 로 떨어져 ★사고 139(빈 [캐릭터 생성] 칸 클릭)★
+        #   조건이 그대로 만들어진다.
+        #   매크로(lc/config.py:load_info_txt)에는 이 폴백이 ★원래 있었다★ —
+        #   방어가 ★읽는 쪽에만 있고 재작성하는 쪽에는 없었다.★
+        # ══════════════════════════════════════════════════════════
+        old = None
+        for _enc in ("utf-8-sig", "cp949"):
+            try:
+                with open(INFO_TXT, encoding=_enc) as f:
+                    old = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if old is None:
+            log("[업데이터] ★info.txt 이관 중단★ — utf-8/cp949 둘 다로 못 읽습니다(원본 유지)")
+            return
+        if "\ufffd" in old:
+            # 어떤 인코딩으로도 온전히 못 읽었다 = 손대면 안 된다
+            log("[업데이터] ★info.txt 이관 중단★ — 깨진 문자가 있습니다(인코딩 불명, 원본 유지)")
+            return
         # ★판정은 양식 번호로만★ — 예전엔 '계정1_이메일 이 있으면 새 폼'으로 봤는데, 사용자가
         #   옛 파일에 그 줄만 손으로 추가하면 ★캐릭수는 환산 안 된 채 새 폼 취급★이 돼
         #   매크로가 한 칸 어긋난 칸을 누른다. 양식 번호는 이관이 실제로 끝나야만 찍힌다.
@@ -1614,17 +1654,48 @@ def ensure_info_txt():
         newkv = _read_kv(body)
         newvals = set(newkv.values())
         conv_old = {o for o, _ in conv.values()}
+        # ★info_form 은 값 비교에서 빼되, ★대신 새 값이 제대로 찍혔는지 단언한다★
+        #   (2026-08-24 사고 196 + 적대리뷰)
+        #   · 빼야 하는 이유: 이 값은 ★이관 표식 자체★ 라 3→4 로 바뀌는 게 정상인데,
+        #     '옛 값이 새 파일에 있나' 로만 보면 매번 '소실' 로 판정해 이관이 중단된다.
+        #   · 그냥 빼기만 하면 ★새 파일에 info_form 이 안 써져도 아무도 못 잡는다.★
+        #     그 경우 _form=1 이 되어 ★매 부팅마다 재이관★ 되고, 폼 불명이라
+        #     캐릭수가 부팅마다 +10 복리로 밀린다(실측: 22→32→42→52…).
+        #   → 제외 + 단언 두 개를 같이 둔다.
+        if newkv.get("info_form") != INFO_FORM:
+            log(f"[업데이터] ★info.txt 이관 중단★ — 새 본문에 info_form={INFO_FORM} 이 "
+                f"안 찍혔습니다(실제 {newkv.get('info_form')!r}). 원본을 그대로 둡니다")
+            return
         missing = [k for k, v in kv.items()
-                   if v and v not in newvals and v not in conv_old]
+                   if k != "info_form" and v and v not in newvals and v not in conv_old]
         if missing:
             log(f"[업데이터] ★info.txt 이관 중단★ — 옮기지 못한 칸 {missing[:6]} "
                 f"→ 원본을 그대로 둡니다(동작에 지장 없음)")
             return
 
+        # ══════════════════════════════════════════════════════════
+        # ★★값 검사만으로는 못 잡는 사고가 있다 — 그래서 한 겹 더 (사고 196 적대리뷰)★★
+        #   CP949 파일이 깨져 들어오면 `계정N_아이디` 같은 ★아는 칸이 통째로 비는데★
+        #   깨진 값은 [기타] 에 남아 있어 위 missing 검사를 그대로 통과한다.
+        #   → "옛 파일엔 값이 있었는데 새 파일에선 빈 칸" 이 하나라도 있으면 손대지 않는다.
+        #   ★이건 '값이 어디 있나' 가 아니라 '제자리에 있나' 를 본다.★
+        _lost = [k for k in kv
+                 if k.startswith("계정") and (kv.get(k) or "").strip()
+                 and not (newkv.get(k) or "").strip()]
+        if _lost:
+            log(f"[업데이터] ★info.txt 이관 중단★ — 계정 칸 {len(_lost)}개가 빈 칸이 됩니다 "
+                f"{_lost[:6]} (인코딩 문제 의심) → 원본을 그대로 둡니다")
+            return
+
+        # ★백업 이름에 ★옛 폼 번호★ 를 붙인다 (사고 196 적대리뷰)★ — 매크로 set_info 도
+        #   같은 이름의 .bak 을 쓴다. 이관 직후 set_info 가 한 번 돌면 ★구폼 원본이 사라진다.★
         shutil.copy2(INFO_TXT, INFO_TXT + ".bak")
+        shutil.copy2(INFO_TXT, f"{INFO_TXT}.form{_form}.bak")
         tmp = INFO_TXT + ".new"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(body)
+            f.flush()
+            os.fsync(f.fileno())      # ★정전 내구성★ — rename 만 먼저 내려가면 0바이트가 남는다
         os.replace(tmp, INFO_TXT)
         log(f"[업데이터] info.txt 를 계정별 묶음 폼으로 정리했습니다 (원본: info.txt.bak)")
         for k, (o, n) in conv.items():
