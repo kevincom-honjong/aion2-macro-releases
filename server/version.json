@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.659",
+    "version": "1.1.660",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "1b3595d8535bd93fe997426a298d2cb7358c8ed1ba09fa28b717e6f85d8ddb5a",
+    "sha256": "d85c0f9112be44ab18a703de435ff34224236f2f791d69aed29cc6185ed3d1f0",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -201,6 +201,7 @@
     "plrow_PC-15_3.png": "25656dacb675c156ac8c4f0d381b3a85d73fe6a2b2204e9052fb833dd877874f",
     "plrow_PC-16_1.png": "731bac50a14c76535c6f58953e96c64b6684c70985c685ba4100385ae3e7c03b",
     "plrow_PC-16_2.png": "ffbf4d004467c189aafa3ee2f7712c085f5702f3985050acf9b88ba1b242e9dc",
+    "plrow_PC-16_3.png": "9aa426f2db220b6fe2c196ca245d161d298a13b347221151409934a8231082dc",
     "plrow_PC-17_1.png": "4a5addbce8efec85290a9cb8fb43dc536cbc9d3c7559701df5f58979820c66a5",
     "plrow_PC-17_2.png": "a18dad6dfddce70a0f6b0d0f9d36e09d6ccd95985d72a0cee7ec9d1ded22bdca",
     "plrow_PC-20_1.png": "4c6d32d2227f874a65cbe1b64bec89f157f1902a5a7affd063f16f6896e76ae2",
@@ -354,11 +355,11 @@
     "sha256": "bcf527bbc63c5f9d4864c1a812e6a1fc6de261bfd402601d1df0b3630aed1788",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260823191256",
-  "updated_at": "2026-08-24T01:02:11",
+  "images_version": "20260824111806",
+  "updated_at": "2026-08-24T11:18:06",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.659",
+    "version": "1.1.660",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
