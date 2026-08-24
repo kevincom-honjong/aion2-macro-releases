@@ -1424,6 +1424,13 @@ _PC_RARE = ["lan_ip", "lan_allow", "live_fps", "live_q",
             "gemini_api_key", "anthropic_api_key", "twocaptcha_api_key"]
 
 
+# ★★계정 개수 — lc/config.py 의 MAX_ACCT 와 같은 값이어야 한다 (2026-08-24 사고 193)★★
+#   이 값이 작으면 계정5 칸이 정규화에서 빠져 "기타(예전 칸)" 구역으로 밀린다.
+#   (데이터가 날아가지는 않는다 — leftover 로 보존된다)
+MAX_ACCT    = 5
+ACCT_LABELS = "abcdefghi"[:MAX_ACCT]
+
+
 def _acct_fields(n):
     """계정 n 의 칸 목록 — 이 순서대로 한 덩어리로 쓴다."""
     return ([f"계정{n}_플랫폼", f"계정{n}_아이디", f"계정{n}_비번", f"계정{n}_이메일",
@@ -1499,8 +1506,8 @@ def _build_new_info(kv):
     if not out.get("screenshot_key"):
         out["screenshot_key"] = "ctrl+q"
 
-    for n in range(1, 5):
-        lab = "abcd"[n - 1]
+    for n in range(1, MAX_ACCT + 1):
+        lab = ACCT_LABELS[n - 1]
         base = (n == 1)
         # 플랫폼(퍼플/스토브 등) — 아이디와 별개 칸(2026-08-16 사용자 지시). 옛 키는 없다.
         out[f"계정{n}_플랫폼"] = take(f"계정{n}_플랫폼", f"{lab}_platform")
@@ -1549,7 +1556,7 @@ def _build_new_info(kv):
     L.append("------  거의 안 씀 (비워두세요)  ------")
     for k in _PC_RARE:
         L.append(f"{k}={out.get(k, '')}")
-    for n in range(1, 5):
+    for n in range(1, MAX_ACCT + 1):
         L.append("")
         L.append(f"=================={'  계정 %d  (본계정)  ' % n if n == 1 else '  계정 %d  ' % n}==================")
         for k in _acct_fields(n):

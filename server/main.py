@@ -130,6 +130,26 @@ _init_tenants()
 
 _PC_ID_SAFE = re.compile(r"[^A-Za-z0-9가-힣._\- ]")
 
+# ★★계정 개수 — 여기 하나만 고치면 카드 접미사·순환 엔진이 전부 따라간다★★
+#
+# ★2026-08-24 사고 193★ 주인님이 계정5 를 요청했을 때 '4계정' 가정이 매크로·서버·ops
+#   합쳐 ★59곳★ 에 흩어져 있었다. 그중 제일 위험한 게 여기다 —
+#   `_base_pc` 가 접미사를 'bcd' 로만 알면 ★PC-20e 를 별개 PC 로 본다★.
+#   그러면 순환 엔진이 형제 카드를 못 묶어 계정 전환이 통째로 어긋난다.
+#   ★매크로 lc/config.py 의 MAX_ACCT / ACCT_LABELS 와 같은 값이어야 한다★
+#   (둘 중 한쪽만 배포하면 어긋난다 — 서버와 exe 를 같이 낸다).
+# ★MAX_ACCT 는 9 이하로 유지할 것★ — 라벨 풀이 9글자다. 10 이상이면 ACCT_LABELS[9] 가
+#   IndexError 이고, 매크로 쪽 `_INFO_SETTABLE` 의 문자클래스 `[1-N]` 도 같이 깨진다.
+MAX_ACCT    = 5
+ACCT_LABELS = "abcdefghi"[:MAX_ACCT]   # 계정번호 n ↔ ACCT_LABELS[n-1]
+ACCT_SUFFIX = ACCT_LABELS[1:]          # 카드 pc_id 접미사 (계정1 은 접미사 없음)
+
+
+def acct_no_of_label(lbl) -> int:
+    """라벨 → 계정번호. ★모르는 값은 0(없음)★ — 순환 target 판정에 쓰는 쪽 규약."""
+    _s = str(lbl or "")
+    return (ACCT_LABELS.index(_s) + 1) if (len(_s) == 1 and _s in ACCT_LABELS) else 0
+
 
 def clean_pc_id(pc_id: str) -> str:
     """★pc_id 화이트리스트 소독(2026-07-27 보안감사).
@@ -770,8 +790,8 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
         # ★멀티계정(v1.1.412 리뷰 결함 1)★ 업데이터는 PC 단위라 base id(PC-03)로만 보고한다.
         #   부계정 카드(PC-03b)는 pc_status만 올리고 updater_map엔 'PC-03b'가 영영 없어
         #   무조건 offline으로 강등됐다. 접미사(b/c/d)를 벗긴 base id로 updater를 조인한다.
-        is_sub = bool(pid and pid[-1] in ("b", "c", "d") and pid[:-1] in seen | set(updater_map))
-        ukey = pid[:-1] if (pid and pid[-1] in ("b", "c", "d") and pid[:-1] in updater_map) else pid
+        is_sub = bool(pid and pid[-1] in ACCT_SUFFIX and pid[:-1] in seen | set(updater_map))
+        ukey = pid[:-1] if (pid and pid[-1] in ACCT_SUFFIX and pid[:-1] in updater_map) else pid
         if ukey in updater_map:
             u = updater_map[ukey]
             pc["_updater_state"]   = u.get("macro_state", "unknown")
@@ -882,7 +902,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
     #   업데이터 생존 덕에 온라인 취급되어 스택 맨 앞을 차지했다.
     #   카드가 1장뿐인 PC(단일계정 함대 17대)는 건드리지 않는다 = 회귀 0.
     def _base_of(p: str) -> str:
-        return p[:-1] if p and p[-1] in ("b", "c", "d") else p
+        return p[:-1] if p and p[-1] in ACCT_SUFFIX else p
     by_base: dict[str, list] = {}
     for pc in statuses:
         by_base.setdefault(_base_of(pc.get("pc_id") or ""), []).append(pc)
@@ -951,7 +971,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 #   증상: 순환은 도는데 대시보드에 순환 뱃지가 안 보인다(= 진단 불가).
                 _tg = str(_rs.get("target") or "")
                 if _tg:
-                    pc["_rot_target"] = ("abcd".index(_tg) + 1) if _tg in "abcd" else 0
+                    pc["_rot_target"] = acct_no_of_label(_tg)
     except Exception:
         pass
     return statuses
@@ -971,7 +991,7 @@ def _pc_num(pc_id: str):
     """
     if not pc_id:
         return None
-    s = pc_id[:-1] if pc_id[-1] in ("b", "c", "d") else pc_id
+    s = pc_id[:-1] if pc_id[-1] in ACCT_SUFFIX else pc_id
     m = re.search(r"(\d{1,3})\s*$", s)
     return int(m.group(1)) if m else None
 
@@ -2313,7 +2333,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="selCmd('exit')" class="chip chip-red">✕ 종료</button>
     <button onclick="selUpdaterCmd('update')" class="chip chip-cyan">↑ 업데이트+재시작</button>
     <button onclick="switchAccountSelected()" class="chip chip-purple"
-            title="선택한 PC들을 한꺼번에 지정 계정(1~4)으로 통짜 전환 — 각 PC가 ★본컴 런처(파섹) → 원격컴 크롬 → 매크로 재시작★ 까지 (물리 PC당 1건, 이미 그 계정인 PC는 제외, 대당 1~2분)">🔁 계정전환</button>
+            title="선택한 PC들을 한꺼번에 지정 계정으로 통짜 전환 — 각 PC가 ★본컴 런처(파섹) → 원격컴 크롬 → 매크로 재시작★ 까지 (물리 PC당 1건, 이미 그 계정인 PC는 제외, 대당 1~2분)">🔁 계정전환</button>
   </div>
 
   <!-- ★그룹 3: 전 계정 순환 (2026-08-23 주인님 지시)★
@@ -2618,10 +2638,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          ★짝이 안 맞아 스트림이 영영 안 뜬다★. 이제 한 번 누르면
          본컴 런처(파섹) → 원격컴 크롬 → 재시작 까지 이어서 간다.
          openCardMenu 가 열 때마다 있는 계정만 활성화 -->
-    <button class="cm-btn chip-purple" id="cm-acct-1" onclick="switchAccountDirect(1)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 1 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 1 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 1</button>
-    <button class="cm-btn chip-purple" id="cm-acct-2" onclick="switchAccountDirect(2)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 2 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 2 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 2</button>
-    <button class="cm-btn chip-purple" id="cm-acct-3" onclick="switchAccountDirect(3)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 3 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 3 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 3</button>
-    <button class="cm-btn chip-purple" id="cm-acct-4" onclick="switchAccountDirect(4)" title="★본컴 런처와 원격컴 크롬을 함께★ 계정 4 로 바꿉니다 (파섹 경유 → 게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 4 로 보이는 카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다">계정 4</button>
+    <!-- ★버튼은 JS 가 MAX_ACCT 에서 만든다 (2026-08-24 사고 193)★ — 예전엔 여기에
+         4개를 손으로 박아놔서 계정을 늘려도 5번 버튼이 영영 안 생겼다.
+         ★display:contents 는 인라인 스타일로 적는다★ — Tailwind 의 `contents` 클래스를
+         쓰면 CDN 이 안 뜨는 순간 span 이 inline 이 되어 버튼 5개가 그리드 칸 하나에
+         뭉친다(199px→60px 실측). .cm-grid2/.cm-btn 은 이 파일 <style> 이라 살아남는데
+         이것만 외부 의존이었다 = 새로 만든 단일 실패점. 생성은 refreshAcctButtons(). -->
+    <span id="cm-acct-box" style="display:contents"></span>
     <!-- ★[🌐 크롬 제어모드 전환] 제거 (2026-08-23 주인님 지시)★
          함수 chromeCdpFromMenu() 와 chrome_cdp 원격명령은 남는다 —
          CDP 없는 PC 를 살릴 때 ops 스크립트로 여전히 쓴다. -->
@@ -2816,6 +2839,23 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 </div>
 
 <script>
+// ★★계정 개수 — 여기 하나만 고치면 접미사·칩·메뉴가 전부 따라간다 (2026-08-24 사고 193)★★
+//   ★서버 파이썬 쪽 MAX_ACCT / 매크로 lc/config.py 의 MAX_ACCT 와 같은 값이어야 한다★
+//   `const` 는 호이스팅돼도 초기화 전엔 못 쓴다(TDZ) → ★스크립트 맨 앞★ 에 둔다.
+//   ★MAX_ACCT 는 9 이하★ — 라벨 풀이 9글자다. 10 이면 ACCT_LABELS[9] 가 undefined 라
+//   조용히 빈 chrome_label 이 나간다(파이썬은 IndexError 로 터지지만 JS 는 안 터진다).
+const MAX_ACCT    = 5;
+const ACCT_LABELS = 'abcdefghi'.slice(0, MAX_ACCT);   // 계정번호 n ↔ ACCT_LABELS[n-1]
+const ACCT_SUFFIX = ACCT_LABELS.slice(1);             // 카드 pc_id 접미사(계정1 은 없음)
+// ★정규식은 리터럴 대신 new RegExp★ — 리터럴 안에 줄바꿈이 섞여 <script> 가 통째로
+//   죽은 적이 있다(2026-07-27 대시보드 백지). 문자열 조립이면 그 사고가 안 난다.
+const ACCT_SUF_RE  = new RegExp('([' + ACCT_SUFFIX + '])$');       // 'PC-20c' → 'c'
+const ACCT_SUF_RE2 = new RegExp('[0-9][' + ACCT_SUFFIX + ']$');    // 숫자 뒤 접미사만
+// ★''.includes('') 가 true 라 빈 문자열을 따로 막는다★ — 옛 'bcd'.includes(c) 의 잠복 버그
+function isAcctSuf(c){ return !!c && c.length === 1 && ACCT_SUFFIX.includes(c); }
+// 접미사 → 계정번호(2~). 접미사가 아니면 0 → 호출부의 `|| 1` 폴백이 살아난다.
+function acctNoOfSuf(c){ return isAcctSuf(c) ? ACCT_SUFFIX.indexOf(c) + 2 : 0; }
+
 // ─── 상태 ────────────────────────────────────────────────────────────────────
 let state = {};
 let latestVersions = {macro:'', updater:''};
@@ -3247,7 +3287,7 @@ const dpDone = c => !!(c && c.completed) && c.today !== false;
 //   실측 PC-10: info.txt=[미르S2,찬솔S2] / 카드=[폭딜,케피,마리드] — 옛 수집값이 남아 있었다.
 //   → 둘이 다르면 ★말해준다.★ 고치는 법(정보수집 재실행)까지 툴팁에 적는다.
 const nameMismatch = pc => {
-  const n = ({'a':1,'b':2,'c':3,'d':4})[String(pc.pc_id||'').slice(-1)] || 1;
+  const n = acctNoOfSuf(String(pc.pc_id||'').slice(-1)) || 1;
   const info = Object.values((pc.acct_names||{})[String(n)] || {}).filter(Boolean);
   const card = (pc.chars||[]).filter(Boolean);
   if (!info.length || !card.length) return '';
@@ -3310,18 +3350,26 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
 // ★계정 표기는 사용자에게 1/2/3/4 (2026-08-15 사용자 지시: "abcd 하지 말고 1,2,3,4로")★
 //   내부 프로토콜(account.txt·pc_id 접미사·switch_account args)은 a/b/c/d 그대로 —
 //   함대 코드·기존 카드와의 호환을 위해 표기만 숫자로 바꾼다. 변환은 이 두 함수로만.
-function acctNum(label){ return ({a:1,b:2,c:3,d:4})[label] || '?'; }
+function acctNum(label){
+  const l = String(label||'');
+  const i = (l.length === 1) ? ACCT_LABELS.indexOf(l) : -1;
+  return i < 0 ? '?' : i + 1;
+}
 function normAcct(input){
   const v = (input||'').trim().toLowerCase();
-  const m = {'1':'a','2':'b','3':'c','4':'d','a':'a','b':'b','c':'c','d':'d'}[v];
-  if(!m) { if(v) alert('1~4 중 하나만 됩니다'); return null; }
+  let m = null;
+  if (v.length === 1) {
+    if (ACCT_LABELS.includes(v)) m = v;
+    else if (v >= '1' && v <= '9' && +v <= MAX_ACCT) m = ACCT_LABELS[+v - 1];
+  }
+  if(!m) { if(v) alert('1~' + MAX_ACCT + ' 중 하나만 됩니다'); return null; }
   return m;
 }
 // 스프레드 그룹 헤더용 계정 태그 — "몇번 계정 · 어떤 아이디"(2026-08-15 사용자 지시).
 // 부계정 카드(접미사) 또는 acct 필드 보고가 있는 카드만 표시. 없으면 기존 화면 불변.
 function acctTagSpread(pcid){
   const st = state[pcid] || {};
-  const isSub = 'bcd'.includes((pcid||'').slice(-1));
+  const isSub = isAcctSuf((pcid||'').slice(-1));
   // 본계정도 멀티계정 PC면 '계정 1' 표시 (2026-08-15 사용자: "계정1은 안 나온다")
   if (!isSub && !st.acct_id && !isMultiAcct(pcid)) return '';
   const n = acctNumOf(pcid);
@@ -3336,7 +3384,9 @@ function acctTagSpread(pcid){
   //   스프레드는 ★PC 하나에 계정 줄이 여러 개★ 쌓이는 화면이라, 지금 보는 줄이 몇 번
   //   계정인지가 제일 먼저 읽혀야 한다. 크기(26px)·굵기·색으로 분리한다.
   //   색은 카드 칩(acctChip)과 ★같은 규약★ 을 쓴다 — 두 화면에서 계정1 이 다른 색이면
-  //   그게 더 헷갈린다: 1=초록 2=보라 3=청록 4=주황.
+  //   그게 더 헷갈린다: 1=초록 2=보라 3=청록 4=주황 5=장미.
+  //   ★MAX_ACCT 를 올리면 이 맵과 acctChip 의 색 맵을 ★둘 다★ 늘려야 한다★
+  //   (2026-08-24 적대 리뷰: 계정5 를 추가하면서 acctChip 만 늘리고 여기를 빠뜨렸다)
   //   ★Tailwind 클래스 대신 인라인 스타일★ — 퍼지(purge)로 색 클래스가 빠져도
   //   이 뱃지는 반드시 보여야 한다(안 보이면 이 수정의 목적 자체가 사라진다).
   const AC = {
@@ -3344,6 +3394,7 @@ function acctTagSpread(pcid){
     2: {fg:'#c4b5fd', bg:'rgba(139,92,246,.20)', bd:'#a78bfa'},   // 보라
     3: {fg:'#5eead4', bg:'rgba(20,184,166,.20)', bd:'#2dd4bf'},   // 청록
     4: {fg:'#fcd34d', bg:'rgba(245,158,11,.20)', bd:'#fbbf24'},   // 주황
+    5: {fg:'#fda4af', bg:'rgba(244,63,94,.20)',   bd:'#fb7185'},   // 장미 (2026-08-24 사고 193)
   }[n] || {fg:'#d1d5db', bg:'rgba(107,114,128,.20)', bd:'#9ca3af'};
   return `<span title="계정 ${n}" style="display:inline-flex;align-items:center;justify-content:center;`
        + `width:26px;height:26px;border-radius:9999px;border:2px solid ${AC.bd};`
@@ -3400,27 +3451,30 @@ function platLabel(v){
 }
 function acctNumOf(pcid){
   const c = (pcid||'').slice(-1);
-  return 'bcd'.includes(c) ? ({b:2,c:3,d:4}[c]) : ((state[pcid]||{}).acct_num || 1);
+  return acctNoOfSuf(c) || ((state[pcid]||{}).acct_num || 1);
 }
 // 이 PC가 멀티계정인가 — 형제 계정 카드가 있거나(접미사 카드 존재) 매크로가 acct_total>1 보고.
 function isMultiAcct(pid){
   const b = baseId(pid||'');
   if (((state[pid]||{}).acct_total || 0) > 1) return true;
-  if ('bcd'.includes((pid||'').slice(-1))) return true;
-  return ['b','c','d'].some(s => state[b+s]);
+  if (isAcctSuf((pid||'').slice(-1))) return true;
+  return ACCT_SUFFIX.split('').some(s => state[b+s]);
 }
 function acctChip(pid){
   if(!pid) return '';
   const c = pid.slice(-1);
-  if(!'bcd'.includes(c)){
+  if(!isAcctSuf(c)){
     // ★본계정도 멀티계정 PC에선 '계정 1' 칩(2026-08-15 사용자: "계정2는 나오는데 계정1은
     //   안 나온다")★ — 단일 계정 PC(함대 17대)는 칩 없음 그대로.
     if (!isMultiAcct(pid)) return '';
     return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none bg-emerald-800/70 text-emerald-200 border-emerald-600" style="font-size:10px" title="같은 PC의 계정 1 (본계정)">계정 1</span>`;
   }
+  // ★계정을 늘리면 색도 같이 늘린다 — 없으면 회색 폴백(칩이 사라지지는 않게)★
   const color = {b:'bg-purple-800/70 text-purple-200 border-purple-600',
                  c:'bg-teal-800/70 text-teal-200 border-teal-600',
-                 d:'bg-amber-800/70 text-amber-200 border-amber-600'}[c];
+                 d:'bg-amber-800/70 text-amber-200 border-amber-600',
+                 e:'bg-rose-800/70 text-rose-200 border-rose-600'}[c]
+              || 'bg-slate-700/70 text-slate-200 border-slate-500';
   return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${acctNum(c)}">계정 ${acctNum(c)}</span>`;
 }
 // ★★순환 단계 칩 — '전환중' 이 한눈에 보이게 (2026-08-21 주인님 요청)★★
@@ -3776,7 +3830,7 @@ function renderCards() {
     let top = list.find(p => p.pc_id === stackFront[b]);
     if (!top) top = list.find(isOn)
       || list.slice().sort((x,y)=>String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
-    const n = Math.min(4, Math.max(list.length, ...list.map(p => p.acct_total || 1)));
+    const n = Math.min(MAX_ACCT, Math.max(list.length, ...list.map(p => p.acct_total || 1)));
     return {base: b, list, top, n, online: list.some(isOn)};
   });
   // ★★오프라인 카드를 아래로 내리지 않는다 (2026-08-20 사용자 지시)★★
@@ -3931,7 +3985,7 @@ function selectAllPcs() {
 // ★멀티계정(v1.1.412 리뷰 결함 4/11): 업데이터 명령은 base id로★ — 업데이터는 PC 단위라
 //   base id(PC-03)로만 폴링한다. 부계정 카드(PC-03b)로 보내면 아무도 안 가져가는 고아 명령이
 //   된다. 접미사(b/c/d)를 벗겨 base로 보낸다. (매크로 명령 sendCmd는 그대로 계정별로 간다)
-function baseId(id){ return (id && 'bcd'.includes(id.slice(-1))) ? id.slice(0,-1) : id; }
+function baseId(id){ return (id && isAcctSuf(id.slice(-1))) ? id.slice(0,-1) : id; }
 async function selUpdaterCmd(command, args={}) {
   if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
   const sent=new Set(); const failed=[];
@@ -4212,7 +4266,7 @@ async function rotCmd(command) {
 async function switchAccountSelected() {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const v = normAcct(prompt(
-    `선택 PC들을 전환할 계정 번호 (1~4)\n1 = 본계정 / 2,3,4 = 부계정\n` +
+    `선택 PC들을 전환할 계정 번호 (1~${MAX_ACCT})\n1 = 본계정 / 나머지 = 부계정\n` +
     `★본컴 런처 → 원격컴 크롬 → 매크로 재시작★ 까지 각 PC가 자동으로 합니다\n` +
     `(info.txt 계정N_아이디/비번 + 파섹 주소록 peer_id 필요)`));
   if(!v) return;
@@ -4228,7 +4282,7 @@ async function switchAccountSelected() {
   for (const x of Object.values(byBase)) {
     const live = liveCardOf(baseId(x.id));
     const t = live ? live.pc_id : x.id;
-    if ((((t.match(/([bcd])$/)||[])[1]) || 'a') === v) { already.push(baseId(t)); continue; }
+    if ((((t.match(ACCT_SUF_RE)||[])[1]) || 'a') === v) { already.push(baseId(t)); continue; }
     targets.push(t);
   }
   if(!targets.length){ showToast(`선택한 PC는 이미 전부 계정 ${n} 입니다`); clearSelection(); return; }
@@ -4347,7 +4401,7 @@ function openCardMenu(pc_id, e) {
     `<span class="font-bold text-gray-100">${baseId(pc_id)}${_mAcct}</span>`+
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
-  refreshAcctButtons(pc_id);   // 계정 1~4 버튼 활성/비활성 (있는 계정만, 현재 계정 ✓)
+  refreshAcctButtons(pc_id);   // 계정 버튼 활성/비활성 (MAX_ACCT 만큼, 있는 계정만, 현재 계정 ✓)
   refreshParsecButtons(pc_id); // 파섹 주소 없는 PC는 눌러도 소용없으니 흐리게
   menu.classList.remove('hidden');
   // ★★폭도 ★실측★ 한다 (2026-08-23 주인님 지적)★★
@@ -4535,7 +4589,7 @@ function acctRows(){
   const rows = [];
   Object.keys(byBase).forEach(b=>{
     const m = byBase[b];
-    for(let n=1; n<=4; n++){
+    for(let n=1; n<=MAX_ACCT; n++){
       const k = String(n);
       const id = m.ids[k]||'', em = m.emails[k]||'', ph = m.phones[k]||'', pl = m.plats[k]||'';
       if(!id && !em && !ph && !pl) continue;   // 아무것도 안 적은 계정은 줄을 만들지 않는다
@@ -4858,7 +4912,7 @@ async function cancelCmd(cmd_id) {
 //   업데이터인데, 그 로그는 C:\auto\updater.log 에만 있어서 대시보드로는 볼 수 없었다.
 //   이제 /updater/logs/{basePc} 를 같이 읽어 ★시간순으로 섞어★ 보여준다.
 //   줄 앞의 M(매크로)/U(업데이터) 뱃지로 출처를 구분한다.
-function _basePc(id){ return /\d[bcd]$/.test(id||'') ? id.slice(0,-1) : (id||''); }
+function _basePc(id){ return ACCT_SUF_RE2.test(id||'') ? id.slice(0,-1) : (id||''); }
 
 async function openLogModal(pc_id) {
   logModalPc=pc_id;
@@ -5452,7 +5506,7 @@ async function openBugsModal(pc_id) {
   //   ★빈 목록★ 을 받았다. 스샷은 그 PC 한 대의 것이지 계정별로 나뉘지 않는다.
   //   → 조회를 base 로 통일한다. 어느 계정 카드에서 눌러도 같은 목록이 나온다.
   // ══════════════════════════════════════════════════════════
-  const _base = (typeof baseId === 'function') ? baseId(pc_id) : String(pc_id).replace(/[bcd]$/, '');
+  const _base = (typeof baseId === 'function') ? baseId(pc_id) : String(pc_id).replace(ACCT_SUF_RE, '');
   bugModalPc = _base;
   document.getElementById('bug-modal-title').textContent =
     `버그 스크린샷 — ${_base}` + (_base !== pc_id ? ` (${pc_id} 에서 열음 · 스택 공통)` : '');
@@ -6059,9 +6113,9 @@ function acctAvail(base){
     if (baseId(pid) !== base) return;
     total = Math.max(total, p.acct_total||1);
     const c = pid.slice(-1);
-    avail.add('bcd'.includes(c) ? ({b:2,c:3,d:4}[c]) : 1);
+    avail.add(acctNoOfSuf(c) || 1);
   });
-  for (let n=1; n<=Math.min(4,total); n++) avail.add(n);
+  for (let n=1; n<=Math.min(MAX_ACCT,total); n++) avail.add(n);
   return avail;
 }
 function liveCardOf(base){
@@ -6072,13 +6126,31 @@ function currentAcctNum(base){
   const live = liveCardOf(base);
   if (!live) return 0;
   const c = (live.pc_id||'').slice(-1);
-  return live.acct_num || ({b:2,c:3,d:4}[c] || 1);
+  return live.acct_num || (acctNoOfSuf(c) || 1);
 }
 function refreshAcctButtons(pc_id){
   const base = baseId(pc_id);
   const avail = acctAvail(base);
   const cur = currentAcctNum(base);
-  for (let n=1; n<=4; n++){
+  // ★버튼을 MAX_ACCT 에서 만든다 — 계정을 늘려도 손으로 HTML 을 안 고치게★
+  const box = document.getElementById('cm-acct-box');
+  if (box && box.childElementCount !== MAX_ACCT) {
+    box.innerHTML = '';
+    for (let k=1; k<=MAX_ACCT; k++){
+      const nb = document.createElement('button');
+      // 계정 수가 홀수면 마지막 버튼을 2칸으로 — 안 그러면 왼쪽에 혼자 서고 오른쪽이 빈다
+      nb.className = 'cm-btn chip-purple'
+                   + ((MAX_ACCT % 2 === 1 && k === MAX_ACCT) ? ' cm-span2' : '');
+      nb.id = 'cm-acct-' + k;
+      nb.textContent = '계정 ' + k;
+      nb.title = '★본컴 런처와 원격컴 크롬을 함께★ 계정 ' + k + ' 로 바꿉니다 (파섹 경유 → '
+               + '게임 종료 → 계정 전환 → 게임 실행, 3~4분). ★이미 계정 ' + k + ' 로 보이는 '
+               + '카드에도 누를 수 있습니다★ — 본컴 런처를 직접 읽어 어긋난 짝을 맞춥니다';
+      nb.onclick = (function(v){ return function(){ switchAccountDirect(v); }; })(k);
+      box.appendChild(nb);
+    }
+  }
+  for (let n=1; n<=MAX_ACCT; n++){
     const b = document.getElementById('cm-acct-'+n);
     if (!b) continue;
     const has = avail.has(n);
@@ -6113,12 +6185,14 @@ async function switchAccountDirect(n){
 async function fullAccountSwitch(id, n){
   if (!id) return false;
   const base = baseId(id);
-  const lab = {1:'a',2:'b',3:'c',4:'d'}[n];
+  // ★계정을 늘려도 따라오게 (2026-08-24 사고 193)★ — 옛 맵은 n=5 에서 undefined 를
+  //   내보내 chrome_label 이 비어 나갔다. 라벨은 ACCT_LABELS 가 정본.
+  const lab = (n >= 1 && n <= MAX_ACCT) ? ACCT_LABELS[n-1] : '';
   if (!lab) return false;
   // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
   const live = liveCardOf(base);
   const target = live ? live.pc_id : id;
-  const curAcct = ((target.match(/([bcd])$/)||[])[1]) || 'a';
+  const curAcct = ((target.match(ACCT_SUF_RE)||[])[1]) || 'a';
   const same = (curAcct === lab);
   // ══════════════════════════════════════════════════════════════════════════
   // ★★'이미 그 계정' 이어도 막지 않는다 (2026-08-23 주인님 지시)★★
@@ -6484,9 +6558,9 @@ async def get_live_meta(pc_id: str, request: Request):
 
 
 def _base_pc(pc_id: str) -> str:
-    """멀티계정 가상 id → 물리 PC id. 'PC-20b' → 'PC-20' (접미사 b/c/d)."""
+    """멀티계정 가상 id → 물리 PC id. 'PC-20b' → 'PC-20' (접미사는 ACCT_SUFFIX)."""
     s = pc_id.strip()
-    return s[:-1] if len(s) > 1 and s[-1] in "bcd" and s[-2].isdigit() else s
+    return s[:-1] if len(s) > 1 and s[-1] in ACCT_SUFFIX and s[-2].isdigit() else s
 
 
 async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> dict:
@@ -8813,10 +8887,10 @@ def _rot_cards(pcs: list, base: str) -> list:
 
 
 def _rot_acct_no(pc_id) -> int:
-    """카드 id → 계정 번호. PC-20=1, PC-20b=2, PC-20c=3, PC-20d=4."""
+    """카드 id → 계정 번호. PC-20=1, PC-20b=2 … 접미사 없으면 1(본계정)."""
     s = str(pc_id or "").strip()
-    if len(s) > 1 and s[-1] in "bcd" and s[-2].isdigit():
-        return "abcd".index(s[-1]) + 1
+    if len(s) > 1 and s[-1] in ACCT_SUFFIX and s[-2].isdigit():
+        return ACCT_LABELS.index(s[-1]) + 1
     return 1
 
 
@@ -8906,7 +8980,7 @@ def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
     cur = _rot_acct_no(active.get("pc_id"))
     done_no = {_rot_acct_no(c.get("pc_id")) for c in cards if _rot_done(c)}
     done_no.add(cur)                    # 방금 끝낸 계정은 다시 고르지 않는다
-    for n in range(1, 5):
+    for n in range(1, MAX_ACCT + 1):
         if n in done_no:
             continue
         if not str(ids.get(str(n)) or "").strip():
@@ -8938,7 +9012,7 @@ def _rot_next_acct_task(cards: list, active: dict, st: dict) -> tuple[int, str]:
         ids.update(c.get("acct_ids") or {})
     seen = {str(x) for x in (st.get("tvisit") or [])}
     seen.add(str(_rot_acct_no(active.get("pc_id"))))
-    for n in range(1, 5):
+    for n in range(1, MAX_ACCT + 1):
         if str(n) in seen:
             continue
         if not str(ids.get(str(n)) or "").strip():
@@ -9090,7 +9164,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # acct_index 는 1 고정 [S11] — 완주 순환과 같은 이유(런처 드롭다운의 '다른 계정' 줄 번호)
         ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
             "acct_index": 1, "acct_no": nxt,
-            "acct_label": f"계정{nxt}", "chrome_label": "abcd"[nxt - 1], "launch": True,
+            "acct_label": f"계정{nxt}", "chrome_label": ACCT_LABELS[nxt - 1], "launch": True,
         })
         if not ok or not _alive():
             return
@@ -9098,7 +9172,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         st.update({"stage": "switching", "since": _rot_now(),
                    "expect_restart": True,
                    "expect_until": _rot_now() + ROT_SWITCH_MAX,
-                   "target": "abcd"[nxt - 1],
+                   "target": ACCT_LABELS[nxt - 1],
                    "hops": int(st.get("hops") or 0) + 1})
         await _rot_say(tenant, base, f"{_tlabel} 끝 → 계정{nxt} 로 전환")
         return
@@ -9293,7 +9367,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   두 호출부도 전부 1 고정이고, 정확한 판정은 acct_no(이메일 줄 템플릿)가 한다.
         ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
             "acct_index": 1, "acct_no": nxt,
-            "acct_label": f"계정{nxt}", "chrome_label": "abcd"[nxt - 1], "launch": True,
+            "acct_label": f"계정{nxt}", "chrome_label": ACCT_LABELS[nxt - 1], "launch": True,
         })
         if not ok or not _alive():
             return
@@ -9304,7 +9378,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                    #   그러면 "껐다 켜면 순환 해제"(요구 1) 가 조용히 깨진다.
                    "expect_restart": True,
                    "expect_until": _rot_now() + ROT_SWITCH_MAX,
-                   "target": "abcd"[nxt - 1],
+                   "target": ACCT_LABELS[nxt - 1],
                    "hops": int(st.get("hops") or 0) + 1})
         await _rot_say(tenant, base, f"계정{nxt} 로 전환 시작 (본컴 런처 + 원격컴 크롬)")
         return
@@ -9312,7 +9386,18 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     # ── ③ 전환 대기 — 목표 계정 카드가 살아나면 ▶시작 ──────────────────────
     if stage == "switching":
         want = str(st.get("target") or "")
-        want_no = ("abcd".index(want) + 1) if want in "abcd" else 0
+        want_no = acct_no_of_label(want)
+        # ★target 이 비었으면 여기서 끊는다 (2026-08-24 적대 리뷰 S3)★
+        #   옛 코드는 `"" in "abcd"` 가 True 라 want_no=1 로 떨어졌고(파이썬 부분문자열),
+        #   그게 우연히 본계정 카드와 맞아 순환이 굴러갔다. 새 판정은 정직하게 0 을 주는데
+        #   _rot_acct_no 는 ★최소 1★ 이라 0 은 어떤 카드와도 안 맞는다 →
+        #   ROT_SWITCH_MAX(20분) 를 헛돌다 "계정0 전환이 20분째" 라는 말이 안 되는 알림으로 죽는다.
+        #   상태가 손상된 것이므로 기다리지 말고 즉시 세운다.
+        if not want_no:
+            await _rot_stop(tenant, base,
+                            "⛔ 순환 정지 — 전환 목표 계정이 비어 있습니다(순환 상태 손상). "
+                            "다시 무장해 주십시오")
+            return
         # ★작업 순환은 전환이 끝나면 start 가 아니라 ★그 작업★ 을 보낸다 (2026-08-23)★
         #   여기서 완주 순환 코드로 흘려보내면 사냥만 시작하고 작업은 영영 안 한다
         #   = "버튼은 있는데 안 도는" 반쪽 실행(§A4). 그래서 이 분기는 자기 상한까지
