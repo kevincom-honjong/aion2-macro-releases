@@ -8686,9 +8686,13 @@ async def _rot_say(tenant: str, pc_id: str, text: str,
     _chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
     _will_send = (bool(_chat) and tg_enabled()
                   and (hard or (not routine and not _tg_muted(base))))
-    _line = (f"[{_ts}] [텔레그램] "
-             + ("중계 전송" if _will_send else "중계 생략(음소거/미설정)")
-             + f": {base} | [순환] {text}")
+    # ★로그는 '왜' 안 보냈는지도 말해야 한다 (§A2)★ — 초판은 routine 무음까지
+    #   "음소거/미설정" 이라고 적어 ★이유를 거짓으로★ 말했다. 나중에 "왜 안 왔지" 를
+    #   추적할 때 엉뚱한 곳(테넌트 chat_id·PC 음소거)을 파게 된다.
+    _why = ("중계 전송" if _will_send
+            else "중계 생략(진행중계·routine)" if routine
+            else "중계 생략(음소거/미설정)")
+    _line = f"[{_ts}] [텔레그램] {_why}: {base} | [순환] {text}"
     # ★N4: base 카드와 ★현역 카드★ 양쪽에 남긴다★ — 순환이 계정 b/c/d 에 있는 동안
     #   base 카드는 other_account 로 강등되고, 감시기는 그 카드를 통째로 건너뛴다.
     #   그러면 "감시기가 줍게 하려고" 넣은 이 줄이 정확히 반대로 작동한다.
