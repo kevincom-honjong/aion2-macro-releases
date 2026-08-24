@@ -8654,8 +8654,17 @@ async def _rot_allow(tenant: str = "main") -> set:
 
 
 # ── 알림 ─────────────────────────────────────────────────────────────────────
-async def _rot_say(tenant: str, pc_id: str, text: str) -> None:
+async def _rot_say(tenant: str, pc_id: str, text: str,
+                   routine: bool = False) -> None:
     """순환 알림 — 로그 + 텔레그램.
+
+    ★routine=True 는 텔레그램을 안 보낸다 (2026-08-25 주인님 지시)★
+      주인님: "계정5 완주 → 정보수집 시작 이런건 안울려도 될거같은데"
+      순환이 ★잘 돌고 있다★ 는 중계는 24대 x 5계정 x 6단계 = ★하루 700건★ 이다.
+      그게 시끄러우면 진짜 알람(⛔ 정지)이 그 사이에 묻힌다.
+      ★로그와 대시보드에는 그대로 남는다★ — 없앤 건 텔레그램뿐이다.
+      ★기본값은 False(울린다)★ — 새 알림을 넣다가 빠뜨려도 안전한 쪽으로 틀린다.
+      되돌리려면 아래 호출부의 routine=True 만 지우면 된다.
 
     ★⛔(정지)는 음소거를 무시한다 [A6-③]★ — 음소거는 '시끄러운 정상 알림'을 끄려는
     것이지 '기능이 죽었다'를 숨기려는 게 아니다. 음소거 중인 PC 의 순환 정지가 무음이면
@@ -8675,7 +8684,8 @@ async def _rot_say(tenant: str, pc_id: str, text: str) -> None:
     #   ②로그만 보는 감시기가 음소거를 우회해 그대로 울렸다. 로그가 증거인데 거짓이면
     #   A2("증거를 붙인다")가 통째로 무너진다.
     _chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
-    _will_send = bool(_chat) and tg_enabled() and (hard or not _tg_muted(base))
+    _will_send = (bool(_chat) and tg_enabled()
+                  and (hard or (not routine and not _tg_muted(base))))
     _line = (f"[{_ts}] [텔레그램] "
              + ("중계 전송" if _will_send else "중계 생략(음소거/미설정)")
              + f": {base} | [순환] {text}")
@@ -9136,7 +9146,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 return                               # 아직 시작 전일 수 있다 — 기다린다
             await _rot_say(tenant, base,
                            f"계정{_rot_acct_no(active.get('pc_id'))} 는 {_tlabel} 할 게 "
-                           f"없었습니다(status={_s}) — 다음 계정으로")
+                           f"없었습니다(status={_s}) — 다음 계정으로", routine=True)
         nxt, why = _rot_next_acct_task(cards, active, st)
         if nxt == 0:
             await _rot_stop(tenant, base,
@@ -9174,7 +9184,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                    "expect_until": _rot_now() + ROT_SWITCH_MAX,
                    "target": ACCT_LABELS[nxt - 1],
                    "hops": int(st.get("hops") or 0) + 1})
-        await _rot_say(tenant, base, f"{_tlabel} 끝 → 계정{nxt} 로 전환")
+        await _rot_say(tenant, base, f"{_tlabel} 끝 → 계정{nxt} 로 전환", routine=True)
         return
 
     # ── ① 사냥 중 — 완주를 기다린다 ────────────────────────────────────────
@@ -9211,7 +9221,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if not _alive():
             return
         st.update({"stage": "collecting", "since": _rot_now(), "recollect": False})
-        await _rot_say(tenant, base, f"계정{acct} 완주 → 정보수집 시작")
+        await _rot_say(tenant, base, f"계정{acct} 완주 → 정보수집 시작", routine=True)
         return
 
     # ── ② 정보수집 대기 — ★끝난 증거를 보고 넘어간다★ ─────────────────────
@@ -9380,7 +9390,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                    "expect_until": _rot_now() + ROT_SWITCH_MAX,
                    "target": ACCT_LABELS[nxt - 1],
                    "hops": int(st.get("hops") or 0) + 1})
-        await _rot_say(tenant, base, f"계정{nxt} 로 전환 시작 (본컴 런처 + 원격컴 크롬)")
+        await _rot_say(tenant, base, f"계정{nxt} 로 전환 시작 (본컴 런처 + 원격컴 크롬)", routine=True)
         return
 
     # ── ③ 전환 대기 — 목표 계정 카드가 살아나면 ▶시작 ──────────────────────
@@ -9413,7 +9423,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     return
                 st.update({"stage": "tasking", "since": _rot_now(), "sent_at": _rot_now(),
                            "busy": False, **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
-                await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작")
+                await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작", routine=True)
                 return
             if age > ROT_SWITCH_MAX:
                 await _rot_stop(tenant, base,
@@ -9425,7 +9435,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             if s in ("hunting", "moving"):
                 st.update({"stage": "hunting", "since": _rot_now(),
                            **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
-                await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인")
+                await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인", routine=True)
                 return
             if s == "idle":
                 # ★이미 오늘 할 게 없는 계정이면 start 를 쏘지 않는다 [S12]★
@@ -9442,7 +9452,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                                "char_before": "", "skip_collect": True,
                                **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                     await _rot_say(tenant, base,
-                                   f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다")
+                                   f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다", routine=True)
                     return
                 if not _alive():
                     return
@@ -9452,7 +9462,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     return
                 st.update({"stage": "starting", "since": _rot_now(),
                            **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
-                await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작")
+                await _rot_say(tenant, base, f"계정{want_no} 로 전환 완료 → ▶시작", routine=True)
                 return
             # ★★여기서 return 하면 아래 20분 상한이 ★영원히 평가되지 않는다★ [C1]★★
             #   2026-08-20 적대검증에서 잡혔다. 목표 계정 카드가 살아는 있는데 상태가
@@ -9473,7 +9483,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     if stage == "starting":
         if active and str(active.get("status")) in ("hunting", "moving"):
             st.update({"stage": "hunting", "since": _rot_now()})
-            await _rot_say(tenant, base, f"계정{_rot_acct_no(active.get('pc_id'))} 사냥 시작 확인")
+            await _rot_say(tenant, base, f"계정{_rot_acct_no(active.get('pc_id'))} 사냥 시작 확인", routine=True)
             return
         if age > ROT_START_MAX:
             await _rot_stop(tenant, base,
