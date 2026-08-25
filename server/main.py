@@ -2349,6 +2349,19 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="rotCmd('collect_info')" class="chip chip-sky" title="선택 PC의 ★모든 계정★ 을 돌며 캐릭터 정보수집">정보수집</button>
   </div>
 
+  <!-- ★그룹 3-b: 노는 PC 자동진행 (2026-08-25 주인님 지시)★
+       "버튼 딱 누르면 아무것도 안하는 컴퓨터를 대상으로 전체 계정들 중에 할일
+        즉, 일일던전 악몽 회랑 같은거 해야할거 딱 자동진행하게 했으면좋겠어"
+       대상 = ★오늘 완주한 PC★ (주인님: "완주안한애들은 사냥 계속하고잇을거니까").
+       오프라인도 포함(주인님 명시). 순서 = 일일던전 → 회랑 → 악몽(주인님 지정).
+       PC 를 고를 필요가 없다 — 버튼이 스스로 찾는다. -->
+  <div class="cmd-group cmd-rot">
+    <span class="cmd-legend">⚡ 노는 PC 자동진행</span>
+    <button onclick="autoIdleCmd()" class="chip chip-green"
+            title="오늘 사냥을 완주해서 놀고 있는 PC 를 스스로 찾아, 그 PC 의 ★전 계정★ 에
+일일던전 → 회랑 → 악몽 을 차례로 돌립니다. 누르기 전에 대상과 할 일을 미리 보여줍니다.">⚡ 남은 할 일 자동진행</button>
+  </div>
+
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
   <div class="cmd-group cmd-one">
     <span class="cmd-legend">🎯 선택한 카드 1개만</span>
@@ -4226,6 +4239,88 @@ async function selCmd(command, args={}) {
 //   (switchAccountSelected · selUpdaterCmd 와 같은 이유·같은 방식).
 const ROT_TASK_LABEL = {daily_dungeon:'일일던전', nightmare:'악몽', awakening:'각성',
                         corridor:'회랑', collect_info:'정보수집'};
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★노는 PC 자동진행 (2026-08-25 주인님 지시)★★
+//   "버튼 딱 누르면 아무것도 안하는 컴퓨터를 대상으로 전체 계정들 중에 할일
+//    즉, 일일던전 악몽 회랑 같은거 해야할거 딱 자동진행하게 했으면좋겠어"
+//
+// ★대상 (주인님 확답)★ "완주한 pc들만 대상이 될수있겠지? 왜냐하면 완주안한애들은
+//   사냥 계속하고잇을거니까 오프라인도 포함이지"
+//   → 오늘 슬롯을 ★다 끝낸★ PC 만. 사냥/판매/수집/전환 중인 PC 는 건드리지 않는다.
+//   → 오프라인도 포함한다. 명령은 큐에 남아 그 PC 가 돌아오면 가져간다.
+//
+// ★순서 (주인님 확답)★ "우선순위는 일일던전, 회랑, 악몽 순이겟지?"
+//   서버 순환 엔진이 한 작업을 전 계정에 돌린 뒤 queue 에서 다음 작업을 꺼낸다.
+//
+// ★미리보기 후 확인 (주인님 확답)★ — 함대 전체가 움직이는 명령이라 무엇이 어디로
+//   가는지 다 보여주고 확인을 받는다(§A7 정신).
+// ═══════════════════════════════════════════════════════════════════════════
+const AUTO_IDLE_TASKS = ['daily_dungeon', 'corridor', 'nightmare'];
+// 사냥/작업 중이면 손대지 않는다 — 완주 판정과 별개로 '지금 뭘 하고 있나' 를 본다
+const AUTO_IDLE_BUSY = ['hunting','selling','collecting','switching','tasking',
+                        'reconnecting','starting','captcha'];
+
+function autoIdleTargets(){
+  const byBase = {};
+  for (const p of Object.values(state)) {
+    const b = baseId(p.pc_id || '');
+    if (!b) continue;
+    (byBase[b] = byBase[b] || []).push(p);
+  }
+  const out = [];
+  for (const b of Object.keys(byBase).sort()) {
+    const cards = byBase[b];
+    if (b.toUpperCase() === 'PC-TEST' || b.toUpperCase() === 'PC-DEMO') continue;
+    // ★이미 순환이 무장돼 있으면 또 걸지 않는다★ — 두 번 걸면 작업이 겹친다
+    if (cards.some(c => c._rot)) continue;
+    if (cards.some(c => AUTO_IDLE_BUSY.includes(c.status))) continue;
+    const live = liveCardOf(b);
+    // 판정 카드 = 온라인 카드, 없으면 ★가장 최근에 살아 있던★ 카드
+    const cur = live || cards.slice().sort((x,y) =>
+        String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
+    if (!cur) continue;
+    const dp = cur.daily_progress || [];
+    if (!dp.length) continue;                     // 진행 정보가 없으면 판정 불가 → 제외
+    if (dp.filter(dpDone).length < dp.length) continue;   // ★완주 안 함 = 사냥이 남았다★
+    out.push({base: b, id: cur.pc_id, off: !live,
+              acct: dp.length, cur_status: cur.status || 'offline'});
+  }
+  return out;
+}
+
+async function autoIdleCmd(){
+  const tg = autoIdleTargets();
+  const names = AUTO_IDLE_TASKS.map(t => ROT_TASK_LABEL[t] || t).join(' → ');
+  if (!tg.length) {
+    alert(`지금 자동진행할 PC가 없습니다.
+
+대상 조건: 오늘 사냥을 ★완주★ 했고, 지금 사냥·판매·수집·전환 중이 아니며,
+순환이 아직 무장되지 않은 PC (오프라인 포함).`);
+    return;
+  }
+  const on = tg.filter(t => !t.off).length;
+  const off = tg.length - on;
+  const lines = tg.map(t => `  · ${t.base}${t.off ? '  (오프라인 — 돌아오면 실행)' : ''}`);
+  if (!confirm(`⚡ 남은 할 일 자동진행 — ${tg.length}대
+
+할 일: ${names}
+범위 : 각 PC의 ★전 계정★ (한 작업을 전 계정에 돌린 뒤 다음 작업)
+
+대상 (온라인 ${on} / 오프라인 ${off}):
+${lines.join(String.fromCharCode(10))}
+
+계정 하나 넘어갈 때마다 본컴 런처 + 원격컴 크롬 + 매크로 재시작 = 1~2분.
+되돌리려면 각 PC에 ■정지를 눌러야 합니다.
+
+진행할까요?`)) return;
+  const first = AUTO_IDLE_TASKS[0];
+  const rest = AUTO_IDLE_TASKS.slice(1);
+  await Promise.all(tg.map(t => sendCmd(t.id, first, {rotate: true, queue: rest})));
+  showToast(`⚡ ${tg.length}대 자동진행 시작 — ${names}`);
+  loadCmdHistory();
+  clearSelection();
+}
+
 async function rotCmd(command) {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const label = ROT_TASK_LABEL[command] || command;
@@ -6709,9 +6804,14 @@ async def send_command(pc_id: str, request: Request):
         elif command in ROT_TASKS and bool((args or {}).get("rotate")):
             # ★전 계정 순환 작업 (2026-08-23)★ 상단 [🔁 전 계정 순환] 버튼만 rotate 를 싣는다.
             #   카드 우클릭·[🎯 선택 카드만] 은 rotate 가 없으므로 예전처럼 한 번만 하고 끝난다.
-            _ok, _why = await _rot_arm(tenant, pc_id, task=command)
+            # ★작업 큐 (2026-08-25)★ — args.queue 에 뒤이어 할 작업들을 실으면
+            #   이 작업이 전 계정을 다 돌고 나서 큐의 다음 작업으로 이어간다.
+            #   [⚡ 노는 PC 자동진행] 버튼이 일일던전 → 회랑 → 악몽 을 이렇게 보낸다.
+            _q = [str(x) for x in ((args or {}).get("queue") or [])
+                  if str(x) in ROT_TASKS]
+            _ok, _why = await _rot_arm(tenant, pc_id, task=command, queue=_q)
             await _rot_save(force=True)
-            _rot_result = {"armed": _ok, "why": _why}
+            _rot_result = {"armed": _ok, "why": _why, "queue": _q}
             if not _ok:
                 print(f"[순환] {pc_id} 작업순환({command}) 무장 거부: {_why}")
         elif command in ("update", "update_only", "restart"):
@@ -8738,7 +8838,8 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
 
 
 # ── 무장 / 해제 ──────────────────────────────────────────────────────────────
-async def _rot_arm(tenant: str, pc_id: str, task: str = "") -> tuple[bool, str]:
+async def _rot_arm(tenant: str, pc_id: str, task: str = "",
+                   queue: list | None = None) -> tuple[bool, str]:
     """▶시작 버튼을 누르면 무장. ★부팅이 아니라 사람의 '시작' 이 방아쇠★ (사용자 지시).
 
     ★task 를 주면 '작업 순환' 이다 (2026-08-23)★ — 사냥 완주가 아니라 그 작업
@@ -8780,6 +8881,9 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "") -> tuple[bool, str]:
                  #                  tvisit: 이번 무장에서 작업을 보낸 계정 번호들
                  "sent_at": _rot_now(), "busy": False,
                  "tvisit": ([str(_rot_acct_no(pc_id))] if task else []),
+                 # ★작업 큐 (2026-08-25 주인님 지시)★ — 한 작업이 전 계정을 돌면
+                 #   여기서 다음 작업을 꺼내 이어서 돈다. 비면 그때 종료한다.
+                 "queue": [str(q) for q in (queue or []) if str(q)],
                  "hops": int(_old.get("hops") or 0) if _same else 0,
                  "visits": dict(_old.get("visits") or {}) if _same else {}}
     # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
@@ -9153,6 +9257,31 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                            f"없었습니다(status={_s}) — 다음 계정으로", routine=True)
         nxt, why = _rot_next_acct_task(cards, active, st)
         if nxt == 0:
+            # ══════════════════════════════════════════════════════════
+            # ★★작업 큐 — 다음 할 일로 이어간다 (2026-08-25 주인님 지시)★★
+            #   "버튼 딱 누르면 아무것도 안하는 컴퓨터를 대상으로 전체 계정들 중에
+            #    할일 즉, 일일던전 악몽 회랑 같은거 해야할거 딱 자동진행"
+            #   한 작업이 전 계정을 다 돌면 여기로 온다. 큐가 남았으면 끄지 않고
+            #   ★다음 작업으로 갈아끼운다.★ 계정 순회는 처음부터 다시 센다
+            #   (tvisit/hops/visits 리셋) — 새 작업이니 전 계정을 다시 돌아야 한다.
+            # ══════════════════════════════════════════════════════════
+            _q = [str(x) for x in (st.get("queue") or []) if str(x)]
+            if _q:
+                _nt = _q.pop(0)
+                _acct_now = str(_rot_acct_no(active.get("pc_id")))
+                if not _alive():
+                    return
+                if not await _rot_send(tenant, str(active.get("pc_id")), _nt, {}):
+                    return           # ★송신 실패면 단계를 안 넘긴다 [S13]★
+                st.update({"queue": _q, "task": _nt, "stage": "tasking",
+                           "since": _rot_now(), "sent_at": _rot_now(), "busy": False,
+                           "tvisit": [_acct_now], "hops": 0, "visits": {}, "fp": ""})
+                await _rot_save(force=True)
+                await _rot_say(tenant, base,
+                               f"✅ {_tlabel} 전 계정 완료 → 다음 작업 "
+                               f"「{ROT_TASK_LABEL.get(_nt, _nt)}」 시작 "
+                               f"(남은 작업 {len(_q)}개)", routine=True)
+                return
             await _rot_stop(tenant, base,
                             f"✅ 순환 종료 — {_tlabel} 전 계정 완료 "
                             f"({len(st.get('tvisit') or [])}개 계정)")
