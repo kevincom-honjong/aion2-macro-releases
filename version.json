@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.682",
+    "version": "1.1.683",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "b15c16c2070e0ee308a72eb949e4d4fe7b36fc0c42b5d331f4e9d2c04b993f17",
+    "sha256": "9f2311df744fe435d215656c7507fd23d3568e48ebf67d51790409424dd29164",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -60,6 +60,7 @@
     "cor_portal_orb2.png": "54180ee8b3b991759e0a3a8a93c4e17544f2e1cd52771643b81d48e6895a073c",
     "cor_portal_orb3.png": "630f2532a0484752dec82b774e2f17109955a2aa1ab2f5d111b174e65be576b7",
     "cor_portal_orb4.png": "e9d3a3e038690f537d0755c7df5eded4d15e53c712e6045917e9a6885c130292",
+    "cor_portal_orb5.png": "03380e6770fecd48207424229d525292be34ae7815400be523a895b80be6e16d",
     "cor_revive_basic.png": "d39cd1d99e92f32290f4b0bb44b597aeebfd48f226b956965c9f703a771ac9be",
     "cor_revive_pvp.png": "18c421d70156faf836b53a58dbdcdd2382b64ca2309d8b2b015da0a44bd611a4",
     "cor_row_lower.png": "422161f1df692c79a934467a784217c3051aa61cc62f94f3f82d119203b81270",
@@ -125,6 +126,7 @@
     "immortal_island.png": "c80a0b9c386d2465e2f9aff7ed9ba56c2ebce2fcf7e57c099e464d5d323931bb",
     "immortal_map_target.png": "725135f46703555ee662c3d3ecd3664b9a63c6410bf664126261556ed8fa6519",
     "ingame.png": "beea96978bb876b21e5f30d432fd36f9aff9fe97540f7af889a0d6331c392d9a",
+    "ingame_coin.png": "ecbc0b18a389a6b96f9793eea006b21cd748cb36702229e76d694ca10cf32ffb",
     "internet_error.png": "e59db6169a5942ba493c9919c1b6b922f5af0c96035e21b86584328740ca9652",
     "jump_skill.png": "b73e275c607b7aadb35b15008e5e5cdcf6acd0e506e5284e2e3af6caa8ebcd24",
     "junglyungsung.png": "a0886d6fceebfe6b9ecc815bbb3a422f8ba5f06cec8e1fe48bde1376c709cfb0",
@@ -359,11 +361,11 @@
     "sha256": "70cc4a201c69378e987071ffe384606b6d6f1e551d962eb467016b6cb82536b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260825090201",
-  "updated_at": "2026-08-25T19:09:24",
+  "images_version": "20260825193332",
+  "updated_at": "2026-08-25T19:33:32",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.682",
+    "version": "1.1.683",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
