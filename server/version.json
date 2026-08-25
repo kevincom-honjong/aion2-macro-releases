@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.671",
+    "version": "1.1.672",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "da84a12bfd470e17b2550071f70a45f25b9674bc910ef02ec888310bb331bc6c",
+    "sha256": "943aae476d2aa4d9425a7c97190b09629724d5f4fa2a5b20a1a5ecccc74803ba",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -42,6 +42,8 @@
     "chiyou_buff.png": "05fa091d6ced1789ea223731bb7dd5e5637d6cb15f66b559afc77906e7abf42d",
     "chiyousung.png": "6ca94823c0be9e85ffbc84c70ee514946cec21f3761f46bf145d617d8a52d765",
     "chowol_title.png": "636f21ac0bf3e18090f434bec15dbb1f4b614bd2ab2be6e9bba8af54b26133e9",
+    "chrome_alert_mark.png": "e85633460386b88d34e472a37a13bd764b0576e8db0dfbfba31a74610dc5eb0a",
+    "chrome_alert_ok.png": "f9f671c52bf4d42cd044d7a230f1d8e76cfabc9e9e87f8efdec3a0f66f735143",
     "close.png": "c3c88740bc1560b6f14c7d7bbe1c248c43ec6176da396b1ec03a3064255df549",
     "confirm.png": "ca930ead6974d370cdd930ab1b47feed30dc6db29ad0c154630b50dd3f965f53",
     "confirm_btn.png": "855b7aefd6dd52c89bc78c81d0fb778f9f98810e3dc8559e5e69115c642599c2",
@@ -356,11 +358,11 @@
     "sha256": "70cc4a201c69378e987071ffe384606b6d6f1e551d962eb467016b6cb82536b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260824170115",
-  "updated_at": "2026-08-25T02:46:06",
+  "images_version": "20260825084758",
+  "updated_at": "2026-08-25T08:47:58",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.671",
+    "version": "1.1.672",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
