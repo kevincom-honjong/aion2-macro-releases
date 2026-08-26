@@ -12,6 +12,7 @@
 import json
 import os
 import re
+import shutil
 import socket
 import threading
 import time
@@ -115,6 +116,166 @@ def _file_sha256(path: str) -> str:
     v = h.hexdigest()
     _sha_cache[path] = (key, v)
     return v
+
+# ============================================================================
+# ★★사고 248 (2026-08-27) — 디스크가 ★앞서면★ 시드가 통째로 죽는다★★
+#
+# ★주인님 로그★
+#   [업데이트] 매크로 exe: 1.1.701 → 1.1.702
+#   [다운로드] 시드 실패(404 exe hash mismatch) → GitHub 폴백
+#   주인님: "몇번을 말해야 알아들을래?"
+#
+# ★무엇이 틀렸나★ 사고 183 은 '디스크가 ★뒤처진★ 경우'를 고쳐놓았다.
+#   그런데 이번은 반대였다 — exe 를 빌드해 커밋만 하고 ★푸시를 안 했다★.
+#     디스크 exe = 1.1.703 이 될 바이트   (서버는 모릅니다)
+#     서버 version.json = 1.1.702
+#     함대 24대가 macro-1.1.702.exe 를 달라고 한다 → 바이트가 없다 → 404
+#   ★내가 빌드한 순간부터 푸시할 때까지, 전 함대의 내부망 업데이트가 죽는다.★
+#   그 창이 문제가 아니라, 창 안에서 사람이 [업데이트] 를 누르면
+#   20대가 각자 GitHub 로 73MB 씩 받는다(합 1.5GB). 회선 약한 PC 는 실패한다.
+#
+# ★고치는 법 — 버전별로 ★보관★한다★
+#   디스크 exe 가 '서버가 아는 현재 버전' 일 때 그 바이트를 seed_cache/ 에
+#   해시 이름으로 복사해 둔다. 다음 빌드가 덮어써도 지난 버전을 그대로 내보낸다.
+#   지난 버전의 sha 는 version.json 에 안 남으므로, 보관할 때 우리가 색인에 적는다
+#   (그 순간엔 원격 version.json 이 그 값을 보증했다).
+#
+# ★그리고 시끄럽게 말한다★ 디스크 exe 가 아무 버전과도 안 맞으면
+#   = 미푸시 빌드가 앉아 있다는 뜻. 콘솔에 경고하고 /seedstat 으로 노출한다
+#   (fleet.py 가 세션 시작 때 배너로 보여준다 — §A6: 기억이 아니라 코드로).
+# ============================================================================
+CACHE_DIR = os.path.join(BASE, 'seed_cache')
+CACHE_INDEX = os.path.join(CACHE_DIR, 'index.json')
+CACHE_KEEP = 4                       # 종류별 보관 개수 (76MB x 4)
+SNAP_EVERY = 60.0                    # 초 — 디스크 exe 감시 주기
+_seedstat = {'ok': None, 'why': '아직 확인 안 함', 'at': 0.0,
+             'disk': {}, 'served': {}}
+
+
+def _index_load() -> dict:
+    try:
+        with open(CACHE_INDEX, encoding='utf-8') as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _index_put(kind: str, ver: str, sha: str):
+    d = _index_load()
+    d.setdefault(kind, {})[ver] = sha
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = CACHE_INDEX + '.part'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, CACHE_INDEX)
+    except Exception as e:
+        print('[시드] 색인 기록 실패(무해): ' + str(e), flush=True)
+
+
+def _index_get(kind: str, ver: str) -> str:
+    return str((_index_load().get(kind) or {}).get(ver) or '').lower()
+
+
+def _cache_path(kind: str, sha: str) -> str:
+    return os.path.join(CACHE_DIR, kind + '-' + sha[:16] + '.exe')
+
+
+def _cache_prune(kind: str):
+    try:
+        fs = [os.path.join(CACHE_DIR, f) for f in os.listdir(CACHE_DIR)
+              if f.startswith(kind + '-') and f.endswith('.exe')]
+    except OSError:
+        return
+    fs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    for p in fs[CACHE_KEEP:]:
+        try:
+            os.remove(p)
+            print('[시드] 보관함 정리: ' + os.path.basename(p), flush=True)
+        except OSError:
+            pass
+
+
+def _cache_snapshot(kind: str, live_path: str, ver: str, sha: str) -> bool:
+    """디스크 exe 가 서버가 아는 버전이면 그 바이트를 보관한다."""
+    if not (ver and sha):
+        return False
+    dst = _cache_path(kind, sha)
+    if os.path.exists(dst) and _file_sha256(dst) == sha:
+        if _index_get(kind, ver) != sha:
+            _index_put(kind, ver, sha)
+        return True
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = dst + '.part'
+        shutil.copyfile(live_path, tmp)
+        os.replace(tmp, dst)
+    except Exception as e:
+        print('[시드] 보관 실패(무해, GitHub 폴백은 살아있음): ' + str(e), flush=True)
+        return False
+    _index_put(kind, ver, sha)
+    print('[시드] 보관: ' + kind + '-' + ver + ' (' + sha[:12] + ') — '
+          '다음 빌드 뒤에도 이 버전을 내보냅니다', flush=True)
+    _cache_prune(kind)
+    return True
+
+
+def _find_bytes(kind: str, live_path: str, want_sha: str) -> str:
+    """want_sha 와 바이트가 같은 파일 경로. 없으면 ''. 디스크 → 보관함 순."""
+    if not want_sha:
+        return ''
+    if _file_sha256(live_path) == want_sha:
+        return live_path
+    p = _cache_path(kind, want_sha)
+    if os.path.exists(p) and _file_sha256(p) == want_sha:
+        return p
+    return ''
+
+
+def _snapshot_loop():
+    """디스크 exe 를 감시해 ①현재 버전이면 보관 ②아무것도 아니면 경고."""
+    warned_at = 0.0
+    while True:
+        try:
+            ver = _remote_version_json(max_age=SNAP_EVERY)
+            if ver is None:
+                try:
+                    ver = json.load(open(VERSION_JSON, encoding='utf-8'))
+                except Exception:
+                    ver = None
+            if ver is not None:
+                disk, served, bad = {}, {}, []
+                for kind, (section, fname) in MAP.items():
+                    live = os.path.join(EXE_DIR, fname)
+                    if not os.path.exists(live):
+                        continue
+                    sec = ver.get(section) or {}
+                    cur_ver = str(sec.get('version') or '')
+                    cur_sha = str(sec.get('sha256') or '').lower()
+                    live_sha = _file_sha256(live)
+                    disk[kind] = live_sha[:12]
+                    if cur_sha and live_sha == cur_sha:
+                        _cache_snapshot(kind, live, cur_ver, cur_sha)
+                    if cur_sha and _find_bytes(kind, live, cur_sha):
+                        served[kind] = cur_ver
+                    else:
+                        bad.append(kind + ' ' + (cur_ver or '?'))
+                _seedstat.update({'ok': not bad, 'at': time.time(),
+                                  'disk': disk, 'served': served,
+                                  'why': ('' if not bad else
+                                          '배포본 바이트가 없음: ' + ', '.join(bad))})
+                if bad and time.time() - warned_at > 600:
+                    warned_at = time.time()
+                    print('[시드] ⚠️ 함대가 받을 버전의 바이트가 여기 없습니다 — '
+                          + ', '.join(bad) + '. 내부망 시드가 무력화되어 '
+                          '전 함대가 GitHub 로 받습니다. '
+                          '★빌드해 놓고 푸시를 안 했는지 확인하세요(git status / git push)★',
+                          flush=True)
+        except Exception as e:
+            print('[시드] 보관 루프 예외(계속): ' + str(e), flush=True)
+        time.sleep(SNAP_EVERY)
+
 _SECRET_FILE = os.path.join(BASE, "seed_secret.txt")
 
 
@@ -229,6 +390,15 @@ def _auto_register_loop():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == '/seedstat':
+            # ★내부망 시드가 진짜로 쓸모 있는지 — fleet.py 가 세션 시작 때 읽는다★
+            body = json.dumps(_seedstat, ensure_ascii=False).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         m = re.match(r"^/(macro|rental)-([\d.]+)\.exe$", self.path)
         if not m:
             self.send_error(404)
@@ -251,25 +421,39 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(503)
                 return
         sec = ver.get(section) or {}
-        want_sha = str(sec.get('sha256') or '').lower()
+        cur_ver = str(sec.get('version') or '')
+        cur_sha = str(sec.get('sha256') or '').lower()
+        # ★요청된 버전의 기대 해시를 정한다 (사고 248)★
+        #   현재 버전 → 원격 version.json 이 정본.
+        #   지난 버전 → 보관함 색인(그 버전이 현재였을 때 원격이 보증한 값).
+        want_sha = cur_sha if (cur_ver and req_ver == cur_ver) else ''
+        _how = 'current'
         if not want_sha:
-            # 해시가 없는 옛 포맷 → 예전처럼 버전 문자열로만
-            if req_ver != sec.get('version'):
-                self.send_error(404, 'version mismatch')
+            want_sha = _index_get(kind, req_ver)
+            _how = 'cache-index'
+        if not want_sha:
+            if not cur_sha and req_ver == cur_ver:
+                want_sha = ''           # 해시 없는 옛 포맷 → 버전 문자열로만
+            else:
+                print('[시드] ' + req_ver + ' 요청 — 모르는 버전(' + _src + ' = '
+                      + (cur_ver or '?') + ') → GitHub 로', flush=True)
+                self.send_error(404, 'unknown version')
                 return
-        else:
-            have_sha = _file_sha256(path)
-            if have_sha != want_sha:
-                # ★파일이 아직 그 버전이 아니다★ — 빌드 중이거나 복사 전.
-                #   이때는 GitHub 로 보내는 게 맞다(반쪽 파일을 주면 더 나쁘다).
-                print(f'[시드] {req_ver} 요청 — 디스크 exe 해시 불일치({_src} 기준) → GitHub 로',
-                      flush=True)
+        if want_sha:
+            found = _find_bytes(kind, path, want_sha)
+            if not found:
+                # ★그 버전의 바이트가 여기 없다★ — 빌드 중이거나, 내가 다음 빌드를
+                #   덮어쓰고 푸시를 안 했거나(사고 248), 보관함이 정리된 것.
+                #   반쪽 파일을 주느니 GitHub 로 보낸다.
+                print('[시드] ' + req_ver + ' 요청 — 해당 바이트 없음('
+                      + _how + ' ' + want_sha[:12] + ', 디스크 '
+                      + (_file_sha256(path)[:12] or '?') + ') → GitHub 로', flush=True)
                 self.send_error(404, 'exe hash mismatch')
                 return
-            if req_ver != sec.get('version'):
-                # 바이트는 맞는데 버전표만 다르다 = 요청이 낡은 것. 그래도 주면 안 된다.
-                self.send_error(404, 'version mismatch')
-                return
+            path = found
+        elif req_ver != cur_ver:
+            self.send_error(404, 'version mismatch')
+            return
         size = os.path.getsize(path)
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
@@ -297,4 +481,6 @@ if __name__ == "__main__":
     print(f"[시드] 내부망 IP 감지: {_lan_ip() or '(감지 실패)'}", flush=True)
     # 내부망 IP 자동 등록 스레드 (비번 있을 때만 — 위 배너 참조)
     threading.Thread(target=_auto_register_loop, daemon=True).start()
+    # ★버전별 보관 + 미푸시 빌드 경고 (사고 248)★
+    threading.Thread(target=_snapshot_loop, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

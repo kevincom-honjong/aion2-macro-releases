@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.702",
+    "version": "1.1.703",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "e6c4dddc6d80d32b2fec415cd34e5bb623768cb4aa1f965bd9386b59f8caccf9",
+    "sha256": "f4f2fb47e5dcc15887ed7f0994b00d8b040fefe2d69c2e5adb97d9949f923df6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -179,6 +179,7 @@
     "pl_sidebar_aion2.png": "a396a0dd44f06622685917aaa4a677668372c430896c63b0d2bd75fcbc4c40f9",
     "pl_switch_confirm.png": "82b5fda00ff9cbbb021394becd2af2ff8f0041bcc2456ebee7c19a9fb496b926",
     "pl_taskbar_purple.png": "288cefbdf2f1ef09f6807410e24c9386a08cc15ff3877a57e5c86ce67b23dc07",
+    "pl_update_btn.png": "9a009155a15a85e756e3131f9c48057ce633a1e94d9167ec03dbd9b2489622d0",
     "plrow_PC-01_1.png": "585e22effe42126c00930efe345c3ddd1eb0a4d53ec1d810765c39f6f3364d7d",
     "plrow_PC-01_2.png": "de4d0902aabd5c2d9b394b6ff80a39ebc89a8bcac3beeb56d64bd4397f0ca78a",
     "plrow_PC-02_1.png": "6a5f90fa69c6f8136ebb11248a16269192f816dba7a442091b72e66ca1528105",
@@ -317,6 +318,7 @@
     "title_screen.png": "9c8a4f7d2c81647b688e320be67a57e5c8f20a0c912c48818bc36763c7a56d10",
     "tm2_aion.png": "5e58783c078ceb65e1e4154f1a4947ea5ab366995a361983c9d2f0556ca5476e",
     "tm2_endtask.png": "2ce67a476c22f6dc19618728e5888bb45fe58142723ea15518dad5ee9cc62f42",
+    "tm2_name_hdr.png": "975cd46eaa7245a3eed2732ed735e3bbde993aa402ba3c921e1636663a37fd70",
     "tm2_title.png": "13b539559c149805a570aa3d3adb959a1edd553f30505ffcb40a0fed06dbe062",
     "tm_ctx_endtask.png": "86ec7ac4a15f943ae75047555bd127b7e0c270dda84980f28b760bccc81c1672",
     "ttttttttttt.png": "a5171505645dd554628d5211ffe496df227ec8b4f21794237a709b4944e633d6",
@@ -365,11 +367,11 @@
     "sha256": "70cc4a201c69378e987071ffe384606b6d6f1e551d962eb467016b6cb82536b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260826095912",
-  "updated_at": "2026-08-26T13:12:46",
+  "images_version": "20260826161454",
+  "updated_at": "2026-08-26T16:14:54",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.702",
+    "version": "1.1.703",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }

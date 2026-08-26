@@ -15,3 +15,4 @@ build/
 # 대시보드 비번(로컬 전용) — seed_server 자동 IP 등록용. 절대 커밋 금지
 seed_secret.txt
 .gh_tok
+seed_cache/
