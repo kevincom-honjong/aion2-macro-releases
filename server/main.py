@@ -2658,6 +2658,24 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
          뭉친다(199px→60px 실측). .cm-grid2/.cm-btn 은 이 파일 <style> 이라 살아남는데
          이것만 외부 의존이었다 = 새로 만든 단일 실패점. 생성은 refreshAcctButtons(). -->
     <span id="cm-acct-box" style="display:contents"></span>
+  </div>
+  <!-- ★★카드만 강제 변경 (2026-08-27 주인님 지시)★★
+       주인님: "대시보드에 카드 강제로 바꾸는거 만들어놔"
+
+       ★위의 [계정 N] 과 무엇이 다른가★
+         · [계정 N]      = 본컴 런처 + 원격컴 크롬 + 재시작 (3~4분, 파섹 경유)
+         · [카드만 N]    = ★account.txt 만 바꾸고 매크로가 자기만 재시작★ (10초)
+                           본컴은 ★건드리지 않는다★
+
+       ★언제 쓰나★ 본컴 계정을 사람이 직접 바꿨을 때. 그러면 카드(매크로의 자칭값)만
+       어긋나 있는데, 통짜 전환을 돌리면 3~4분을 헛쓰고 본컴을 또 만진다.
+       실측 2026-08-27: 본컴을 손으로 계정5로 바꾼 뒤 이 명령 하나로 짝을 맞췄다.
+
+       ★위험★ 본컴과 안 맞는 계정을 고르면 ★짝이 어긋난 채로 돌아간다★ —
+       매크로는 계정N 이라고 보고하는데 실제 게임은 다른 계정이다. 그래서 확인을 받는다. -->
+  <div class="cm-sec">카드만 (본컴 안 건드림)</div>
+  <div class="cm-grid2">
+    <span id="cm-cardonly-box" style="display:contents"></span>
     <!-- ★[🌐 크롬 제어모드 전환] 제거 (2026-08-23 주인님 지시)★
          함수 chromeCdpFromMenu() 와 chrome_cdp 원격명령은 남는다 —
          CDP 없는 PC 를 살릴 때 ops 스크립트로 여전히 쓴다. -->
@@ -4497,6 +4515,7 @@ function openCardMenu(pc_id, e) {
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
   refreshAcctButtons(pc_id);   // 계정 버튼 활성/비활성 (MAX_ACCT 만큼, 있는 계정만, 현재 계정 ✓)
+  refreshCardOnlyButtons(pc_id); // ★카드만★ 버튼 (본컴 안 건드림, 2026-08-27)
   refreshParsecButtons(pc_id); // 파섹 주소 없는 PC는 눌러도 소용없으니 흐리게
   menu.classList.remove('hidden');
   // ★★폭도 ★실측★ 한다 (2026-08-23 주인님 지적)★★
@@ -6265,6 +6284,62 @@ function refreshAcctButtons(pc_id){
                        : `계정 ${n}로 통짜 전환 (본컴 런처 → 원격컴 크롬 → 재시작)`);
   }
 }
+// ★★카드만 강제 변경 (2026-08-27 주인님 지시)★★
+//   set_account = lc/loot.py:821 — account.txt 를 쓰고 매크로가 ★자기만★ 재시작한다.
+//   크롬도 본컴도 안 건드린다(loot.py 주석: '게임 계정 전환 자체는 사람이 수동으로 한다').
+function refreshCardOnlyButtons(pc_id){
+  const base = baseId(pc_id);
+  const cur  = currentAcctNum(base);
+  const box  = document.getElementById('cm-cardonly-box');
+  if (!box) return;
+  if (box.childElementCount !== MAX_ACCT) {
+    box.innerHTML = '';
+    for (let k=1; k<=MAX_ACCT; k++){
+      const nb = document.createElement('button');
+      nb.className = 'cm-btn chip-gray'
+                   + ((MAX_ACCT % 2 === 1 && k === MAX_ACCT) ? ' cm-span2' : '');
+      nb.id = 'cm-cardonly-' + k;
+      nb.textContent = '카드 ' + k;
+      nb.onclick = (function(v){ return function(){ setCardOnly(v); }; })(k);
+      box.appendChild(nb);
+    }
+  }
+  for (let n=1; n<=MAX_ACCT; n++){
+    const b = document.getElementById('cm-cardonly-' + n);
+    if (!b) continue;
+    // ★없는 계정도 막지 않는다★ — 이건 자격증명을 안 쓴다(account.txt 한 글자).
+    //   본컴을 사람이 바꿔놓은 상황이 바로 이 버튼이 필요한 상황이라, info.txt 가
+    //   아직 안 채워졌을 수 있다. 막으면 정작 필요할 때 못 쓴다.
+    b.style.opacity = (n === cur ? '0.55' : '');
+    b.textContent = (n === cur ? '✓ 카드 ' : '카드 ') + n;
+    b.title = (n === cur
+      ? '카드가 이미 계정 ' + n + ' 입니다'
+      : '★카드(매크로 정체성)만★ 계정 ' + n + ' 로 바꿉니다 — account.txt + 매크로 자기 재시작(약 10초). '
+        + '본컴 런처와 원격컴 크롬은 건드리지 않습니다. 본컴을 사람이 이미 바꿔둔 경우에 쓰십시오.');
+  }
+}
+async function setCardOnly(n){
+  const id = menuPcId;
+  const base = baseId(id);
+  const cur = currentAcctNum(base);
+  const label = ACCT_LABELS[n-1];
+  // ★확인을 받는다★ — 본컴과 안 맞는 계정을 고르면 짝이 어긋난 채로 돌아간다.
+  //   그 상태는 '매크로는 계정N 이라 보고하는데 실제 게임은 딴 계정' 이라
+  //   화면만 봐서는 아무도 모른다. 그래서 누를 때 한 번 묻는다.
+  const msg = base + ' 카드를 ★계정 ' + n + '★ 로 바꿉니다.' + String.fromCharCode(10)
+            + String.fromCharCode(10)
+            + '· 본컴 런처와 원격컴 크롬은 건드리지 않습니다' + String.fromCharCode(10)
+            + '· 매크로가 자기만 재시작합니다 (약 10초)' + String.fromCharCode(10)
+            + (cur ? ('· 지금 카드: 계정 ' + cur + String.fromCharCode(10)) : '')
+            + String.fromCharCode(10)
+            + '본컴이 실제로 계정 ' + n + ' 인지 확인하셨습니까?';
+  if (!confirm(msg)) return;
+  closeCardMenu();
+  const ok = await sendCmd(id, 'set_account', {label: label});
+  toast(ok ? (base + ' 카드 → 계정 ' + n + ' (재시작 대기)')
+           : (base + ' 카드 변경 실패'), ok ? 'ok' : 'err');
+}
+
 async function switchAccountDirect(n){
   const id = menuPcId;
   closeCardMenu();
