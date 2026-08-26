@@ -5977,7 +5977,7 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
             <button onclick="sellAllCard('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">판매</button>
             <button onclick="openLive('${pc}')" class="px-1.5 py-0.5 text-xs rounded bg-emerald-900/60 hover:bg-emerald-700 text-emerald-300 whitespace-nowrap" title="이 PC의 게임 화면을 실시간으로 봅니다 (열려 있는 동안만 전송)">🖵 화면</button>
-            ${(/^http:\/\/[\d.]+:\d+\/$/.test(((state[pc]||{}).lan_url)||'')) ? `<button onclick="window.open('${(state[pc]||{}).lan_url}','_blank')" class="px-1.5 py-0.5 text-xs rounded bg-teal-900/60 hover:bg-teal-700 text-teal-300 whitespace-nowrap" title="내부망 직결 — 원본 해상도·고프레임, 새 탭으로 열립니다 (같은 내부망에 있어야 열림)">⚡ 내부망</button>` : ''}
+            ${(/^http:\/\/[\d.]+:\d+\/(\?k=[\w-]+)?$/.test(((state[pc]||{}).lan_url)||'')) ? `<button onclick="window.open('${(state[pc]||{}).lan_url}','_blank')" class="px-1.5 py-0.5 text-xs rounded bg-teal-900/60 hover:bg-teal-700 text-teal-300 whitespace-nowrap" title="내부망 직결 — 원본 해상도·고프레임, 새 탭으로 열립니다 (같은 내부망에 있어야 열림)">⚡ 내부망</button>` : ''}
           </div>
         </div>
       </td>
