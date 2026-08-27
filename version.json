@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.728",
+    "version": "1.1.729",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "b94dda1ba78d852e0eb151f99c8ab8e4d2629b7aa7759132c82f5c0f39b2d2d5",
+    "sha256": "cabc02a2ced1777dbed88167c9468f2d01fbae3b4e5f82a401254c1f98a5b3cb",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -380,10 +380,10 @@
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260827132444",
-  "updated_at": "2026-08-27T13:38:17",
+  "updated_at": "2026-08-27T14:08:51",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.728",
+    "version": "1.1.729",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
