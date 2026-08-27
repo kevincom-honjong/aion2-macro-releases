@@ -187,6 +187,7 @@
     "plrow_PC-01_2.png": "de4d0902aabd5c2d9b394b6ff80a39ebc89a8bcac3beeb56d64bd4397f0ca78a",
     "plrow_PC-02_1.png": "6a5f90fa69c6f8136ebb11248a16269192f816dba7a442091b72e66ca1528105",
     "plrow_PC-02_2.png": "e2a6a52650713693f454fca4c6c32d76d4e497ba52dc69d7406a9b3e5b4a957e",
+    "plrow_PC-02_3.png": "2f9d64330d1f2311da04d465f522ad07bd0d6dea171250b89dc99a3f34f7d929",
     "plrow_PC-03_1.png": "c6998fd40f3b9800b4bd326e4042feb5210f7a25aca157128fe41769c8398074",
     "plrow_PC-03_2.png": "7325e72baffc0bb06a43408f4b037186784a8f0f6c42c2e8ff1c64bac494bd79",
     "plrow_PC-04_1.png": "027cddb24d9ccd370849e085ac570ae10eed1e4dd8d97d113e878b2a49ba3c91",
@@ -370,8 +371,8 @@
     "sha256": "70cc4a201c69378e987071ffe384606b6d6f1e551d962eb467016b6cb82536b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260826173357",
-  "updated_at": "2026-08-26T19:35:15",
+  "images_version": "20260827033747",
+  "updated_at": "2026-08-27T03:37:47",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
     "version": "1.1.710",
