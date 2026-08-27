@@ -6270,6 +6270,20 @@ function acctAvail(base){
   for (let n=1; n<=Math.min(MAX_ACCT,total); n++) avail.add(n);
   return avail;
 }
+// ★★사고 308-b (2026-08-28) — `cmTarget` 은 ★어디에도 없었다★★★
+//   `findHostFromMenu()` 가 `const live = cmTarget(); if(!live) return;` 를 부른다.
+//   정의가 없으니 ★ReferenceError★ → 「본컴 계정 찾기」 메뉴가 눌러도 아무 일도 안 났다.
+//   `toast` 오타(사고 308)와 ★같은 부류★ 이고, 둘 다 `node --check` 를 통과했다.
+//   → check_js.py 에 ★미정의 이름 검사★ 를 넣었더니 이게 걸려 나왔다.
+//   이름 그대로 '지금 열린 카드메뉴의 실제 대상' 을 준다.
+function cmTarget(){
+  const live = liveCardOf(baseId(menuPcId || ''));
+  if (!live) {
+    showToast(`⚠️ ${baseId(menuPcId || '')} 에 도는 매크로가 없습니다 — 먼저 켜 주세요`);
+    return null;
+  }
+  return live;
+}
 function liveCardOf(base){
   const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
   return Object.values(state).find(p => baseId(p.pc_id||'')===base && isOn(p)) || null;
@@ -6367,15 +6381,28 @@ async function setCardOnly(n){
   const msg = base + ' 카드를 ★계정 ' + n + '★ 로 바꿉니다.' + String.fromCharCode(10)
             + String.fromCharCode(10)
             + '· 본컴 런처와 원격컴 크롬은 건드리지 않습니다' + String.fromCharCode(10)
-            + '· 매크로가 자기만 재시작합니다 (약 10초)' + String.fromCharCode(10)
+            + '· 매크로가 자기만 재시작합니다 (★보통 15~30초★, 판매 중이면 최대 3분)'
+            + String.fromCharCode(10)
             + (cur ? ('· 지금 카드: 계정 ' + cur + String.fromCharCode(10)) : '')
             + String.fromCharCode(10)
             + '본컴이 실제로 계정 ' + n + ' 인지 확인하셨습니까?';
   if (!confirm(msg)) return;
   closeCardMenu();
+  // ★★사고 308 (2026-08-28) — 이 버튼은 느린 게 아니라 ★대답을 안 했다★★★
+  //   주인님: "대시보드에서 내가 임의로 카드 바꾸는게 너무느리다"
+  //   ★정의된 것은 `showToast` 뿐이고 `toast` 는 어디에도 없다★ →
+  //   명령은 정상으로 나가는데 그 다음 줄이 ★ReferenceError★ 로 죽었다.
+  //   그래서 토스트도, 카드 변화도, 에러도 ★아무것도 안 보였다.★
+  //   실제로 카드가 바뀌기까지 15~30초 걸리는데 그 동안 화면이 완전히 죽어 있었다.
+  //   ★`node --check` 는 이걸 못 잡는다★ — 문법은 멀쩡하기 때문이다(게이트 구멍).
+  //   → check_js.py 에 ★미정의 식별자 검사★ 를 같이 넣었다.
+  //
+  //   ★낙관적 갱신★ — 사람이 누른 즉시 무슨 일이 일어나는지 보여준다.
+  //   체감 30초를 0.3초로 줄이는 것은 서버가 아니라 이 한 줄이다.
+  showToast(`⏳ ${base} 카드 → 계정 ${n} 전환 중… (보통 15~30초, 판매 중이면 최대 3분)`);
   const ok = await sendCmd(id, 'set_account', {label: label});
-  toast(ok ? (base + ' 카드 → 계정 ' + n + ' (재시작 대기)')
-           : (base + ' 카드 변경 실패'), ok ? 'ok' : 'err');
+  showToast(ok ? (base + ' → 계정 ' + n + ' 명령 전달됨 · 매크로 재시작을 기다립니다')
+               : (base + ' 카드 변경 ★실패★ — 명령이 안 나갔습니다'));
 }
 
 async function switchAccountDirect(n){
@@ -6458,7 +6485,7 @@ async function findHostFromMenu(){
     "[확인] 찾은 계정으로 ★전환까지★ (본컴 런처 + 매크로 재시작 포함, 추가 1~2분)\n" +
     "[취소] 찾아서 ★스트리밍 직전★ 상태로 세워두기만");
   const ok = await sendCmd(live.pc_id, 'find_host', adopt ? {adopt: true} : {});
-  if(ok) toast(adopt ? '본컴 계정 찾기 → 전환까지 진행합니다'
+  if(ok) showToast(adopt ? '본컴 계정 찾기 → 전환까지 진행합니다'
                      : '본컴 계정 찾기 시작 — 결과는 텔레그램/로그로 옵니다');
 }
 
