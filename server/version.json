@@ -175,6 +175,8 @@
     "pl_confirm_btn.png": "66eb3779d936e7c2442a0e90355072c99a11593f4d73a0e6e8650d3a32c67124",
     "pl_desktop_purple.png": "db5bae52ca006c23b8f788bbfd28e5333cbf4b679cb2668b05fa2d3ea6504a1c",
     "pl_login_fail.png": "e56995de7d3dd161fdbea5c468d547652d53370fcf74731081fc79da1165122d",
+    "pl_login_screen.png": "31077805892ef52c3fa22ae9c583c86ef808a84e13792c4e0d3b7fcea2c045d5",
+    "pl_login_wait.png": "34f95b13c51d58268d2aeab6b6d496d4cc2904f794a2d5f70ad0d2173ea66541",
     "pl_purple_logo.png": "448c194c0daefc33854b5b9d4b7b1e6c77d79b97f4ddb91891c4761a1897fd91",
     "pl_retry_btn.png": "1814b42467ec5f678065622f1bd8eadf11c5eceb12e944e55d5d42e6cef35034",
     "pl_run_game.png": "a9cd38e8e3d9bc0dbd11e17e283ec68cc3c7ce04e4e25839e7a6bace0fe7a971",
@@ -188,7 +190,7 @@
     "plrow_PC-02_1.png": "6a5f90fa69c6f8136ebb11248a16269192f816dba7a442091b72e66ca1528105",
     "plrow_PC-02_2.png": "e2a6a52650713693f454fca4c6c32d76d4e497ba52dc69d7406a9b3e5b4a957e",
     "plrow_PC-02_3.png": "2f9d64330d1f2311da04d465f522ad07bd0d6dea171250b89dc99a3f34f7d929",
-    "plrow_PC-03_1.png": "c6998fd40f3b9800b4bd326e4042feb5210f7a25aca157128fe41769c8398074",
+    "plrow_PC-03_1.png": "f92de729b8fb2e8ba3376eafe8f0d32e4c525a374dd242446afffaa47120dea6",
     "plrow_PC-03_2.png": "7325e72baffc0bb06a43408f4b037186784a8f0f6c42c2e8ff1c64bac494bd79",
     "plrow_PC-04_1.png": "027cddb24d9ccd370849e085ac570ae10eed1e4dd8d97d113e878b2a49ba3c91",
     "plrow_PC-04_2.png": "33a5a0ef50ef71f8b0076336d5e4d43279ece27a75276961bef23ba0278449df",
@@ -371,8 +373,8 @@
     "sha256": "70cc4a201c69378e987071ffe384606b6d6f1e551d962eb467016b6cb82536b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260827033747",
-  "updated_at": "2026-08-27T03:37:47",
+  "images_version": "20260827042042",
+  "updated_at": "2026-08-27T04:20:42",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
     "version": "1.1.710",
