@@ -2364,7 +2364,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
   <div class="cmd-group cmd-one">
-    <span class="cmd-legend">🎯 선택한 카드 1개만</span>
+    <span class="cmd-legend" title="선택한 카드 ★전부★ 에 보냅니다. '1회' 는 순환 없이 그 계정에서 한 번만 한다는 뜻입니다(PC 대수가 아닙니다). 2대 이상이면 대상을 보여주고 물어봅니다.">🎯 선택한 카드 — 순환 없이 ★1회★</span>
     <button onclick="selCmd('daily_dungeon')" class="chip chip-purple">일일던전</button>
     <button onclick="selCmd('nightmare')" class="chip chip-pink">악몽</button>
     <button onclick="selCmd('awakening')" class="chip chip-orange">각성</button>
@@ -4238,6 +4238,24 @@ async function bulkCmd(command, args={}) {
 async function selCmd(command, args={}) {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
   const n=selectedPcs.size;
+  // ★★2026-08-28 주인님 지적 — "저거 누르니까 진짜 전pc가 다 돌던데?"★★
+  //   이 줄의 이름이 「선택한 카드 1개만」 인데 실제로는 ★선택된 카드 전부★ 에 보낸다.
+  //   ('1개만' 은 "순환 없이 그 계정 1회" 라는 뜻이었지 "PC 1대" 가 아니었다)
+  //   게다가 rotCmd 와 달리 ★확인창이 없어서★ 한 번 눌리면 그대로 나간다.
+  //   실제 이력: collect_info 가 5대(PC-03b·09·16b·17·22)에 나갔다.
+  //   ★이게 §A7 이 막으려는 모양이다★ — 한 번 눌러 함대가 움직이는데 아무도 안 묻는다.
+  //   → 2대 이상이면 대상 이름을 보여주고 묻는다. 1대면 예전처럼 바로 간다.
+  if (n >= 2) {
+    const names = [...selectedPcs].sort().join(', ');
+    if (!confirm(`⚠️ ${command} 을 ★${n}대★ 에 보냅니다
+
+${names}
+
+` +
+                 `(이 줄은 "순환 없이 1회" 라는 뜻이지 "PC 1대" 가 아닙니다)
+
+진행할까요?`)) return;
+  }
   await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
