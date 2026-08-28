@@ -5871,7 +5871,8 @@ const AI_T = {
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
         huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
-        huntHuman:'⚠ CẦN NGƯỜI', huntHumanWhy:(a,w)=>`tài khoản ${a}: ${w} — nhân vật đang ở trong hầm ngục, cần người xử lý`,
+        huntHuman:'⚠ CẦN NGƯỜI', huntHumanWhy:(a,w)=>`tài khoản ${a}: ${w} — máy tự đánh 2 lần không qua, cần người vào đánh tay`,
+        huntHumanWho:(n,sl)=>` · nhân vật ${n} (ô ${sl})`,
         huntStale:(d)=>`im lặng ${d} ngày`, huntStaleNote:'thẻ cũ — không tính vào số còn lại',
         huntFoot:'Tài khoản chưa xong hôm nay (theo ô). Nếu máy đó đang săn bằng tài khoản khác thì có nhãn ĐANG SĂN. Tài khoản im lặng nhiều ngày được tách riêng và KHÔNG tính vào số còn lại. Tự cập nhật theo thời gian thực.',
         huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
@@ -5886,7 +5887,8 @@ const AI_T = {
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
         huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
-        huntHuman:'⚠ 사람이 가야 함', huntHumanWhy:(a,w)=>`계정${a}: ${w} — 캐릭이 던전 안에 있습니다`,
+        huntHuman:'⚠ 사람이 가야 함', huntHumanWhy:(a,w)=>`계정${a}: ${w} — 매크로가 2회 시도하고 못 잡았습니다`,
+        huntHumanWho:(n,sl)=>` · ${n} (슬롯 ${sl})`,
         huntStale:(d)=>`${d}일째 소식 없음`, huntStaleNote:'옛 카드 — 남은 수에 안 셉니다',
         huntFoot:'오늘 슬롯을 다 못 끝낸 계정만 (슬롯 기준). 그 컴퓨터가 다른 계정으로 사냥 중이면 사냥중 배지가 붙습니다. 며칠째 안 뜬 계정은 따로 갈라 놓고 남은 수에 안 셉니다(옛 카드가 박제된 것이라 오늘 안 한 게 아닙니다). 실시간으로 갱신됩니다.',
         huntSummary:(pc,ac,sl)=>`${pc}대 · 계정 ${ac}개 · 남은 슬롯 ${sl}`,
@@ -6131,6 +6133,16 @@ function aiBuildHunt(){
                //   AUTO_IDLE_BUSY 에는 재연결·캐릭전환·캡차도 들어있다. 실제 상태를 같이 낸다.
                busySt: busy ? (busy.status || '') : '',
                held: held, heldSt: held ? held.status : '',
+               // ★막힌 캐릭★ — 매크로가 보내는 wait_slot 으로 daily_progress 에서 이름을 찾는다.
+               //   ★카드의 slot(활성 슬롯)을 쓰면 안 된다★ — 실측 PC-07b 는 슬롯1 에서 막혔는데
+               //   그 뒤 슬롯2 로 넘어가 카드엔 slot:2 였다. 그대로 쓰면 엉뚱한 캐릭을 가리킨다.
+               //   ★wait_slot 을 안 보내는 옛 매크로에서는 아무것도 안 띄운다★ — 틀린 이름보다 없는 게 낫다.
+               heldWho: (() => {
+                 const w = held && Number(held.wait_slot || 0);
+                 if (!w) return null;
+                 const row = (held.daily_progress || []).find(c => Number(c && c.slot) === w);
+                 return { name: (row && row.name) || ('슬롯' + w), slot: w };
+               })(),
                heldAcct: held ? (acctNumOf(held.pc_id) || 1) : 0,
                left: liveLeft, staleLeft: accts.reduce((s, a) => s + a.left, 0) - liveLeft,
                // ★live 카드가 하나도 없으면 「0 남음」이 거짓말을 한다★ (실측 PC-23: 2·2·4일)
@@ -6171,7 +6183,8 @@ function renderAiHunt(){
     const heldBadge = r.held
       ? `<span style="background:rgba(244,63,94,.22);color:#fda4af;border:1px solid #fb7185"
                class="px-2 py-0.5 rounded text-xs font-extrabold">${esc(T.huntHuman)}</span>
-         <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, aiStLabel(r.heldSt)))}</span>`
+         <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, aiStLabel(r.heldSt)))}${
+             r.heldWho ? esc(T.huntHumanWho(r.heldWho.name, r.heldWho.slot)) : ''}</span>`
       : '';
     const busyBadge = (!r.held && r.busy)
       ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399"
@@ -10356,12 +10369,39 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # ★사람이 와야 풀리는 상태면 ★작업을 보내지 않고 세운다★ (2026-08-28)★
         #   계정을 바꿔서도 안 된다 — 캐릭이 각성전 던전 안에 서 있는 채로 전환된다.
         if _s in ROT_HUMAN_WAIT:
-            await _rot_stop(tenant, base,
-                            f"⛔ 순환 정지 — {ROT_HUMAN_WAIT[_s]}. "
-                            f"★사람이 처리한 뒤 다시 눌러주세요.★ "
-                            f"(여기서 {_tlabel} 을 보내면 매크로가 거부하거나, "
-                            f"거부 목록에 없는 작업은 진행 중인 콘텐츠를 깹니다)", st)
-            return
+            # ══════════════════════════════════════════════════════════
+            # ★★두 대기는 다르다 — 각성전만 세운다 (2026-08-29 주인님 지시)★★
+            #   주인님: "악몽이끝나고 다음계정으로 넘어가야하는데 그게안되네"
+            #   · awakening_wait = ★세션이 아직 안 끝났다★ (다음 Scroll Lock 대기).
+            #     캐릭이 각성전 던전 안이라 전환하면 하루 1회 콘텐츠가 깨진다 → 그대로 세운다.
+            #   · nightmare_wait = ★세션이 끝난 뒤의 표식★ 이다.
+            #     `lc/nightmare.py _finish_session` 이 `nightmare_active=False` +
+            #     `release_pause("nightmare")` 한 ★뒤에★ 이 상태를 보고한다.
+            #     실측(2026-08-29 내부망 촬영, PC-01·PC-07b ★둘 다★): 캐릭터 선택창.
+            #     `lc/loot.py` 의 거부 가드도 `awakening_waiting` 만 본다 —
+            #     nightmare 대기는 collect_info·switch_launcher 를 막지 않는다.
+            #     `ROT_IDLE_SET` 에도 이미 들어 있다(쉬는 자리로 인정된 상태).
+            #   → 악몽은 ★이 계정만 접고 다음 계정으로★ 간다. 알림은 계정당 1회 남긴다 —
+            #     「손으로 잡을 캐릭이 있다」는 사실이 사라지면 안 된다.
+            # ══════════════════════════════════════════════════════════
+            if _s != "nightmare_wait":
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — {ROT_HUMAN_WAIT[_s]}. "
+                                f"★사람이 처리한 뒤 다시 눌러주세요.★ "
+                                f"(여기서 {_tlabel} 을 보내면 매크로가 거부하거나, "
+                                f"거부 목록에 없는 작업은 진행 중인 콘텐츠를 깹니다)", st)
+                return
+            _nm_acct = _rot_acct_no(active.get("pc_id"))
+            _nm_seen = [str(x) for x in (st.get("_rot_nm_skipped") or [])]
+            if str(_nm_acct) not in _nm_seen:
+                _nm_seen.append(str(_nm_acct))
+                st["_rot_nm_skipped"] = _nm_seen
+                await _rot_say(tenant, base,
+                               f"⚠ 계정{_nm_acct} — {ROT_HUMAN_WAIT[_s]} "
+                               f"★남은 작업은 접고 다음 계정으로 갑니다.★ "
+                               f"(그 캐릭은 나중에 사람이 잡아주십시오)")
+            st["queue"] = []          # ★이 계정 남은 작업만 접는다★ — 아래 full 분기로 흘러간다
+            st["retask"] = False
         _want_st = ROT_TASK_BUSY_ST.get(_task) or ()
         if _s not in ROT_IDLE_SET:
             # ★'뭔가 하고 있다' 와 '★그 작업★ 을 하고 있다' 는 다르다 (2026-08-28)★
