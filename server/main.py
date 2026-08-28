@@ -1706,7 +1706,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .pv-v{color:#f8fafc;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
   .pv-bad{color:#f87171;text-shadow:0 0 9px rgba(248,113,113,.5)}
   /* ★서버 이름이 안 보인다 (2026-08-29 주인님)★ 반투명 글자 → 칩.
-     ★Tailwind 클래스로 쓰면 안 칠해진다★ — 번들에 없는 조합은 조용히 무시된다(실측). */
+     ★왜 Tailwind 클래스로 안 쓰나 (2026-08-29 정정)★ 이 대시보드는 Tailwind
+     ★Play CDN★(cdn.tailwindcss.com) = 브라우저 안 JIT 다. ★그 페이지에서 처음 쓰는★
+     클래스는 DOM 감시 → 생성 순서라 ★한 프레임 뒤에★ 칠해진다(실측: bg-cyan-900/80 이
+     즉시 rgba(0,0,0,0) → 600ms 뒤 rgba(22,78,99,0.8)). 색이 곧 신호인 칩·배지는
+     그 번쩍임이 그대로 오독이 되므로 ★자기 <style> 의 클래스★ 로 둔다.
+     ※ 처음에 나는 이걸 "번들에 없어서 무시된다" 고 적었는데 ★거짓이었다★ —
+        renderCards() 직후 같은 동기 블록에서 재서 생성 전 상태를 본 것이다. */
   .srv-chip{padding:1px 7px;border-radius:6px;font-size:11px;font-weight:800;line-height:1.5;
     letter-spacing:.02em;background:#0e4d5c;color:#a5f3fc;border:1px solid #0e7490}
   /* 선택 강조가 켜지면 남의 탭줄도 같이 죽인다 — 카드만 흐려지면 탭이 떠 보인다 */
