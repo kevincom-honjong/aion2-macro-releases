@@ -2138,8 +2138,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .dk-hero-sub{position:relative;z-index:1;flex:none;display:flex;flex-direction:column;
     gap:7px;justify-content:center;padding-right:22px;margin-right:2px;
     border-right:1px solid rgba(255,255,255,.10)}
-  .dk-hero-sub .r{display:flex;align-items:baseline;gap:9px;white-space:nowrap}
-  .dk-hero-sub .l{font-size:13px;font-weight:800;letter-spacing:.04em}
+  .dk-hero-sub .r{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+  /* ★라벨도 숫자와 같은 크기 (2026-08-29 주인님: "글자크기 숫자랑 같게 맞춰")★ */
+  .dk-hero-sub .l{font-family:var(--dk-disp);font-size:34px;font-weight:800;
+    line-height:1;letter-spacing:.01em}
   .dk-hero-sub .n{font-family:var(--dk-disp);font-variant-numeric:tabular-nums;
     font-size:34px;font-weight:800;line-height:1;margin-left:auto}
   .dk-hero-sub .on  .l{color:#6ee7b7}  .dk-hero-sub .on  .n{color:#34d399}
@@ -2153,8 +2155,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .dk-sm.gold .v{color:var(--dk-gold)}
   @media(max-width:760px){.dk-hero{gap:16px}.dk-hero-side{margin-left:0;gap:16px}
     .dk-hero-n{font-size:44px}
-    .dk-hero-sub{padding-right:14px;gap:4px}.dk-hero-sub .n{font-size:26px}
-    .dk-hero-sub .l{font-size:11px}}
+    .dk-hero-sub{padding-right:14px;gap:4px}
+    .dk-hero-sub .n,.dk-hero-sub .l{font-size:26px}}
 
 /* ══════════════════════════════════════════════════════════════════════════
    ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
