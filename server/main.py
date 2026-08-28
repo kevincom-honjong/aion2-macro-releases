@@ -963,6 +963,9 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 _tk = str(_rs.get("task") or "")
                 if _tk:
                     pc["_rot_task"] = ROT_TASK_LABEL.get(_tk, _tk)
+                    # ★계정-우선이 되면서 한 PC 가 tasking 에 훨씬 오래 머문다 (2026-08-28)★
+                    #   「이 계정에서 몇 개 남았나」가 없으면 화면에서 진단이 안 된다.
+                    pc["_rot_left"] = len([x for x in (_rs.get("queue") or []) if x])
                 # ★전환 목표도 싣는다 (2026-08-21 주인님 요청 "전환중이라는 표시")★
                 #   stage 만으로는 '어디로' 가 안 보여서 화면에서 진단이 안 된다.
                 # ★★2026-08-23 수리: target 은 'b' 같은 ★글자★ 인데 int() 로 읽고 있었다.★★
@@ -1601,10 +1604,61 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ── 카드 선택 표시 v2: 상태 글로우(초록 등)와 확실히 구분 ──
      ① 시안 이중 링 + 배경 틴트 ② 우상단 "✔ 선택됨" 뱃지 ③ ★선택 중엔 미선택 카드 디밍★ */
   /* ── 멀티계정 카드 스택(2026-08-15 사용자: "포커 카드 여러장처럼") ── */
-  .stack-layer{position:absolute;background:#0d1424;border:1px solid #374151;
-    border-radius:0.75rem;cursor:pointer;color:#94a3b8;overflow:hidden;
-    transition:background .15s,border-color .15s}
-  .stack-layer:hover{background:#16203a;border-color:#6366f1;color:#c7d2fe}
+  /* ══════════════════════════════════════════════════════════════════════
+     ★★계정 탭 (2026-08-28 주인님 지시 + 직접 그린 그림)★★
+       "카드형식 이렇게 하는게 좋을거같아 ★버튼 누르기도 좇같고★ 해서 내가 직접그림
+        그리고 ★한개만있어도 1 표시★ 하게끔하면 ★다 카드 높낮이도 같을거고★"
+
+     ★무엇이 문제였나★ 예전 .stack-layer 는 뒤 카드를 18px 짜리 띠로 엿보이게 했다.
+       ① 누를 자리가 ★높이 16px 짜리 가로줄★ 이라 조준이 어렵다(주인님 원문)
+       ② 카드 위쪽 padding 이 18px×(계정수-1) 이라 ★계정 수마다 카드 높이가 달랐다.★
+          계정 1개 PC 와 5개 PC 가 한 격자에 섞이면 줄이 안 맞는다.
+     ★고침★ 브라우저 탭처럼 ★카드 위에 번호 탭★ 을 붙인다.
+       · 탭 줄 높이는 ★계정 수와 무관하게 항상 32px★ → 모든 카드가 같은 높이
+       · ★계정이 1개여도 「1」 탭을 그린다★ (주인님 명시) → 줄이 어긋나지 않는다
+       · 탭 하나가 36×26px(활성 40×29) 이라 예전 16px 띠보다 누르기 쉽다
+       ★숫자는 CSS 와 같이 고쳐야 한다★ — 첫 판이 주석 22px / 실제 30px 로 갈렸다(§A4)
+     ══════════════════════════════════════════════════════════════════════ */
+  /* ★★한 줄 안에서 카드가 같은 높이로 늘어나게 한다 (2026-08-28 적대검증 [높1])★★
+     #grid-online 은 display:grid + align-items:stretch 라 ★직계 자식★ 이 늘어난다.
+     예전엔 카드 자체가 직계 자식이라 자동으로 맞았는데, 탭 때문에 wrapper 를 끼우면서
+     wrapper 만 늘어나고 ★안쪽 카드는 auto 로 남았다★ = 이 수정의 목적과 정반대였다.
+     (적대검증 실측: 단일계정 카드 3장이 194/194/194 → 74/194/74 로 무너졌다)
+     grid-template-rows:auto 1fr 로 둘째 칸을 늘리고, 그 안에서 카드를 늘린다. */
+  .acct-stack{position:relative;display:grid;grid-template-rows:auto 1fr}
+  .acct-stack > .acct-body{display:flex}
+  .acct-stack > .acct-body > [id^="card-"]{flex:1 1 auto;width:100%}
+  /* ★탭 크기 = 주인님이 지적한 바로 그 문제다★ — "버튼 누르기도 좇같고".
+     예전 띠는 높이 16px. 첫 판에서 26×19px 로 만들었는데 ★실측해보니 여전히 작았다★
+     → 36×26px(활성 29px). 손가락/마우스 조준이 편해지고, 줄 높이는 30px 로 고정이라
+       ★계정 수와 무관하게 모든 카드가 같은 높이★ 라는 요구는 그대로 지킨다. */
+  /* height 는 탭(26)+활성(29)+top(1) 보다 커야 한다 — 30 이면 활성 탭 아랫변이 1px
+     잘리고 '카드에 이어 붙은' box-shadow 2px 가 통째로 클리핑된다(적대검증 [중1]) */
+  /* ★overflow 는 visible 이어야 한다★ — hidden 이면 활성 탭이 카드 쪽으로 1px 겹치는
+     것과 box-shadow 2px(카드와 이어 붙은 효과)가 통째로 잘린다(실측: 활성탭 아랫변 678
+     vs 탭줄 677). 탭은 최대 5개 x 40px + gap = 216px 이고 카드 최소폭이 285px 이라
+     가로로 넘칠 일이 없으므로 hidden 으로 막을 이유가 없다. */
+  .acct-tabs{display:flex;align-items:flex-end;gap:3px;height:32px;padding-left:10px;
+    overflow:visible}
+  .acct-tab{position:relative;top:1px;min-width:36px;height:26px;padding:0 10px;
+    display:inline-flex;align-items:center;justify-content:center;gap:5px;
+    font-size:13px;font-weight:800;line-height:1;letter-spacing:.02em;
+    background:#0d1424;border:1px solid #374151;border-bottom:none;
+    border-radius:9px 9px 0 0;color:#7c8aa0;cursor:pointer;
+    transition:background .15s,border-color .15s,color .15s,height .12s}
+  .acct-tab:hover{background:#16203a;border-color:#6366f1;color:#c7d2fe;height:29px}
+  /* ★지금 보고 있는 계정★ — 카드와 이어 붙은 것처럼 아래를 튼다 */
+  .acct-tab-on{height:29px;top:1px;background:#1e293b;color:#e2e8f0;
+    border-color:#4b5563;cursor:default;z-index:2;box-shadow:0 2px 0 0 #1e293b}
+  .acct-tab-on:hover{background:#1e293b;border-color:#4b5563;color:#e2e8f0;height:29px}
+  /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
+  .acct-tab-none{opacity:.38;cursor:not-allowed}
+  .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
+  .acct-tab .tdot{width:5px;height:5px;border-radius:50%;background:#22c55e;
+    box-shadow:0 0 5px rgba(34,197,94,.9);flex:none}
+  .acct-tab .tdot-rot{background:#c084fc;box-shadow:0 0 5px rgba(192,132,252,.9)}
+  /* 선택 강조가 켜지면 남의 탭줄도 같이 죽인다 — 카드만 흐려지면 탭이 떠 보인다 */
+  main:has(.card-sel) .acct-stack:not(:has(.card-sel)) .acct-tabs{opacity:.45}
   .card-sel{outline:2.5px solid #22d3ee!important;outline-offset:2px;
     box-shadow:0 0 0 6px rgba(34,211,238,.16),0 0 28px rgba(34,211,238,.55)!important;
     background-image:linear-gradient(160deg,rgba(34,211,238,.10),transparent 55%)!important}
@@ -2339,6 +2393,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <!-- ★그룹 3: 전 계정 순환 (2026-08-23 주인님 지시)★
        "일일던전 악몽 각성 회랑 정보수집은 다 피씨의 전체계정순환으로 되야할거야"
        한 계정에서 작업이 끝나면 서버가 스스로 다음 계정으로 통짜 전환해 또 시킨다.
+       ★[⚡ 자동진행] 처럼 작업을 여러 개 실으면 2026-08-28 부터 ★계정-우선★ 이다 —
+         한 계정에서 실은 작업을 ★전부★ 끝내고 다음 계정으로 간다(전환 횟수 1/3).
        계정을 한 바퀴 다 돌면 자동 종료(텔레그램 ✅). ★물리 PC당 1건★ 으로 접어 보낸다. -->
   <div class="cmd-group cmd-rot">
     <span class="cmd-legend">🔁 전 계정 순환 (PC의 계정 전부)</span>
@@ -2358,8 +2414,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="cmd-group cmd-rot">
     <span class="cmd-legend">⚡ 노는 PC 자동진행</span>
     <button onclick="autoIdleCmd()" class="chip chip-green"
-            title="오늘 사냥을 완주해서 놀고 있는 PC 를 스스로 찾아, 그 PC 의 ★전 계정★ 에
-일일던전 → 회랑 → 악몽 을 차례로 돌립니다. 누르기 전에 대상과 할 일을 미리 보여줍니다.">⚡ 남은 할 일 자동진행</button>
+            title="카드를 ★고르고★ 누르면 그 PC 만, ★아무것도 안 고르고★ 누르면 지금 사냥하지 않는 PC 전부.
+각 계정에서 일일던전 → 회랑 → 악몽 을 ★다 끝내고★ 다음 계정으로 넘어갑니다.
+누르기 전에 대상과 할 일을 전부 보여주고, 제외한 PC 는 사유까지 보여줍니다.">⚡ 남은 할 일 자동진행</button>
   </div>
 
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
@@ -2740,6 +2797,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
                 class="text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white"></button>
         <button onclick="setAiFilter('lo')" id="ai-f-lo"
                 class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
+        <!-- ★★사냥 탭 (2026-08-28 주인님 지시)★★
+             원문: "AI 버튼 안에 사냥 이라는 탭도 하나 만들고 거기다가 실시간으로
+                    아직 사냥 안끝난애들 표시하게끔해놓고 만약 그컴퓨터의 다른계정이
+                    사냥중이면 사냥중이라고 표시하게끔도 해줘"
+             던전 추천(charTableData=정보수집)과 달리 이 탭은 ★state(실시간 카드)★ 를 본다. -->
+        <button onclick="setAiFilter('hunt')" id="ai-f-hunt"
+                class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
       </div>
       <div class="flex items-center gap-2">
         <button onclick="setAiLang('vi')" id="ai-lang-vi" class="text-xs px-2 py-1 rounded bg-fuchsia-700 text-white font-bold">🇻🇳 VI</button>
@@ -2900,7 +2964,277 @@ let menuPcId = null;
 // 보고에 실어 보내면 대시보드를 여는 순간 실행되어 세션이 탈취된다(무클릭 저장형 XSS).
 function esc(v){ return String(v==null?'':v).replace(/[&<>"'`=\/]/g, c => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'}[c])); }
-function escAttr(v){ return esc(v); }   // esc가 따옴표까지 막으므로 속성값에 그대로 안전
+function escAttr(v){ return esc(v); }
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★사고 308-b (2026-08-28 주인님) — 「내가 눌렀는지」가 카드에 안 보인다★★
+//   주인님 원문: "내가 만약에 시작을 눌럿는데 대시보드 카드는 이제 막 준비하고 시작은
+//                하는데 카드를 보면 ★대기★ 라고 떠잇거든. 그래서 내가 실수로
+//                '어? 내가 안눌럿나?' 이러면서 ★또 누르는 경우★ 가 있었거든.
+//                그래서 뭐가 진행이 되면 ★어떤 상태인지 표기★ 되면 좋을거같은데"
+//
+// ★왜 안 보였나 (2026-08-28 실측)★
+//   ① 카드의 상태 글자는 100% 매크로가 보고한 status 파생이다(STATUS_CFG → buildCard).
+//      ★명령 큐를 카드 렌더가 한 번도 안 본다.★
+//   ② 같은 날 낮에 넣은 낙관적 표시는 setCardOnly 안의 showToast 한 줄뿐이었고,
+//      그건 카드가 아니라 ★화면 하단 토스트★ 다 — 다음 토스트가 0.3초 만에 덮고
+//      2.5초면 사라지며, 여러 대에 보내면 마지막 하나만 남는다.
+//   ③ status 가 실제로 바뀌기까지 수십 초~3분 걸린다. start 는 매크로가
+//      _ensure_char_select_screen(timeout 60 · hard_cap 90) + 슬롯 진입을 다 지나야
+//      report_status("hunting") 을 부르고, 보고 하트비트가 30초, 렌더 디바운스가 700ms 다.
+//      ★그 구간 내내 카드는 정직하게 「대기」다.★ 그게 주인님이 또 누르시는 창이다.
+//
+// ★어디에 두나 — ★state 바깥★★
+//   WS 가 msg.type==='state' 마다 `state={}` 로 통째로 갈아엎는다(함대 24대 × 30초
+//   하트비트 = 1~2초에 한 번). state 에 얹은 표식은 그 즉시 소멸한다.
+//   키는 ★물리 PC(base)★ 다 — 매크로는 물리 PC 당 한 대뿐이고, set_account 는
+//   카드 pc_id 자체를 바꾸므로(PC-20b→PC-20c) pc_id 키는 미아가 된다.
+//
+// ★★해제 조건 — 유령 표시를 막는 5겹. 이 표가 곧 명세다★★
+//   ┌─ ①효과 관측 : 누를 때 찍어둔 st0/acct0 와 ★달라졌고★ 기대값에 들어오면 즉시 제거
+//   │                (CMD_TRACK.exp = 기대 status · CMD_TRACK.acct = 계정번호 변화)
+//   │                → pendStep() 앞부분. WS state 가 올 때마다 pendSweep 이 돌린다.
+//   ├─ ②ack       : 서버 cmd_history 의 acked → ⏳ 를 📨 로 ★올린다.★
+//   │                ★ack 은 '받았다' 이지 '끝났다' 가 아니다★ 이므로 기대값이 있는
+//   │                명령은 여기서 안 지운다. 기대값이 없는 명령만 4초 뒤 제거.
+//   │                → pendFromHistory() (WS cmd_history / loadCmdHistory 공통 싱크)
+//   ├─ ③서버 종결 : cmd_history 의 expired/cancelled → ⛔ 로 바꿔 ★남긴다★
+//   │                (조용히 지우면 "됐나?" 가 다시 시작된다)
+//   ├─ ④시간 초과 : 명령별 ttl(기본 90초 · start 3분 · 계정전환 7분) 넘으면 ⚠ 로 바꾸고
+//   │                5분 뒤 자동 제거. 절대 상한은 서버 큐 만료 900초(COMMAND_MAX_AGE_SEC).
+//   └─ ⑤사람      : ⚠/⛔ 막대를 클릭하면 지운다(pendDismiss). 진행 중인 것은 안 지운다.
+//   그리고 새로고침·서버 재시작(checkServerBoot → location.reload)이면 이 맵은
+//   메모리라 통째로 사라진다. ★사라져도 카드는 그대로 그려진다★ —
+//   pendBar/pendChip 이 빈 문자열을 돌려줄 뿐이다(카드 구조를 안 건드린다).
+// ═══════════════════════════════════════════════════════════════════════════
+const PEND_TTL_DEFAULT = 90000;    // 기대 신호가 없는 명령의 기본 상한
+const PEND_WARN_KEEP   = 300000;   // ⚠/⛔ 를 화면에 남겨두는 시간(그 뒤 자동 제거)
+const PEND_HARD_MAX    = 900000;   // 서버 큐 만료(COMMAND_MAX_AGE_SEC=900)를 넘겨 우기지 않는다
+// exp  = 이 status 가 되면 '진짜 시작됐다' (매크로 report_status 실측 기준)
+// acct = status 가 아니라 ★계정번호 변화★ 로만 확인되는 명령(set_account 는 status 를 안 바꾼다)
+// ttl  = 이 시간을 넘기면 ⚠. start 3분은 _ensure_char_select_screen(60+90초) 실측에서 나왔다.
+const CMD_TRACK = {
+  start:           {t:'▶ 사냥 시작',      ttl:180000, exp:['hunting','moving','selling','subquest','dungeon','nightmare','awakening','corridor','abyss']},
+  stop:            {t:'■ 정지',           ttl: 90000, exp:['idle','paused']},
+  exit:            {t:'✕ 매크로 종료',    ttl:120000, exp:['offline']},
+  restart:         {t:'♻ 매크로 재시작',  ttl:180000, exp:['offline']},
+  go_home:         {t:'⌂ 귀환',           ttl:120000, exp:['moving','idle']},
+  sell:            {t:'💰 판매',          ttl:180000, exp:['selling']},
+  sell_all:        {t:'💰 전체 판매',     ttl:180000, exp:['selling']},
+  prepare:         {t:'🧰 준비',          ttl:180000, exp:['selling','moving']},
+  settle:          {t:'🧾 정산',          ttl:180000, exp:['selling','moving']},
+  collect_info:    {t:'📋 정보수집',      ttl:180000, exp:['collecting']},
+  switch_char:     {t:'🔀 캐릭 전환',     ttl:180000, exp:['switching']},
+  daily_dungeon:   {t:'🏰 일일던전',      ttl:180000, exp:['dungeon']},
+  kibel:           {t:'🏰 키벨',          ttl:180000, exp:['dungeon']},
+  nightmare:       {t:'😈 악몽',          ttl:180000, exp:['nightmare','nightmare_wait']},
+  awakening:       {t:'⚔ 각성전',         ttl:180000, exp:['awakening','awakening_wait']},
+  corridor:        {t:'🌀 회랑',          ttl:180000, exp:['corridor']},
+  abyss:           {t:'🌌 어비스',        ttl:180000, exp:['abyss']},
+  acct_tour:       {t:'🔁 전 계정 순회',  ttl:300000, exp:['collecting','switching']},
+  set_account:     {t:'🪪 카드 계정 변경', ttl:300000, acct:true},
+  switch_launcher: {t:'🔄 계정 전환(본컴+원격컴)', ttl:420000, acct:true},
+  switch_account:  {t:'🔄 계정 전환(원격컴)',      ttl:300000, acct:true},
+  find_host:       {t:'🔎 본컴 찾기',     ttl:180000},
+  chrome_cdp:      {t:'🌐 크롬 재발사',   ttl:180000},
+  chrome_view:     {t:'🖥 화면 보기',     ttl: 60000},
+  kill_game:       {t:'⛔ 게임 강제종료', ttl:180000},
+  plrow_shot:      {t:'📸 계정줄 수집',   ttl:120000},
+  reset_progress:  {t:'↺ 진행도 초기화',  ttl: 60000},
+};
+// ★칩을 안 띄우는 명령★ — 라이브 화면·로그 요청처럼 사람이 결과를 즉시 눈으로 보는 것들.
+//   여기에까지 칩을 띄우면 라이브를 켤 때마다 카드가 깜빡여 ★진짜 신호를 가린다.★
+const CMD_SILENT = ['live_on','live_off','get_logs','request_logs','set_slot_filter',
+                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor'];
+
+let pendingCmds = {};   // base(물리 PC) → 진행 표시 1건. 같은 PC 에 새 명령이 오면 ★덮어쓴다★
+                        //   (누적하면 영영 안 지워진다 — 그 PC 의 매크로는 어차피 한 대뿐이다)
+let _pendDupMemo = {cmd:'', at:0, yes:false};   // 일괄 전송(Promise.all) 때 confirm 을 1회로
+
+// ★빠른 재렌더★ — 기존 scheduleRender 는 700ms 디바운스(WS 폭주용)라 버튼을 누른
+//   사람에게는 늦다. 사람 클릭 경로만 80ms 로 따로 판다(둘이 겹쳐도 렌더가 두 번일 뿐 무해).
+let _renderTimerFast=null;
+function scheduleRenderNow(){ if(_renderTimerFast) return;
+  _renderTimerFast=setTimeout(()=>{_renderTimerFast=null; try{renderCards();}catch(e){}},80); }
+
+function pendSecs(e){ return Math.max(0, Math.round((Date.now()-e.at)/1000)); }
+// 그 명령을 실제로 받은 ★카드★ 의 status. liveCardOf 는 온라인 카드만 돌려주므로
+// exit/restart 처럼 offline 을 기대하는 명령에는 못 쓴다.
+function pendStatusOf(e){ const p = state[e.pcId]; return p ? (p.status||'offline') : 'offline'; }
+
+// ★★적대검증 치명2 — 일괄 전송 중에는 「또 누르기」를 묻지 않는다★★
+//   키가 ★물리 PC(base)★ 인데 bulkCmd/selCmd/rotCmd 는 ★카드★ 단위로 돈다.
+//   다계정 PC 는 카드가 2~5장이고, 뒷카드(other_account)는 사고 307 리다이렉트로
+//   전부 같은 live 카드로 접힌다 → 두 번째 카드부터 pendingCmds[base] 가 이미 있어
+//   confirm 이 뜬다. ★주인님은 한 번 눌렀는데 「0초 전에 이미 보냈습니다」★
+//   그리고 「아니오」면 나머지가 조용히 드롭되는데 토스트는 「전체 N대」라고 말한다(§A2).
+//   → 사람이 일괄을 ★의도적으로★ 누른 것이므로 그 안에서는 되묻지 않는다.
+//     (일괄 자체의 확인창은 selCmd/rotCmd 가 이미 따로 갖고 있다)
+let _bulkDepth = 0;
+async function withBulk(fn){
+  _bulkDepth++;
+  try { return await fn(); } finally { _bulkDepth--; }
+}
+
+function pendRegister(pcId, command, args){
+  if (CMD_SILENT.indexOf(command) >= 0) return null;
+  const base = baseId(pcId);
+  const spec = CMD_TRACK[command] || {};
+  const st0  = ((state[pcId]||{}).status) || '';
+  let exp = spec.exp || null;
+  // ★이미 그 상태면 status 로는 못 가른다★ — '바뀌었을 때만' 인정해야 하는데
+  //   처음부터 기대값이면 조건이 항상 참이라 ★누르자마자 거짓 성공★ 이 된다.
+  //   → 기대값을 버리고 ack 해제로 정직하게 강등한다(그러면 ②·④ 가 받는다).
+  if (exp && exp.indexOf(st0) >= 0) exp = null;
+  // ★★적대검증 높음3 — 계정번호 변화로 못 재는 판이 둘 있다★★
+  //   (a) ★같은 계정으로 강제 재정렬★ — 주인님이 2026-08-23 에 지시하신 기능이다
+  //       ("현재 계정 버튼도 누를 수 있게 둔다 … 어긋난 짝을 맞춥니다").
+  //       계정1 카드에서 [계정 1] 을 누르면 전환이 성공해도 번호는 1 그대로라
+  //       `cur !== acct0` 가 영영 거짓 → ttl 420초 뒤 ★성공한 전환에 ⚠ 「응답 없음」★.
+  //       그러면 주인님이 또 누르신다 = 308-b 가 막으려던 행동을 새로 만든다.
+  //   (b) 온라인 카드가 없으면 currentAcctNum 이 0 을 준다 → 조건이 영영 거짓.
+  //   → 둘 다 ★계정 기대값을 버리고★ ack+ttl 로 정직하게 강등한다.
+  let _wantAcct = !!spec.acct;
+  let _a0 = _wantAcct ? currentAcctNum(base) : 0;
+  if (_wantAcct) {
+    let _tgt = 0;
+    try {
+      const _v = args && (args.acct || args.account || args.acct_no || args.n);
+      _tgt = parseInt(_v, 10) || 0;
+    } catch (err) { _tgt = 0; }
+    if (!_a0 || (_tgt && _tgt === _a0)) { _wantAcct = false; _a0 = 0; }
+  }
+  const e = {base:base, pcId:pcId, cmd:command, label:(spec.t||command),
+             at:Date.now(), ttl:(spec.ttl||PEND_TTL_DEFAULT),
+             exp:exp, acct:_wantAcct, acct0:_a0,
+             st0:st0, id:null, idResolved:false, phase:'sent', icon:'⏳', note:'', clearAt:0};
+  pendingCmds[base] = e;
+  return e;
+}
+
+// 한 건을 한 칸 전진시킨다. ★화면에 보이는 변화가 있으면 true★ (호출부가 재렌더한다)
+function pendStep(e){
+  if (!e) return false;
+  const age = Date.now() - e.at;
+  if (e.phase === 'warn') {                                    // ⑤ ⚠/⛔ 는 잠깐 남기고 치운다
+    if (age > e.ttl + PEND_WARN_KEEP || age > PEND_HARD_MAX) { delete pendingCmds[e.base]; return true; }
+    return false;
+  }
+  if (e.acct) {                                                // ①-a 계정번호가 실제로 바뀜
+    const cur = currentAcctNum(e.base);
+    if (cur && e.acct0 && cur !== e.acct0) { delete pendingCmds[e.base]; return true; }
+  }
+  if (e.exp) {                                                 // ①-b status 가 실제로 바뀜
+    // ★★적대검증 높음4 — 명령과 ★무관한★ 상태 전이가 표시를 지웠다★★
+    //   start 의 기대값이 온라인 상태 9종이라, 매크로가 자기 사정으로 selling 이 되면
+    //   (사고 234 자동재개 · 판매 루틴 · 순환) 우리 명령을 안 받았는데도 즉시 지워졌다.
+    //   = 「눌렀나?」 창이 그대로 복구된다.
+    //   ★ack 을 받았으면 그건 우리 명령이 확실하다★ → 바로 인정.
+    //   ★ack 을 못 받았어도 5초는 기다린다★ — 누르자마자 뜬 낡은 상태로 지우지 않게.
+    //   ※정직하게: ack 이 안 오는 판에서는 여전히 무관한 전이로 지워질 수 있다.
+    //     그건 ★예전 상태(표시 없음)로 돌아가는 것★ 이라 새 소음은 아니다.
+    //     반대로 ack 을 강제하면 ack 을 놓칠 때마다 ⚠ 가 떠서 더 나쁘다 — 그래서 안 했다.
+    const st = pendStatusOf(e);
+    if (st !== e.st0 && e.exp.indexOf(st) >= 0
+        && (e.phase === 'ack' || age >= 5000)) {
+      delete pendingCmds[e.base]; return true;
+    }
+  }
+  if (e.phase === 'ack' && !e.exp && !e.acct) {                 // ② 기대 신호가 없는 명령만 ack 로 종료
+    if (!e.clearAt) e.clearAt = Date.now() + 4000;              //    사람이 읽을 4초는 남긴다
+    if (Date.now() >= e.clearAt) { delete pendingCmds[e.base]; return true; }
+    return false;
+  }
+  if (age > e.ttl) {                                           // ④ 시간 초과 — 조용히 안 지운다
+    e.phase = 'warn'; e.icon = '⚠';
+    e.note = '응답 없음 — 맨 아래 「최근 명령 내역」 확인';
+    return true;
+  }
+  return false;
+}
+function pendSweep(){
+  let changed = false;
+  Object.keys(pendingCmds).forEach(k => { if (pendStep(pendingCmds[k])) changed = true; });
+  return changed;
+}
+// ②③ 서버 명령 이력에서 ack/만료/취소를 읽어 반영한다. cmd_history 는 WS 로 실시간으로 온다.
+function pendFromHistory(cmds){
+  let changed = false;
+  (cmds||[]).forEach(c => {
+    const b = baseId(String(c.pc_id||''));
+    const e = pendingCmds[b];
+    if (!e || e.phase === 'warn') return;
+    // id 로 맞춘다. 서버 응답 json 을 못 읽었을 때만 (pc_id + command) 로 폴백한다.
+    // ★idResolved 를 기다린다★ — 서버는 명령을 넣자마자 cmd_history 를 브로드캐스트하는데
+    //   (main.py /command 의 _push_cmd_history), 그때 우리는 아직 fetch 응답을 못 읽어
+    //   id 가 없다. 그 틈에 폴백을 쓰면 ★같은 PC·같은 명령의 옛 acked 줄★ 을 지금 것으로
+    //   오인해 표시가 먼저 지워진다. 폴백은 'id 를 끝내 못 받았다' 가 확정된 뒤에만 쓴다.
+    const same = (e.id != null && c.id === e.id) ||
+                 (e.idResolved && e.id == null && String(c.command) === e.cmd && String(c.pc_id) === e.pcId);
+    if (!same) return;
+    if (c.status === 'acked') {
+      if (e.phase !== 'ack') { e.phase = 'ack'; e.icon = '📨'; changed = true; }
+    } else if (c.status === 'expired' || c.status === 'cancelled') {
+      e.phase = 'warn'; e.icon = '⛔';
+      e.note = (c.status === 'cancelled') ? '명령이 취소됐습니다'
+                                          : '명령이 만료됐습니다 — 매크로가 안 가져갔습니다';
+      changed = true;
+    }
+  });
+  return changed;
+}
+function pendBarText(e){
+  const s = pendSecs(e);
+  const t = (s < 60) ? (s + '초째') : (Math.floor(s/60) + '분 ' + (s%60) + '초째');
+  const tail = e.note ? e.note
+             : (e.phase === 'ack' ? '매크로가 받았습니다 — 실행을 기다립니다'
+                                  : '매크로 응답을 기다리는 중');
+  return e.icon + ' ' + e.label + ' — ' + t + ' · ' + tail;
+}
+function pendChipText(e){ return e.icon + ' ' + pendSecs(e) + '초'; }
+// ★상태 글자 바로 옆★ 칩 (rotChip 과 같은 슬롯) — 「대기」 옆에 붙어 눈이 같이 본다
+function pendChip(pc){
+  const e = pendingCmds[baseId(pc.pc_id||'')];
+  if (!e) return '';
+  const c = e.phase === 'warn' ? 'bg-red-800/85 text-red-100 border-red-500'
+          : (e.phase === 'ack' ? 'bg-sky-800/85 text-sky-100 border-sky-400 pulse'
+                               : 'bg-amber-600/90 text-amber-50 border-amber-300 pulse');
+  return `<span id="pcmd-chip-${escAttr(e.base)}" class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${c}"
+                title="${escAttr(e.label)}">${esc(pendChipText(e))}</span>`;
+}
+// ★상태 줄 바로 밑 가로 막대★ — 칩은 좁아서 명령 이름이 안 들어간다.
+//   주인님 요구("명령 이름 + 보낸 지 몇 초")를 실제로 채우는 건 이쪽이다.
+function pendBar(pc){
+  const e = pendingCmds[baseId(pc.pc_id||'')];
+  if (!e) return '';
+  const c = e.phase === 'warn' ? 'bg-red-900/55 border-red-600 text-red-200'
+          : (e.phase === 'ack' ? 'bg-sky-900/60 border-sky-500 text-sky-100'
+                               : 'bg-amber-900/60 border-amber-500 text-amber-100 pulse');
+  const tip = e.phase === 'warn'
+    ? '클릭하면 이 표시를 지웁니다'
+    : '이 표시는 ①매크로 상태가 실제로 바뀌거나 ②명령이 만료·취소되거나 ③시간이 지나면 자동으로 사라집니다';
+  return `<div id="pcmd-bar-${escAttr(e.base)}" data-base="${escAttr(e.base)}"
+      onclick="event.stopPropagation();pendDismiss(this.dataset.base)" title="${escAttr(tip)}"
+      class="mb-2 px-2 py-1 rounded border text-xs font-bold leading-tight truncate ${c}">${esc(pendBarText(e))}</div>`;
+}
+// ⑤ 사람이 치운다 — ★진행 중인 것은 안 지운다★(그건 ①~④ 가 할 일이다)
+function pendDismiss(base){
+  const e = pendingCmds[base];
+  if (e && e.phase === 'warn') { delete pendingCmds[base]; scheduleRenderNow(); }
+}
+// 1초마다: 상태를 한 칸 전진시키고, 변화가 없으면 ★경과 초만 제자리에서 갈아 끼운다.★
+//   (초당 카드 전체 innerHTML 재구축은 낭비다. textContent 라 XSS 여지도 없다)
+function pendTick(){
+  const keys = Object.keys(pendingCmds);
+  if (!keys.length) return;
+  if (pendSweep()) { scheduleRenderNow(); return; }
+  keys.forEach(k => {
+    const e = pendingCmds[k]; if (!e) return;
+    const bar  = document.getElementById('pcmd-bar-'  + e.base);  if (bar)  bar.textContent  = pendBarText(e);
+    const chip = document.getElementById('pcmd-chip-' + e.base);  if (chip) chip.textContent = pendChipText(e);
+  });
+}
+setInterval(pendTick, 1000);
+   // esc가 따옴표까지 막으므로 속성값에 그대로 안전
 
 const STATUS_CFG = {
   hunting:      {label:'사냥 중',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
@@ -2919,6 +3253,10 @@ const STATUS_CFG = {
   awakening_wait:{label:'각성전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   nightmare_wait:{label:'악몽전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   corridor:     {label:'회랑',    bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
+  // ★매크로는 이 상태를 보내는데 대시보드가 몰랐다 (2026-08-28 하네스가 잡음)★
+  //   lc/sealed_dungeon.py:49 report_status("sealed_dungeon") — 여기 없으면
+  //   STATUS_CFG[st]||STATUS_CFG.offline 로 떨어져 ★봉인던전 도는 PC 가 빨간 오프라인★ 으로 보인다.
+  sealed_dungeon:{label:'봉인던전', bg:'bg-violet-500/20', border:'border-violet-700', badge:'bg-violet-500', text:'text-violet-400', online:true},
   collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
   paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
@@ -3603,10 +3941,11 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>${rotChip(pc)}
+          <span class="truncate">${cfg.label}</span>${rotChip(pc)}${pendChip(pc)}
         </span>
       </div>
     </div>
+    ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
       <div class="whitespace-nowrap"><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
@@ -3815,30 +4154,78 @@ function setupDrag(gridId, orderKey) {
 // 단일 계정 PC는 buildCard 그대로 = 함대 17대 화면 불변.
 let stackFront = {};   // base → 사용자가 클릭으로 앞세운 pc_id
 let stackLastOn = {};  // base → 마지막으로 관측된 온라인 pc_id (전환 감지 → 고정 자동 해제)
-function stackShow(base, pcid){ stackFront[base] = pcid; renderCards(); }
+// ★★탭으로 계정을 바꾸면 선택(✔)도 같이 옮긴다 (2026-08-28 적대검증 [높2])★★
+//   카드는 top 한 장만 그려진다. 계정2 카드를 고른 채 탭「1」로 옮기면 selectedPcs
+//   에는 PC-20b 가 남는데 화면엔 ✔ 가 없다 → 하단 바는 "1개 선택" 인데 어디가 골라졌는지
+//   안 보이고, 그 상태로 명령을 누르면 ★안 보이는 카드로 나간다.★
+//   탭이 생겨 계정 전환이 쉬워진 만큼 훨씬 자주 난다.
+function stackShow(base, pcid){
+  [...selectedPcs].forEach(id => {
+    if (baseId(id) === base && id !== pcid) { selectedPcs.delete(id); selectedPcs.add(pcid); }
+  });
+  stackFront[base] = pcid;
+  renderCards();
+  try { updateSelBar(); } catch(e) {}
+}
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★계정 탭 (2026-08-28 주인님 지시 — 직접 그린 그림 그대로)★★
+//   ┌─┬─┐
+//   │1│2│      ← 카드 ★위★ 에 번호 탭. 지금 보는 계정이 진하다.
+//   ├─┴──────┐
+//   │  카드   │
+//   └────────┘
+//   ★계정이 1개여도 「1」 탭을 그린다★ — 주인님: "한개만있어도 1 표시하게끔하면
+//   다 카드 높낮이도 같을거고". 탭 줄이 항상 32px 이고, .acct-stack 이 grid 라
+//   안쪽 카드까지 stretch 가 전달된다(적대검증 [높1] 수리).
+//
+//   ★예전 방식(.stack-layer)을 왜 버렸나★
+//     · 누를 자리가 높이 16px 짜리 가로 띠였다 — 주인님: "버튼 누르기도 좇같고"
+//     · padding-top 이 18px×(계정수-1) 이라 ★계정 수마다 카드 높이가 달랐다★
+//
+//   ★wrapper id 는 그대로 stack-<base> 다 (2026-08-18 사고)★ — 없으면 드래그가
+//   wrapper 가 아니라 안쪽 앞 카드를 집어 "앞장만 넘어가고 원래대로 돌아오는" 버그가
+//   난다. gridKeyOf() 가 stack- / card- 둘 다 읽으므로 ★한 장짜리도 wrapper 로 감싼다★
+//   (그래야 탭 줄이 붙고 높이가 같아진다).
+// ═══════════════════════════════════════════════════════════════════════════
 function buildStack(s){
-  if (s.n <= 1) return buildCard(s.top);
-  const LH = 18;                       // 뒤 카드가 엿보이는 층 높이(px)
-  const ghosts = s.list.filter(p => p !== s.top);
-  let layers = '';
-  for (let k = s.n - 1; k >= 1; k--) { // k = 깊이(클수록 더 뒤)
-    const g = ghosts[k-1];             // 실카드 없으면(자격증명만 선언) 빈 층
-    const num = g ? acctNumOf(g.pc_id) : '';
+  const maps = groupAcctMaps(s.base);
+  // ★★번호가 겹치거나 비어도 ★보고 있는 카드★ 는 반드시 탭을 갖는다 (적대검증 치1)★★
+  //   초판은 byNum[acctNumOf(...)] = p 로 ★덮어썼다.★ 두 카드가 같은 번호를 내면
+  //   (acctNumOf 는 접미사 우선, currentAcctNum 은 acct_num 우선 — 우선순위가 다르다)
+  //   하나가 탭에서 사라지고, 그게 하필 s.top 이면 활성 탭이 0개가 된다.
+  //   그 상태에서 다른 탭을 누르면 stackFront 가 고정돼 ★영영 못 돌아온다.★
+  //   → ①먼저 온 카드가 이긴다 ②top 은 자기 번호 자리를 강제로 차지한다
+  //     ③탭 개수는 실제 카드 번호의 최대값까지 넓힌다(띄엄띄엄 1·4 도 담기게)
+  const byNum = {};
+  s.list.forEach(p => { const k = acctNumOf(p.pc_id); if (!byNum[k]) byNum[k] = p; });
+  const topNum = acctNumOf(s.top.pc_id);
+  byNum[topNum] = s.top;
+  const hiNum = Math.min(MAX_ACCT,
+      Math.max(1, s.n, topNum, ...s.list.map(p => acctNumOf(p.pc_id))));
+  let tabs = '';
+  for (let k = 1; k <= hiNum; k++) {
+    const g = byNum[k];
+    const cur = !!g && g.pc_id === s.top.pc_id;
     const on = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).online) : false;
     // 접미사 pc_id 대신 아이디(전 계정 지도)로 — "20b" 노출 금지(v1.1.424 사용자)
-    const gid = g ? (g.acct_id || groupAcctMaps(s.base).ids[num] || '') : '';
-    const lab = g ? `계정 ${num}${gid?` · ${esc(gid)}`:''}${on?'':' · offline'}` : '계정 (미접속)';
-    layers += `<div class="stack-layer" style="top:${LH*(s.n-1-k)}px;left:${5*k}px;right:${5*k}px;bottom:8px;z-index:${5-k}"
-      ${g?`onclick="stackShow('${s.base}','${g.pc_id}')" title="클릭하면 이 계정 카드를 앞으로"`:''}>
-      <div class="px-3 flex items-center" style="height:${LH-2}px;font-size:10px">${lab}</div></div>`;
+    const gid = (g && g.acct_id) || maps.ids[k] || '';
+    const plat = (maps.plats||{})[k] || '';
+    const idTxt = (String(plat).indexOf('구글') >= 0) ? '구글' : gid;
+    const stTxt = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).label || '') : '';
+    const rot = g ? (g._rot || '') : '';
+    const tip = g
+      ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${rot?' · 🔁 순환중':''}`
+        + (cur ? ' (지금 보는 계정)' : ' — 누르면 이 계정 카드를 봅니다')
+      : `계정 ${k}${idTxt?' · '+idTxt:''} — 아직 카드가 없습니다(자격증명만 등록됨)`;
+    const cls = 'acct-tab' + (cur ? ' acct-tab-on' : '') + (g ? '' : ' acct-tab-none');
+    const dot = on ? `<i class="tdot${rot?' tdot-rot':''}"></i>` : '';
+    const click = (g && !cur)
+      ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
+    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}">${k}${dot}</button>`;
   }
-  // ★wrapper 에 id 를 준다 (2026-08-18)★ — 없으면 드래그가 wrapper 가 아니라
-  //   ★안쪽 앞 카드★ 를 집어 옮긴다(앞장만 움직이는 것처럼 보이고, 저장 때
-  //   grid.children 의 id 가 빈 값이라 아무것도 안 남아 원래대로 돌아온다).
-  //   사용자 실측: "겹친거 통째로넘어가는것처럼안보이고 제일앞에거만 넘아가는것처럼
-  //   보이면서 다시 원래대로 돌아옴"
-  return `<div id="stack-${s.base}" class="relative" style="padding-top:${LH*(s.n-1)}px">${layers}
-    <div class="relative" style="z-index:6">${buildCard(s.top)}</div></div>`;
+  return `<div id="stack-${s.base}" class="acct-stack">
+    <div class="acct-tabs">${tabs}</div>
+    <div class="acct-body relative">${buildCard(s.top)}</div></div>`;
 }
 
 function renderCards() {
@@ -3888,6 +4275,17 @@ function renderCards() {
   setupDrag('grid-offline', DRAG_ORDER_KEY_OFF);
   try{ dkApplyBleed(); }catch(e){}   // 커맨드 덱: 이상 카드만 윗면 빛샘 (실패해도 화면은 멀쩡)
   try{ dkHero(); }catch(e){}         // 커맨드 덱: 히어로 요약 (기존 전광판은 그대로)
+  // ★★사냥 탭 실시간 갱신 (2026-08-28 주인님 지시 "실시간으로")★★
+  //   사냥 탭은 charTableData 가 아니라 ★state★ 를 본다. state 가 바뀌면 renderCards 가
+  //   불리므로 여기에 붙여야 '실시간' 이 된다 — loadCharTable 쪽 훅(정보수집 갱신)만으로는
+  //   ★사냥 상태가 바뀌어도 탭이 안 움직인다.★
+  //   ★모달이 닫혀 있으면 아무 일도 안 한다★ (던전 탭 훅과 같은 규약)
+  //   try 로 감싼 이유: aiFilter 는 let 이라 이 함수가 그 선언보다 먼저 불리면 TDZ 에러가
+  //   난다. 화면 전체를 죽이느니 이 탭만 조용히 건너뛴다.
+  try {
+    const _am = document.getElementById('ai-modal');
+    if (_am && !_am.classList.contains('hidden') && aiFilter === 'hunt') renderAiHunt();
+  } catch(e) {}
 }
 
 function fmtKinaKor(n) {
@@ -4207,6 +4605,27 @@ async function sendCmd(pc_id, command, args={}) {
       return false;
     }
   }
+  // ★★사고 308-b — 「또 누르기」 는 막지 말고 ★묻는다★★★
+  //   주인님: "내가 실수로 '어? 내가 안눌럿나?' 이러면서 또 누르는 경우가 있었거든"
+  //   ★완전 차단은 안 한다★ — 정말 다시 보내야 할 때가 있다(매크로가 씹은 경우).
+  //   ★일괄 전송 대응★ bulkCmd/selCmd/rotCmd 는 Promise.all 로 24대에 동시에 부른다.
+  //   confirm 이 24번 뜨면 그게 더 나쁘므로 ★3초 안의 같은 명령은 첫 답을 재사용★ 한다
+  //   (전부 같은 tick 에서 fetch 앞까지 동기로 달리므로 첫 답이 나머지에 그대로 적용된다).
+  const _pk308 = baseId(pc_id);
+  const _prev308 = pendingCmds[_pk308];
+  //   ★_bulkDepth>0 = 사람이 일괄을 의도적으로 눌렀다★ — 카드마다 되묻지 않는다(치명2)
+  if (_bulkDepth === 0 && _prev308 && _prev308.cmd === command && _prev308.phase !== 'warn') {
+    if (_pendDupMemo.cmd === command && Date.now() - _pendDupMemo.at < 3000) {
+      if (!_pendDupMemo.yes) return false;
+    } else {
+      const _yes308 = confirm(`⚠️ ${_pk308} 에 「${_prev308.label}」 을 ★${pendSecs(_prev308)}초 전★ 에 이미 보냈습니다.\n\n`
+        + `아직 매크로 응답을 기다리는 중입니다.\n`
+        + `(▶시작은 캐릭 선택 화면 진입까지 있어서 ★사냥 중으로 바뀌는 데 최대 3분★ 걸립니다)\n\n`
+        + `그래도 한 번 더 보낼까요?`);
+      _pendDupMemo = {cmd: command, at: Date.now(), yes: _yes308};
+      if (!_yes308) return false;
+    }
+  }
   // ★★계정 자동순환 무장 신호 (2026-08-20)★★
   //   "시작을 눌러줫을때만 그작업을 하면되고" — 방아쇠는 ★사람이 누른 이 버튼★ 이다.
   //   ★왜 서버가 command=='start' 만 보면 안 되나★ /command 로 start 를 쏘는 건 이
@@ -4215,9 +4634,35 @@ async function sendCmd(pc_id, command, args={}) {
   //   up_and_start.py 한 번이면 함대 전체가 무장된다(CLAUDE.md A7 우회).
   //   → ★대시보드에서 나가는 start 에만★ 이 표시를 싣는다. 여기가 단일 초크포인트다.
   if (command === 'start') args = Object.assign({rotate: true}, args);
-  const res=await fetch(`/command/${pc_id}`,{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({command,args})});
+  // ★★사고 308-b — 누른 ★즉시★ 카드에 띄운다 (낙관적 표시)★★
+  //   ★보내기 전★ 에 걸어야 체감이 0.1초가 된다. 서버가 200 을 안 주면 바로 거둬낸다(아래).
+  //   ★무엇으로 해제되는지는 파일 위쪽 pendingCmds 주석의 5겹 표에 있다★
+  //   (①효과 관측 ②ack ③서버 만료·취소 ④ttl ⑤사람 클릭).
+  const _pend308 = pendRegister(pc_id, command, args);
+  if (_pend308) scheduleRenderNow();
+  // ★★적대검증 치명1 — fetch 는 ★던진다★ (서버 다운·Railway 재배포·와이파이 끊김)★★
+  //   예전엔 try 가 없어서 예외가 그대로 위로 튀었고, 표시는 ★fetch 앞★ 에 이미
+  //   등록돼 있어 3분 ⏳ + 5분 ⚠ = ★8분짜리 유령★ 이 남았다.
+  //   명령은 브라우저 밖으로 한 번도 안 나갔는데 카드는 「수행 중」을 보여준다 —
+  //   ★주인님이 「어? 눌렀네」 하고 안 누르시고, 명령은 존재하지 않는다.★
+  //   게다가 그 3분 동안 「또 누르기」 가드가 재시도까지 막았고,
+  //   안내가 가리키는 「최근 명령 내역」에는 그 줄이 아예 없었다.
+  //   부수 피해: bulkCmd/selCmd 의 Promise.all 이 그 예외로 reject 돼
+  //   토스트·loadCmdHistory·clearSelection 이 통째로 스킵됐다.
+  //   → 여기서 잡고 ★표시를 즉시 거두고 사람에게 말한다.★
+  let res;
+  try {
+    res = await fetch(`/command/${pc_id}`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({command,args})});
+  } catch (e308) {
+    if (_pend308 && pendingCmds[_pend308.base] === _pend308) {
+      delete pendingCmds[_pend308.base]; scheduleRenderNow();
+    }
+    showToast(`⛔ ${pc_id} 「${command}」 전송 실패 — 서버에 못 닿았습니다`
+              + ` (${(e308 && e308.message) ? e308.message : e308})`);
+    return false;
+  }
   // ★무장이 거부되면 반드시 말한다★ — start 자체는 200 이라 화면엔 아무 표시가 없었다.
   //   순환이 안 켜진 걸 사람이 알 방법이 카드의 🔁 배지 '없음' 뿐이면 아무도 못 알아챈다.
   if (command === 'start') {
@@ -4225,6 +4670,21 @@ async function sendCmd(pc_id, command, args={}) {
       const j = await res.clone().json();
       if (j && j.armed === false) showToast(`⚠️ ${pc_id} 사냥은 시작 — 계정 순환은 무장 안 됨 (${j.why||''})`);
     } catch(e) {}
+  }
+  // ★사고 308-b — 서버가 주는 cmd_id 를 회수한다★
+  //   /command 응답은 예전부터 {ok, id, ws, armed} 를 줬는데 여기서 ★버리고 있었다★.
+  //   id 가 있어야 cmd_history 의 ack/만료/취소를 ★그 명령 한 건★ 에 맞출 수 있다.
+  //   (res.clone() 은 원본 body 를 안 먹으므로 위 armed 검사와 같이 써도 안전하다)
+  if (_pend308) {
+    if (res.ok) {
+      let _j308 = null;
+      try { _j308 = await res.clone().json(); } catch(e) {}
+      _pend308.id = (_j308 && typeof _j308.id !== 'undefined') ? _j308.id : null;
+      _pend308.idResolved = true;   // 이 뒤에야 (pc_id+command) 폴백 매칭을 허용한다
+    } else if (pendingCmds[_pend308.base] === _pend308) {
+      // ★명령이 안 나갔으면 표시도 즉시 거둔다★ — 유령 표시의 첫 번째 원인이 이것이다.
+      delete pendingCmds[_pend308.base]; scheduleRenderNow();
+    }
   }
   return res.ok;
 }
@@ -4241,7 +4701,7 @@ async function bulkCmd(command, args={}) {
   //   → sendCmd 의 rotate:true 를 그대로 통과시킨다(여기서 덮어쓰지 않는다).
   const ids=Object.keys(state);
   if(!ids.length){showToast('연결된 PC 없음');return;}
-  await Promise.all(ids.map(id=>sendCmd(id,command,args)));
+  await withBulk(() => Promise.all(ids.map(id=>sendCmd(id,command,args))));
   showToast(`✓ ${command} → 전체 ${ids.length}대`);
   loadCmdHistory();
 }
@@ -4276,7 +4736,7 @@ ${names}
 
 진행할까요?`)) return;
   }
-  await Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args)));
+  await withBulk(() => Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args))));
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
@@ -4312,58 +4772,144 @@ const ROT_TASK_LABEL = {daily_dungeon:'일일던전', nightmare:'악몽', awaken
 //   가는지 다 보여주고 확인을 받는다(§A7 정신).
 // ═══════════════════════════════════════════════════════════════════════════
 const AUTO_IDLE_TASKS = ['daily_dungeon', 'corridor', 'nightmare'];
-// 사냥/작업 중이면 손대지 않는다 — 완주 판정과 별개로 '지금 뭘 하고 있나' 를 본다
-const AUTO_IDLE_BUSY = ['hunting','selling','collecting','switching','tasking',
-                        'reconnecting','starting','captcha'];
+// ★지금 뭘 하고 있는 상태★ — 여기 해당하면 자동으로는 손대지 않는다.
+//   ★2026-08-28 정정★ 초판은 hunting/selling/collecting/switching/tasking/
+//   reconnecting/starting/captcha 여덟 개뿐이었다. 그런데 STATUS_CFG 에는
+//   moving(라벨이 '사냥 중'이다) · abyss · subquest · dungeon · nightmare ·
+//   awakening · corridor · dead 도 있고 전부 ★지금 콘텐츠를 도는 중★ 이다.
+//   빠져 있으면 「악몽 도는 중인 PC」 위에 순환을 또 걸어 작업이 겹친다.
+//   (awakening_wait · nightmare_wait 는 서버 ROT_IDLE_SET 과 같이 '쉬는 자리' 로 본다)
+//   ★'tasking'·'starting' 은 STATUS_CFG 에 없는 이름이라 뺐다 (2026-08-28 적대검증)★
+//   있으면 AUTO_IDLE_DOING 이 라벨을 못 찾아 확인창에 ★"지금 tasking 중"★ 이 그대로 뜬다.
+//   (STATUS_CFG 에 실제로 있는 키만 넣는다 — 아래 자기검사가 콘솔로 알려준다)
+const AUTO_IDLE_BUSY = ['hunting','moving','selling','abyss','subquest','dead',
+                        'dungeon','nightmare','awakening','corridor','sealed_dungeon',
+                        'collecting','switching','reconnecting','captcha'];
+// ★사람이 세워둔 것 / 사람이 와야 풀리는 것★ — 자동으로는 안 깨운다. 직접 고르면 예외.
+//   ★awakening_wait · nightmare_wait 는 '노는 중' 이 아니다 (2026-08-28 매크로 소스 실측)★
+//     · awakening_wait = 캐릭이 ★각성전 던전 안★ 에 서서 사람의 Scroll Lock 을 기다린다.
+//       매크로가 daily_dungeon·nightmare 를 ★거부★ 한다(lc/loot.py:260 "세션 파괴").
+//     · nightmare_wait = 악몽 최종보스를 ★사람이 손으로★ 잡아야 한다(lc/nightmare.py:404 알람).
+//   여기 없으면 자동진행이 그 PC 를 골라 거부 알림을 두 번 울리고,
+//   거부 목록에 없는 회랑은 ★진행 중인 각성전을 깬다.★
+const AUTO_IDLE_HELD = ['paused', 'error', 'awakening_wait', 'nightmare_wait'];
+// ★두 목록이 STATUS_CFG 와 어긋나면 확인창에 영어가 샌다★ — 첫 판이 'tasking'·'starting'
+//   이라는 없는 키를 넣어 「지금 tasking 중」 이 뜰 뻔했다(적대검증이 잡음).
+//   목록을 고칠 때 여기서 바로 콘솔로 알려준다.
+try {
+  const _bad = AUTO_IDLE_BUSY.concat(AUTO_IDLE_HELD).filter(k => !STATUS_CFG[k]);
+  if (_bad.length) console.warn('[자동진행] STATUS_CFG 에 없는 상태:', _bad);
+} catch(e) {}
+const AUTO_IDLE_STLABEL = st => (STATUS_CFG[st] || {}).label || st || '오프라인';
+// ★라벨 뒤에 '중' 을 또 붙이지 않는다★ — STATUS_CFG 라벨이 이미 '사냥 중'·'판매 중'
+//   이라 그대로 이으면 「지금 ★사냥 중 중★」 이 된다(첫 판이 실측으로 그랬다).
+const AUTO_IDLE_DOING = st => {
+  const l = AUTO_IDLE_STLABEL(st);
+  return (l.slice(-1) === '중') ? l : (l + ' 중');
+};
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★대상 고르기 — 2026-08-28 주인님 지시로 두 갈래가 됐다★★
+//   "내가 ★특정 pc를 선택하고★ 저버튼을 누르면 그 pc만 자동진행 진행하고
+//    만약에 ★아무것도 체크안하고★ 누르면 그냥 ★사냥 안하고있는애들★ 진행하면되고"
+//
+//   ① 선택 모드 — 고른 카드의 물리 PC 만. ★조건을 안 따진다★(주인님이 직접 지목한
+//      것이므로). 대신 사냥 중·일시정지·이미 무장됨은 ★확인창에 경고로 전부 띄운다.★
+//   ② 무선택 모드 — 함대 전체에서 '지금 사냥/콘텐츠를 안 도는' PC.
+//      ★완주 조건을 뺐다★ — 예전 판은 '오늘 슬롯을 다 끝낸 PC' 만 골랐는데
+//      주인님의 이번 문장은 「사냥 안 하고 있는 애들」 이다. 완주 여부는 확인창에
+//      "완주 3/6" 으로 ★보여주기만★ 한다(조용히 빼지 않는다 — §A2).
+//
+//   ★제외한 PC 는 사유와 함께 돌려준다★ — 조용히 빼면 "왜 얘는 안 갔지" 가 된다.
+// ═══════════════════════════════════════════════════════════════════════════
 function autoIdleTargets(){
+  const selBases = new Set([...selectedPcs].map(id => baseId(id)).filter(Boolean));
+  const picked = selBases.size > 0;
   const byBase = {};
   for (const p of Object.values(state)) {
     const b = baseId(p.pc_id || '');
     if (!b) continue;
     (byBase[b] = byBase[b] || []).push(p);
   }
-  const out = [];
+  const out = [], skip = [];
+  // ★고른 카드가 지금 state 에 없으면 조용히 사라진다 (적대검증 [중5])★
+  //   selectedPcs 는 WS 가 state 를 통째로 갈아엎어도 그대로 남는다. 그래서 사라진
+  //   카드를 고른 상태가 실제로 생기는데, 그때 "대상이 없습니다" 만 뜨고 이유가 없었다.
+  if (picked) {
+    for (const b of selBases) {
+      if (!Object.values(state).some(p => baseId(p.pc_id||'') === b)) {
+        skip.push({base:b, why:'지금 화면에 그 PC 카드가 없습니다 (선택이 낡았습니다)'});
+      }
+    }
+  }
   for (const b of Object.keys(byBase).sort()) {
     const cards = byBase[b];
-    if (b.toUpperCase() === 'PC-TEST' || b.toUpperCase() === 'PC-DEMO') continue;
-    // ★이미 순환이 무장돼 있으면 또 걸지 않는다★ — 두 번 걸면 작업이 겹친다
-    if (cards.some(c => c._rot)) continue;
-    if (cards.some(c => AUTO_IDLE_BUSY.includes(c.status))) continue;
+    if (b.toUpperCase() === 'PC-TEST' || b.toUpperCase() === 'PC-DEMO') {
+      if (picked && selBases.has(b)) skip.push({base:b, why:'검증용 가짜 PC — 순환 대상이 아님'});
+      continue;
+    }
+    if (picked && !selBases.has(b)) continue;             // 고른 것만
     const live = liveCardOf(b);
-    // 판정 카드 = 온라인 카드, 없으면 ★가장 최근에 살아 있던★ 카드
+    // 판정 카드 = 온라인 카드, 없으면 ★가장 최근에 살아 있던★ 카드.
+    //   other_account 카드는 뒤로 민다 — sendCmd 가 그 카드를 거부한다.
     const cur = live || cards.slice().sort((x,y) =>
+        ((x.status === 'other_account') - (y.status === 'other_account')) ||
         String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
     if (!cur) continue;
     const dp = cur.daily_progress || [];
-    if (!dp.length) continue;                     // 진행 정보가 없으면 판정 불가 → 제외
-    if (dp.filter(dpDone).length < dp.length) continue;   // ★완주 안 함 = 사냥이 남았다★
+    const done = dp.filter(dpDone).length;
+    const busySt = (cards.find(c => AUTO_IDLE_BUSY.includes(c.status)) || {}).status || '';
+    const heldSt = (cards.find(c => AUTO_IDLE_HELD.includes(c.status)) || {}).status || '';
+    const armed  = (cards.find(c => c._rot) || {})._rot || '';
+    if (!picked) {
+      // ★이미 순환이 무장돼 있으면 또 걸지 않는다★ — 두 번 걸면 작업이 겹친다
+      if (armed)  { skip.push({base:b, why:'이미 순환 무장됨 (\u{1F501} ' + armed + ')'}); continue; }
+      if (busySt) { skip.push({base:b, why:'지금 ' + AUTO_IDLE_DOING(busySt)}); continue; }
+      if (heldSt) { skip.push({base:b, why:AUTO_IDLE_STLABEL(heldSt) + ' \u2014 ★사람이 와야 풀립니다★'}); continue; }
+    }
+    const warn = [];
+    if (armed)  warn.push('이미 순환 무장됨(\u{1F501} ' + armed + ') \u2014 ★덮어씁니다★');
+    if (busySt) warn.push('★지금 ' + AUTO_IDLE_DOING(busySt) + '★ \u2014 끊고 시작합니다');
+    if (heldSt) warn.push(AUTO_IDLE_STLABEL(heldSt) + ' 상태');
     out.push({base: b, id: cur.pc_id, off: !live,
-              acct: dp.length, cur_status: cur.status || 'offline'});
+              slots: dp.length, done: done,
+              cur_status: cur.status || 'offline', warn: warn});
   }
-  return out;
+  return {picked: picked, targets: out, skipped: skip};
 }
 
 async function autoIdleCmd(){
-  const tg = autoIdleTargets();
+  const r = autoIdleTargets();
+  const tg = r.targets, NLx = String.fromCharCode(10);
   const names = AUTO_IDLE_TASKS.map(t => ROT_TASK_LABEL[t] || t).join(' → ');
+  const skipTxt = r.skipped.length
+    ? NLx + NLx + '제외 ' + r.skipped.length + '대:' + NLx +
+      r.skipped.map(x => '  · ' + x.base + ' \u2014 ' + x.why).join(NLx)
+    : '';
   if (!tg.length) {
-    alert(`지금 자동진행할 PC가 없습니다.
+    alert((r.picked
+        ? '고르신 PC 중에 보낼 수 있는 대상이 없습니다.'
+        : `지금 자동진행할 PC가 없습니다.
 
-대상 조건: 오늘 사냥을 ★완주★ 했고, 지금 사냥·판매·수집·전환 중이 아니며,
-순환이 아직 무장되지 않은 PC (오프라인 포함).`);
+대상 조건: 지금 사냥·콘텐츠·판매·수집·전환 중이 아니고, 일시정지/에러도 아니며,
+순환이 아직 무장되지 않은 PC (오프라인 포함).
+★특정 PC 만 하려면 카드를 고르고 다시 눌러주세요★ — 그때는 조건을 안 따집니다.`) + skipTxt);
     return;
   }
   const on = tg.filter(t => !t.off).length;
   const off = tg.length - on;
-  const lines = tg.map(t => `  · ${t.base}${t.off ? '  (오프라인 — 돌아오면 실행)' : ''}`);
-  if (!confirm(`⚡ 남은 할 일 자동진행 — ${tg.length}대
+  const lines = tg.map(t => {
+    const prog = t.slots ? ('  완주 ' + t.done + '/' + t.slots) : '  완주정보 없음';
+    const w = t.warn.length ? NLx + '      \u26a0 ' + t.warn.join(' / ') : '';
+    return '  · ' + t.base + (t.off ? '  (오프라인 \u2014 돌아오면 실행)' : '') + prog + w;
+  });
+  if (!confirm(`⚡ 남은 할 일 자동진행 — ${tg.length}대  ${r.picked ? '(★고른 PC만★)' : '(자동 탐색)'}
 
 할 일: ${names}
-범위 : 각 PC의 ★전 계정★ (한 작업을 전 계정에 돌린 뒤 다음 작업)
+범위 : 각 PC의 ★전 계정★ — ★한 계정에서 ${AUTO_IDLE_TASKS.length}가지를 다 끝내고★ 다음 계정으로
 
 대상 (온라인 ${on} / 오프라인 ${off}):
-${lines.join(String.fromCharCode(10))}
+${lines.join(NLx)}${skipTxt}
 
 계정 하나 넘어갈 때마다 본컴 런처 + 원격컴 크롬 + 매크로 재시작 = 1~2분.
 되돌리려면 각 PC에 ■정지를 눌러야 합니다.
@@ -4371,7 +4917,10 @@ ${lines.join(String.fromCharCode(10))}
 진행할까요?`)) return;
   const first = AUTO_IDLE_TASKS[0];
   const rest = AUTO_IDLE_TASKS.slice(1);
-  await Promise.all(tg.map(t => sendCmd(t.id, first, {rotate: true, queue: rest})));
+  // ★withBulk 로 감싼다★ — 안 감싸면 sendCmd 의 「또 누르셨습니까」 중복확인이
+  //   대상 대수만큼 연달아 튀어나온다(rotCmd·selCmd 는 이미 감싸고 있었다).
+  await withBulk(() => Promise.all(
+      tg.map(t => sendCmd(t.id, first, {rotate: true, queue: rest}))));
   showToast(`⚡ ${tg.length}대 자동진행 시작 — ${names}`);
   loadCmdHistory();
   clearSelection();
@@ -4401,7 +4950,10 @@ async function rotCmd(command) {
 
 ` +
               `진행할까요?`)) return;
-  await Promise.all(targets.map(id=>sendCmd(id, command, {rotate:true})));
+  // ★withBulk 으로 감싼다★ — 안 감싸면 sendCmd 의 「또 누르셨습니까」 중복확인이
+  //   대상 대수만큼 연달아 튀어나온다. (2026-08-28 적대검증 [높3] — 주석은
+  //   「이미 감싸고 있었다」고 적혀 있었는데 실제로는 안 감싸고 있었다 = §A4)
+  await withBulk(() => Promise.all(targets.map(id=>sendCmd(id, command, {rotate:true}))));
   showToast(`🔁 ${targets.length}대 전 계정 순환 「${label}」 시작`);
   loadCmdHistory();
   clearSelection();   // 명령 전송 완료 = 선택 자동 해제 (selCmd 와 같은 규칙)
@@ -4441,8 +4993,8 @@ async function switchAccountSelected() {
               (already.length ? `\n(이미 계정 ${n} 인 ${already.length}대는 제외)` : '') +
               `\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n` +
               `★대당 1~2분, 게임 세션 끊김★. 진행할까요?`))return;
-  await Promise.all(targets.map(id=>sendCmd(id,'switch_launcher',
-        {acct_no:n, acct_index:1, acct_label:`계정${n}`, chrome_label:v})));
+  await withBulk(() => Promise.all(targets.map(id=>sendCmd(id,'switch_launcher',
+        {acct_no:n, acct_index:1, acct_label:`계정${n}`, chrome_label:v}))));
   showToast(`🔁 ${targets.length}대 계정 ${n} 통짜 전환 시작 (결과는 텔레그램)`);
   loadCmdHistory();
   clearSelection();
@@ -4890,7 +5442,7 @@ function connectWS() {
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;scheduleRender();}
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -5037,6 +5589,10 @@ async function loadCmdHistory() {
   renderCmdHistory((await res.json()).commands||[]);
 }
 function renderCmdHistory(cmds) {
+  // ★사고 308-b — ack/만료/취소를 카드 표시에 반영한다★
+  //   이 함수는 WS `cmd_history` 와 loadCmdHistory() 의 ★공통 싱크★ 다.
+  //   예전엔 여기서 카드를 다시 그리지 않아 ack 이 화면에 못 닿았다.
+  try { if (pendFromHistory(cmds)) { pendSweep(); scheduleRenderNow(); } } catch(e) {}
   const el=document.getElementById('cmd-history');
   if(!cmds.length){el.innerHTML='<div class="text-gray-600">없음</div>';return;}
   el.innerHTML=cmds.map(c=>{
@@ -5183,7 +5739,14 @@ const AI_T = {
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
-        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k',
+        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k', fHunt:'🏹 Đang săn',
+        huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
+        huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
+        huntBusyOther:(a)=>`máy này đang săn bằng tài khoản ${a}`,
+        huntHuman:'⚠ CẦN NGƯỜI', huntHumanWhy:(a,w)=>`tài khoản ${a}: ${w} — nhân vật đang ở trong hầm ngục, cần người xử lý`,
+        huntStale:(d)=>`im lặng ${d} ngày`, huntStaleNote:'thẻ cũ — không tính vào số còn lại',
+        huntFoot:'Tài khoản chưa xong hôm nay (theo ô). Nếu máy đó đang săn bằng tài khoản khác thì có nhãn ĐANG SĂN. Tài khoản im lặng nhiều ngày được tách riêng và KHÔNG tính vào số còn lại. Tự cập nhật theo thời gian thực.',
+        huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
         foot:'Lực ≥ 280,000 · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
         footLo:'Lực < 280,000 (hầm ngục cấp thấp) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu, tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
@@ -5191,7 +5754,14 @@ const AI_T = {
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
-        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓',
+        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓', fHunt:'🏹 사냥',
+        huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
+        huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
+        huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 로 사냥 중`,
+        huntHuman:'⚠ 사람이 가야 함', huntHumanWhy:(a,w)=>`계정${a}: ${w} — 캐릭이 던전 안에 있습니다`,
+        huntStale:(d)=>`${d}일째 소식 없음`, huntStaleNote:'옛 카드 — 남은 수에 안 셉니다',
+        huntFoot:'오늘 슬롯을 다 못 끝낸 계정만 (슬롯 기준). 그 컴퓨터가 다른 계정으로 사냥 중이면 사냥중 배지가 붙습니다. 며칠째 안 뜬 계정은 따로 갈라 놓고 남은 수에 안 셉니다(옛 카드가 박제된 것이라 오늘 안 한 게 아닙니다). 실시간으로 갱신됩니다.',
+        huntSummary:(pc,ac,sl)=>`${pc}대 · 계정 ${ac}개 · 남은 슬롯 ${sl}`,
         foot:'파워 28만 이상 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
         footLo:'파워 28만 미만(하위 던전) · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며 새벽 5시에 리셋됩니다.',
         summary:(a,c,d)=>`계정 ${a}개 · 캐릭 ${c}명 · 완료 ${d}` },
@@ -5334,11 +5904,171 @@ function aiBuildPlan(){
   return out;
 }
 
-// ★상/하위 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
+// ★상/하위/사냥 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
 function setAiFilter(f){
-  aiFilter = (f === 'lo') ? 'lo' : 'hi';
+  aiFilter = (f === 'lo' || f === 'hunt') ? f : 'hi';
   try{ localStorage.setItem('aiFilter', aiFilter); }catch(e){}
   renderAiPlan();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★사냥 탭 (2026-08-28 주인님 지시)★★
+//
+//   원문: "AI 버튼 안에 사냥 이라는 탭도 하나 만들고 거기다가 실시간으로 아직 사냥
+//          안끝난애들 표시하게끔해놓고 만약 그컴퓨터의 다른계정이 사냥중이면
+//          사냥중이라고 표시하게끔도 해줘"
+//
+//   ★던전 탭과 데이터가 다르다★ — 던전 추천은 charTableData(정보수집 OCR)를 보지만
+//   이 탭은 ★state(실시간 카드)★ 를 본다. 그래서 WS 로 상태가 바뀌면 바로 다시 그린다.
+//
+//   ★'끝났다' 판정은 dpDone 한 곳만 쓴다★ (3578줄) — daily_progress 의 completed 는
+//   늙지 않아서 며칠 전 완주가 오늘 완주로 읽힌다(2026-08-20 PC-12 실측). 서버가 붙여준
+//   today 플래그를 함께 봐야 한다. ★여기서 따로 판정하면 카드와 숫자가 어긋난다.★
+//
+//   ★'사냥중' 은 계정이 아니라 컴퓨터 단위다★ — 한 물리 PC 에 계정 카드가 여러 장이고
+//   (PC-22 · PC-22b · PC-22c…) 게임은 ★한 번에 한 계정만★ 돈다. 그래서 그 PC 의 카드
+//   중 하나라도 사냥/작업 중이면 나머지 계정은 '지금은 못 도는 게 정상' 이다.
+//   이걸 안 보여주면 직원분들이 "왜 안 도냐" 고 그 PC 를 또 건드린다.
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★며칠째 안 뜬 계정을 '오늘 안 끝냄' 으로 세면 안 된다 (2026-08-28 본방 지적)★★
+//   실측: PC-21d last_active=08-26 · PC-21e=08-25 인데 daily_progress 는 0/2 로 박제돼 있다.
+//   그건 「오늘 안 했다」가 아니라 ★「그 계정이 요즘 안 돌았다」★ 다.
+//   ★목록에서 빼지는 않는다★ — 안 끝난 건 사실이고, 빼면 그 계정이 영영 안 보인다.
+//   대신 「N일째 소식 없음」 으로 흐리게 갈라 놔서 직원분들이 헛걸음하지 않게 한다.
+//   경계는 게임일(새벽 5시) — aiGameDay 와 같은 규약을 쓴다.
+function aiStaleDays(p){
+  const la = p && p.last_active;
+  if (!la) return 0;
+  const gday = d => {
+    const x = new Date(d);
+    if (isNaN(x)) return null;
+    if (x.getHours() < 5) x.setDate(x.getDate() - 1);
+    return Math.floor(new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() / 86400000);
+  };
+  const a = gday(la), b = gday(new Date());
+  if (a === null || b === null) return 0;
+  return Math.max(0, b - a);
+}
+
+// ★★「사냥중」과 「사람이 가야 함」은 갈라서 보여준다 (2026-08-28 본방 실측 확인)★★
+//   `AUTO_IDLE_HELD` 는 ['paused','error','awakening_wait','nightmare_wait'] 인데
+//   이걸 통째로 「사냥중」 으로 쓰면 틀린다 — paused·error 는 게임을 쥐고 있는 게 아니다.
+//   ★두 wait 만 다르다★ (매크로 소스 실측):
+//     · awakening_wait : 캐릭이 ★각성전 던전 안에 선 채★ 사람의 Scroll Lock 을 기다린다.
+//       `lc/loot.py` 가 이 상태에서 daily_dungeon·nightmare·kill_game·plrow_shot 을 ★거부★ 하고
+//       주석에 「일일던전이 끼어들면 세션 파괴」 라고 적어놨다. 하루 1회 콘텐츠다.
+//     · nightmare_wait : 악몽 최종보스를 ★사람이 손으로★ 잡아야 하는 구간(알람이 이미 울린 뒤).
+//   → 화면에서도 갈라야 한다. 「사냥중」은 기다리면 되지만 ★이건 지금 사람이 가야 한다.★
+//   ※ 목록을 늘릴 때는 AUTO_IDLE_HELD 와의 차이를 하네스가 감시한다(hunt_test.js).
+const HUNT_HUMAN_WAIT = ['awakening_wait', 'nightmare_wait'];
+
+function aiBuildHunt(){
+  const byBase = {};
+  for (const p of Object.values(state)) {
+    const b = baseId(p.pc_id || '');
+    if (!b) continue;
+    const U = b.toUpperCase();
+    if (U === 'PC-TEST' || U === 'PC-DEMO') continue;
+    (byBase[b] = byBase[b] || []).push(p);
+  }
+  const out = [];
+  Object.keys(byBase).sort().forEach(b => {
+    const cards = byBase[b];
+    // ★이 컴퓨터가 지금 무엇을 하고 있나★ — 계정이 아니라 PC 단위로 한 번만 본다
+    const busy = cards.find(c => AUTO_IDLE_BUSY.includes(c.status)) || null;
+    // ★사람이 가야 하는 상태는 따로★ — 기다리면 되는 '사냥중' 과 대응이 다르다
+    const held = cards.find(c => HUNT_HUMAN_WAIT.includes(c.status)) || null;
+    const accts = [];
+    cards.forEach(p => {
+      const dp = p.daily_progress || [];
+      if (!dp.length) return;                       // 진행 정보 없음 = 판정 불가 → 뺀다
+      const done = dp.filter(dpDone).length;
+      if (done >= dp.length) return;                // 오늘 완주 → 뺀다
+      const cfg = STATUS_CFG[p.status || 'offline'] || STATUS_CFG.offline;
+      accts.push({ pc: p.pc_id, n: acctNumOf(p.pc_id) || 1,
+                   done: done, total: dp.length, left: dp.length - done,
+                   status: p.status || 'offline', label: cfg.label || '',
+                   online: !!cfg.online,
+                   stale: aiStaleDays(p),          // ★며칠째 소식 없나 (0 = 오늘)★
+                   busy: AUTO_IDLE_BUSY.includes(p.status) });
+    });
+    if (!accts.length) return;
+    // ★오늘 도는 계정을 위로, 며칠째 안 뜬 것은 아래로★ 그 안에서 계정번호 순
+    accts.sort((x, y) => (x.stale - y.stale) || (x.n - y.n));
+    // ★남은 슬롯 합계는 '오늘 도는 계정' 만 센다★ — 박제된 옛 카드까지 더하면
+    //   "40개 남았다" 같은 숫자가 부풀어 판단을 흐린다(실측: PC-21 이 6으로 잡혔다).
+    const liveLeft = accts.filter(a => !a.stale).reduce((s, a) => s + a.left, 0);
+    out.push({ base: b, busy: busy, busyAcct: busy ? (acctNumOf(busy.pc_id) || 1) : 0,
+               held: held, heldSt: held ? held.status : '',
+               heldAcct: held ? (acctNumOf(held.pc_id) || 1) : 0,
+               left: liveLeft, staleLeft: accts.reduce((s, a) => s + a.left, 0) - liveLeft,
+               accts: accts });
+  });
+  // ★맨 위 = 사람이 가야 하는 PC★ (각성전/악몽 대기 — 캐릭이 던전 안에 서 있다)
+  //   그 다음 = 사냥도 안 하면서 안 끝난 PC. 사냥 중인 PC 는 정상 진행이라 맨 아래.
+  out.sort((x, y) => (!!y.held - !!x.held) || (!!x.busy - !!y.busy) ||
+                     (y.left - x.left) || String(x.base).localeCompare(String(y.base)));
+  return out;
+}
+
+function renderAiHunt(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  document.getElementById('ai-title').textContent = T.huntTitle;
+  document.getElementById('ai-foot').textContent = T.huntFoot;
+  const rows = aiBuildHunt();
+  const body = document.getElementById('ai-body');
+  const sum = document.getElementById('ai-summary');
+  if (!rows.length) {
+    body.innerHTML = `<div class="text-emerald-400 text-sm py-8 text-center font-bold">${T.huntNone}</div>`;
+    sum.textContent = '';
+    return;
+  }
+  // ★남은 수는 '오늘 도는 계정' 만★ — 며칠째 안 뜬 카드까지 더하면 숫자가 부푼다
+  const nAcct = rows.reduce((s, r) => s + r.accts.filter(a => !a.stale).length, 0);
+  const nLeft = rows.reduce((s, r) => s + r.left, 0);
+  const nStale = rows.reduce((s, r) => s + r.accts.filter(a => a.stale).length, 0);
+  sum.textContent = T.huntSummary(rows.length, nAcct, nLeft) +
+                    (nStale ? `  ·  ${esc(T.huntStaleNote)} ${nStale}` : '');
+  let h = '';
+  rows.forEach(r => {
+    // ★사람이 가야 하는 PC 가 먼저다★ — 「사냥중」은 기다리면 되지만 이건 지금 가야 한다
+    const heldBadge = r.held
+      ? `<span style="background:rgba(244,63,94,.22);color:#fda4af;border:1px solid #fb7185"
+               class="px-2 py-0.5 rounded text-xs font-extrabold">${esc(T.huntHuman)}</span>
+         <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, (STATUS_CFG[r.heldSt]||{}).label || r.heldSt))}</span>`
+      : '';
+    const busyBadge = (!r.held && r.busy)
+      ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399"
+               class="px-2 py-0.5 rounded text-xs font-bold">${T.huntBusy}</span>
+         <span class="text-[11px] text-emerald-300/80">${esc(T.huntBusyOther(r.busyAcct))}</span>`
+      : '';
+    h += `<div class="mb-3 rounded-lg border ${r.held ? 'border-rose-700' : (r.busy ? 'border-emerald-800/70' : 'border-amber-800/70')} bg-gray-800/40">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60 flex-wrap">
+        <span style="font-size:16px;font-weight:800;color:#fff">${esc(r.base)}</span>
+        ${heldBadge}${busyBadge}
+        <span class="ml-auto text-xs ${r.busy ? 'text-gray-400' : 'text-amber-300 font-bold'}">${r.left} ${esc(T.huntLeft)}</span>
+        ${r.staleLeft ? `<span class="text-[11px] text-gray-500">(+${r.staleLeft} ${esc(T.huntStaleNote)})</span>` : ''}
+      </div>`;
+    r.accts.forEach(a => {
+      const dot = a.busy ? '#34d399' : (a.online ? '#9ca3af' : '#6b7280');
+      // ★며칠째 안 뜬 계정은 흐리게 + 이유를 적는다★ — 지우지 않는 이유는 위 주석 참조
+      const staleTag = a.stale
+        ? `<span class="text-[11px] px-1.5 py-0.5 rounded"
+                 style="background:rgba(148,163,184,.15);color:#94a3b8;border:1px solid #475569"
+                 title="${esc(T.huntStaleNote)}">${esc(T.huntStale(a.stale))}</span>` : '';
+      h += `<div class="flex items-center gap-2 px-3 py-1.5" style="${a.stale ? 'opacity:.5' : ''}">
+        ${acctTagSpread(a.pc)}
+        <span class="text-sm font-bold text-gray-100" style="min-width:5.5rem">${esc(a.pc)}</span>
+        <span class="text-xs" style="color:${dot}">${esc(a.online ? a.label : T.huntOff)}</span>
+        ${staleTag}
+        <span class="ml-auto text-xs text-gray-400">${esc(T.huntSlot)}
+          <b class="${a.done ? 'text-cyan-300' : 'text-gray-500'}">${a.done}</b>/${a.total}
+          <b class="${a.stale ? 'text-gray-500' : 'text-amber-300'}">(${a.left} ${esc(T.huntLeft)})</b></span>
+      </div>`;
+    });
+    h += `</div>`;
+  });
+  body.innerHTML = h;
 }
 
 function renderAiPlan(){
@@ -5346,15 +6076,21 @@ function renderAiPlan(){
   document.getElementById('ai-title').textContent = T.title;
   document.getElementById('ai-foot').textContent =
     (aiFilter === 'lo' && T.footLo) ? T.footLo : T.foot;
-  // 필터 버튼 라벨 + 활성 표시
+  // 필터 버튼 라벨 + 활성 표시 (2026-08-28: 사냥 탭 추가로 셋이 됐다)
   const bHi = document.getElementById('ai-f-hi'), bLo = document.getElementById('ai-f-lo');
+  const bHt = document.getElementById('ai-f-hunt');
   if (bHi && bLo) {
     bHi.textContent = T.fHi; bLo.textContent = T.fLo;
     const on = 'text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white';
     const off = 'text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300 hover:bg-gray-600';
+    // ★사냥 탭은 초록 계열★ — 던전(자홍)과 데이터도 목적도 달라서 색으로 갈라 둔다
+    const onHunt = 'text-xs px-2.5 py-1 rounded font-bold bg-emerald-700 text-white';
     bHi.className = (aiFilter === 'hi') ? on : off;
     bLo.className = (aiFilter === 'lo') ? on : off;
+    if (bHt) { bHt.textContent = T.fHunt || '🏹'; bHt.className = (aiFilter === 'hunt') ? onHunt : off; }
   }
+  // ★사냥 탭은 state(실시간 카드)를 보므로 여기서 갈라 나간다★
+  if (aiFilter === 'hunt') { renderAiHunt(); return; }
   const plan = aiBuildPlan();
   const body = document.getElementById('ai-body');
   if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
@@ -5613,14 +6349,27 @@ document.addEventListener('click',()=>{
 
 // ─── 업데이터 명령 ────────────────────────────────────────────────────────────
 async function sendUpdaterCmd(pc_id, command, args={}) {
+  // ★★적대검증 중간5 — ↺껐다켜기·업데이트가 표시를 아예 안 걸었다★★
+  //   가장 오래 걸리는 조작(재시작 ~40초, 업데이트 수 분)이 여전히 「대기」로 남아
+  //   주인님이 또 누르시게 만든다 = 원 요구의 절반이 비어 있었다.
+  //   ★업데이터 큐는 다른 엔드포인트(§B3)★ 라 cmd_history ack 이 안 온다 →
+  //   해제는 ④ttl 과 ①상태 변화에만 기댄다. 그래서 ttl 을 넉넉히 준다.
+  const _pendU = pendRegister(pc_id, command, args);
+  if (_pendU) scheduleRenderNow();
   try {
     const res = await fetch(`/updater/command/${baseId(pc_id)}`, {   // 업데이터=base id (멀티계정)
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({command, args})
     });
+    if (_pendU && !res.ok && pendingCmds[_pendU.base] === _pendU) {
+      delete pendingCmds[_pendU.base]; scheduleRenderNow();
+    }
     return res.ok;
   } catch (e) {          // ★네트워크 예외도 실패다 (2026-08-22)★ 안 잡으면 호출부가 통째로 죽는다
     console.error('sendUpdaterCmd 실패', pc_id, command, e);
+    if (_pendU && pendingCmds[_pendU.base] === _pendU) {
+      delete pendingCmds[_pendU.base]; scheduleRenderNow();
+    }
     return false;
   }
 }
@@ -8745,7 +9494,56 @@ ROT_TASK_LABEL = {"daily_dungeon": "일일던전", "nightmare": "악몽", "awake
 # ★'쉬는 자리' 목록에 paused 를 넣지 않는다★ — 일시정지는 사람이 잠깐 세운 것이지
 #   작업이 끝난 게 아니다. 넣으면 주인님이 화면 보려고 멈춘 순간 계정이 넘어간다.
 ROT_IDLE_SET = ("idle", "awakening_wait", "nightmare_wait")
+# ★★작업 → 매크로가 ★그 작업을 도는 동안★ 보고하는 status (2026-08-28 실측)★★
+#   근거는 짐작이 아니라 매크로 소스다:
+#     daily_dungeon → dungeon      (lc/dungeon.py:109)
+#     corridor      → corridor     (lc/corridor.py:1252, 1470)
+#     nightmare     → nightmare    (lc/nightmare.py:189)
+#     awakening     → awakening    (lc/awakening.py:123, 533)
+#     collect_info  → collecting   (lc/info_collector.py:2440)
+#   ★왜 필요한가★ 아래 tasking 분기가 「idle 이 아니다 = 그 작업 중이다」로 읽고 있었다.
+#   PC 가 작업과 무관하게 사냥/판매/재연결 중이어도 busy 가 박히고, 그게 끝나 idle 이
+#   되는 순간 서버는 ★작업이 끝났다★ 고 읽어 다음으로 넘어간다 = 조용한 유실.
+#   계정-우선이 되면서 유실 폭이 계정당 1개 → ★그 계정의 작업 전부★ 로 커졌다.
+#   ★표에 없는 작업은 예전 판정을 그대로 쓴다★ — 모르는 것을 새 규칙으로 재지 않는다.
+ROT_TASK_BUSY_ST = {
+    "daily_dungeon": ("dungeon",),
+    "corridor":      ("corridor",),
+    "nightmare":     ("nightmare",),
+    "awakening":     ("awakening",),
+    "collect_info":  ("collecting",),
+}
 ROT_TASK_GRACE = 150.0                # 명령을 보내고 '바빠지기' 를 기다리는 시간
+# ★★그 작업 말고 ★딴 일★ 을 하고 있을 때 기다려 주는 시간 (2026-08-28)★★
+#   busy 를 「그 작업의 status 일 때만」 으로 좁히고 나니 ★새 결함★ 이 생겼다:
+#   PC 가 계속 사냥 중이면 유휴 자리에 영영 못 오고, 무진전 상한(ROT_TASK_MAX)도
+#   ★사냥 때문에 진행 지문이 계속 바뀌어 리셋★ 되므로 순환이 영원히 멈춰 선다.
+#   (옛 코드는 틀린 근거로나마 넘어가긴 했다 — 고치면서 더 나쁘게 만들 뻔했다)
+#   → 여기서 따로 끊고, ★못 했다는 사유를 남기며★ 다음으로 넘어간다.
+ROT_OTHER_MAX = 1200.0                # 20분
+# ★★사람이 와야만 풀리는 상태 (2026-08-28 매크로 소스 실측)★★
+#   awakening_wait — 각성전 스텝이 끝나고 ★사람이 Scroll Lock 을 눌러야★ 다음이 진행된다.
+#     캐릭이 ★각성전 던전 안에 서 있다.★ (lc/awakening.py:138 · config.py:6485)
+#     매크로는 이 상태에서 daily_dungeon·nightmare·kill_game 을 ★명시적으로 거부★ 한다
+#     (lc/loot.py:260 "일일던전이 끼어들면 세션 파괴"). 하루 1회 콘텐츠라 되돌릴 수 없다.
+#   nightmare_wait — 악몽 최종 보스를 ★사람이 손으로 잡아야★ 하는 구간.
+#     매크로가 이미 "악몽 최종 보스! 도와주세요" 알람까지 울린 뒤다 (lc/nightmare.py:404).
+#   ★ROT_IDLE_SET 에는 둘 다 들어 있다★ — 그건 ★완주(사냥) 순환★ 이 "사냥이 끝났다" 를
+#   판정하는 용도라 맞다. 그런데 ★작업 순환★ 이 같은 집합을 쓰면서 "쉬는 자리 = 다음 작업
+#   보내도 된다" 로 읽었다. 그러면 ①거부 + 텔레그램이 두 번 울리고 ②거부 목록에 없는
+#   corridor 는 ★각성전 던전 안에서 시작돼 세션을 깬다.★ 그래서 여기서 끊는다.
+ROT_HUMAN_WAIT = {
+    "awakening_wait": "각성전 대기(사람이 Scroll Lock 을 눌러야 진행됩니다)",
+    "nightmare_wait": "악몽 최종보스 대기(사람이 손으로 잡아야 합니다)",
+}
+# ★사유 문구는 사람이 읽는다★ — 그대로 쓰면 텔레그램에 "hunting 중이라 못 했습니다" 가
+#   나간다. 대시보드 STATUS_CFG 와 같은 말로 맞춘다(없는 키는 원문 그대로).
+ROT_ST_KOR = {"hunting": "사냥", "moving": "이동", "selling": "판매",
+              "collecting": "정보수집", "switching": "캐릭 전환", "reconnecting": "재연결",
+              "captcha": "캡차", "dungeon": "일일던전", "nightmare": "악몽",
+              "awakening": "각성전", "corridor": "회랑", "abyss": "어비스",
+              "subquest": "서브퀘", "dead": "사망", "paused": "일시정지",
+              "error": "에러", "starting": "시작"}
 ROT_TASK_MAX   = 90 * 60.0            # 한 계정에서 한 작업의 절대 상한
 _ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
 _ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
@@ -9020,10 +9818,27 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
                  # 작업 순환 전용 — sent_at: 명령을 보낸 시각 / busy: 실제로 시작된 증거 /
                  #                  tvisit: 이번 무장에서 작업을 보낸 계정 번호들
                  "sent_at": _rot_now(), "busy": False,
+                 # other: 그 작업 말고 ★다른 일★ 을 하고 있던 status (사유 보고용)
+                 # retask: 거부 감지 후 재전송을 이미 한 번 했나 (무한 재시도 금지)
+                 "other": "", "retask": False,
                  "tvisit": ([str(_rot_acct_no(pc_id))] if task else []),
                  # ★작업 큐 (2026-08-25 주인님 지시)★ — 한 작업이 전 계정을 돌면
                  #   여기서 다음 작업을 꺼내 이어서 돈다. 비면 그때 종료한다.
                  "queue": [str(q) for q in (queue or []) if str(q)],
+                 # ★★plan — 계정-우선 순환 (2026-08-28 주인님 확답)★★
+                 #   주인님: "각 계정에 할일다하고 다음계정으로 넘어가는거 맞지?"
+                 #   → ★아니었다.★ 원판은 ★작업-우선★ 이었다:
+                 #        일일던전을 전 계정 → 회랑을 전 계정 → 악몽을 전 계정.
+                 #   차이는 ★계정 전환 횟수★ 다. 계정 4개 · 작업 3개일 때
+                 #     작업-우선 = 3바퀴 × 3홉 = ★9회 전환★ (1회 = 본컴+원격컴+재시작 1~2분)
+                 #     계정-우선 = ★3회 전환★.  같은 일을 하고 12~18분을 덜 태운다.
+                 #   ROT_MAX_HOPS(12) 에도 훨씬 여유가 생긴다.
+                 #   plan = ★계정 하나에서 해야 할 작업 전체★. 계정을 옮길 때마다
+                 #   queue 를 plan[1:] 로 되감아 새 계정에서 처음부터 다시 돈다.
+                 #   ★plan 이 없는 무장(옛 서버가 디스크에 남긴 것)은 아래에서
+                 #     예전 작업-우선 경로로 그대로 흘러간다 = 되돌림 없는 이행.★
+                 "plan": ([str(task)] + [str(q) for q in (queue or []) if str(q)]
+                          if task else []),
                  "hops": int(_old.get("hops") or 0) if _same else 0,
                  "visits": dict(_old.get("visits") or {}) if _same else {}}
     # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
@@ -9383,19 +10198,108 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if not active:
             return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
         _s = str(active.get("status") or "")
-        if _s not in ROT_IDLE_SET:
-            if not st.get("busy"):
-                st["busy"] = True                    # ★작업이 실제로 시작된 증거★
-                print(f"[순환] {key} {_tlabel} 진행 확인(status={_s})")
+        # ★사람이 와야 풀리는 상태면 ★작업을 보내지 않고 세운다★ (2026-08-28)★
+        #   계정을 바꿔서도 안 된다 — 캐릭이 각성전 던전 안에 서 있는 채로 전환된다.
+        if _s in ROT_HUMAN_WAIT:
+            await _rot_stop(tenant, base,
+                            f"⛔ 순환 정지 — {ROT_HUMAN_WAIT[_s]}. "
+                            f"★사람이 처리한 뒤 다시 눌러주세요.★ "
+                            f"(여기서 {_tlabel} 을 보내면 매크로가 거부하거나, "
+                            f"거부 목록에 없는 작업은 진행 중인 콘텐츠를 깹니다)", st)
             return
-        # ── 여기부터 '쉬는 자리' — 끝났거나, 아직 시작을 안 했거나 둘 중 하나다
+        _want_st = ROT_TASK_BUSY_ST.get(_task) or ()
+        if _s not in ROT_IDLE_SET:
+            # ★'뭔가 하고 있다' 와 '★그 작업★ 을 하고 있다' 는 다르다 (2026-08-28)★
+            if (not _want_st) or _s in _want_st:
+                if not st.get("busy"):
+                    st["busy"] = True                # ★그 작업이 실제로 시작된 증거★
+                    st["other"] = ""
+                    print(f"[순환] {key} {_tlabel} 진행 확인(status={_s})")
+                return
+            if st.get("busy"):
+                return                               # 이미 시작한 뒤의 딴 상태 — 기다린다
+            # ── 그 작업이 아니라 ★딴 일★ 을 하고 있다 (사냥 등) ──────────────
+            if str(st.get("other") or "") != _s:
+                st["other"] = _s
+                st["other_at"] = _rot_now()
+            # ★영원히 기다리지 않는다★ — 사냥 중이면 진행 지문이 계속 바뀌어
+            #   무진전 상한이 리셋되므로 여기서 끊지 않으면 순환이 굳는다.
+            if _rot_now() - float(st.get("other_at") or 0) < ROT_OTHER_MAX:
+                return
+            # 상한을 넘겼다 → 아래 '쉬는 자리' 로 흘려보내 ★사유를 남기고★ 넘어간다
+        # ── 여기부터 — 끝났거나, 아직 시작을 안 했거나, ★딴 일만 하다 상한을 넘겼거나★
+        _undone = ""          # 비어 있지 않으면 ★이 계정에서 그 작업을 못 했다★
+        _oth = str(st.get("other") or "")
         if not st.get("busy"):
-            if _rot_now() - float(st.get("sent_at") or st.get("since") or 0) < ROT_TASK_GRACE:
+            if (not _oth) and (_rot_now() - float(st.get("sent_at") or st.get("since") or 0)
+                               < ROT_TASK_GRACE):
                 return                               # 아직 시작 전일 수 있다 — 기다린다
-            await _rot_say(tenant, base,
-                           f"계정{_rot_acct_no(active.get('pc_id'))} 는 {_tlabel} 할 게 "
-                           f"없었습니다(status={_s}) — 다음 계정으로", routine=True)
+            # ★★거부됐으면 딱 한 번 다시 보낸다 (2026-08-28 적대검증 [높음-2])★★
+            #   _rot_send 는 ★큐에 넣기★ 성공만 True 다. 매크로가 "이전 명령 처리 중"
+            #   으로 거부하면 ack 도 재큐도 없이 사라진다 — 아래 collecting 분기에는
+            #   이미 같은 방어가 있는데(recollect) 작업 순환에는 없었다.
+            #   그때 로그의 "'<명령>'를 거부" 는 ★그 PC 가 직접 찍은 확정 증거★ 다.
+            if not st.get("retask"):
+                try:
+                    _tlg = await get_logs(ns(tenant, str(active.get("pc_id") or base)),
+                                          limit=40)
+                except Exception:
+                    _tlg = []
+                if any(f"'{_task}'를 거부" in str(_l.get("message") or "")
+                       for _l in (_tlg or [])):
+                    st["retask"] = True
+                    print(f"[순환] {base} {_task} 거부 감지 → 재전송")
+                    if not _alive():
+                        return
+                    if await _rot_send(tenant, str(active.get("pc_id")), _task, {}):
+                        if not _alive():
+                            return
+                        st.update({"sent_at": _rot_now(), "since": _rot_now()})
+                        await _rot_say(tenant, base,
+                                       f"{_tlabel} 이 거부돼 있었습니다 → 다시 보냈습니다")
+                    return
+            _undone = (f"★{ROT_ST_KOR.get(_oth, _oth)} 중이라 못 했습니다★" if _oth
+                       else f"할 게 없었습니다(status={_s})")
         nxt, why = _rot_next_acct_task(cards, active, st)
+        # ══════════════════════════════════════════════════════════
+        # ★★계정-우선 — 이 계정에 남은 작업을 ★먼저★ 다 한다 (2026-08-28)★★
+        #   주인님: "각 계정에 할일다하고 다음계정으로 넘어가는거 맞지?"
+        #   plan 이 있으면 계정을 바꾸기 ★전에★ 이 계정에서 queue 를 비운다.
+        #   ★tvisit·hops·visits 는 건드리지 않는다★ — 계정을 옮긴 게 아니다.
+        #   ★fp/fp_at 은 반드시 되감는다★ — 무진전 시계(ROT_TASK_MAX)가 앞 작업의
+        #     마지막 진전 시각부터 계속 흐르면, 오래 걸린 작업 뒤의 새 작업이
+        #     시작하자마자 "N분째 아무 진전이 없습니다" 로 죽는다.
+        #     (옛 큐 경로는 fp 만 비우고 fp_at 을 안 비웠다 = 같은 함정)
+        # ══════════════════════════════════════════════════════════
+        _plan = [str(x) for x in (st.get("plan") or []) if str(x)]
+        _aq = [str(x) for x in (st.get("queue") or []) if str(x)]
+        if _plan and _aq:
+            _nt = _aq.pop(0)
+            _acct_now = _rot_acct_no(active.get("pc_id"))
+            if not _alive():
+                return
+            if not await _rot_send(tenant, str(active.get("pc_id")), _nt, {}):
+                return                    # ★송신 실패면 단계를 안 넘긴다 [S13]★
+            # ★await 뒤에는 반드시 다시 확인한다 [S6]★ — 그 사이 사람이 ■정지를
+            #   눌렀으면 _ROT[key] 가 사라졌거나 새 dict 로 바뀌었다. 확인 없이 쓰면
+            #   ★없는 순환에 대해 「시작했습니다」를 로그에 남긴다★ (적대검증 [높음-3])
+            if not _alive():
+                return
+            st.update({"queue": _aq, "task": _nt, "stage": "tasking",
+                       "since": _rot_now(), "sent_at": _rot_now(), "busy": False,
+                       "other": "", "retask": False,
+                       "fp": "", "fp_at": _rot_now()})
+            await _rot_save(force=True)
+            # ★문구가 사실과 달라지면 안 된다 (적대검증 [높음-1])★ — 예전엔
+            #   "다음 계정으로" 라고 찍고 바로 같은 계정에 다음 작업을 보냈다.
+            #   못 한 경우는 routine 을 풀어 ★텔레그램으로도★ 알린다(조용한 유실 금지).
+            await _rot_say(tenant, base,
+                           (f"계정{_acct_now} 는 {_tlabel} {_undone} → " if _undone
+                            else f"계정{_acct_now} 「{_tlabel}」 끝 → ")
+                           + f"★같은 계정★ 에서 「{ROT_TASK_LABEL.get(_nt, _nt)}」 시작 "
+                             f"(이 계정 남은 작업 {len(_aq)}개)",
+                           routine=not _oth)
+            return
         if nxt == 0:
             # ══════════════════════════════════════════════════════════
             # ★★작업 큐 — 다음 할 일로 이어간다 (2026-08-25 주인님 지시)★★
@@ -9415,15 +10319,21 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     return           # ★송신 실패면 단계를 안 넘긴다 [S13]★
                 st.update({"queue": _q, "task": _nt, "stage": "tasking",
                            "since": _rot_now(), "sent_at": _rot_now(), "busy": False,
-                           "tvisit": [_acct_now], "hops": 0, "visits": {}, "fp": ""})
+                           "tvisit": [_acct_now], "hops": 0, "visits": {},
+                           # ★fp 만 비우면 무진전 시계가 앞 작업 시각부터 계속 흐른다★
+                           "fp": "", "fp_at": _rot_now()})
                 await _rot_save(force=True)
                 await _rot_say(tenant, base,
                                f"✅ {_tlabel} 전 계정 완료 → 다음 작업 "
                                f"「{ROT_TASK_LABEL.get(_nt, _nt)}」 시작 "
                                f"(남은 작업 {len(_q)}개)", routine=True)
                 return
+            # ★마지막 작업 이름만 말하면 나머지가 돌았는지 알 수 없다 (적대검증 [중간-1])★
+            #   이 메시지는 routine 이 아니라 ★텔레그램으로 나간다.★
+            _pl = [str(x) for x in (st.get("plan") or []) if str(x)]
+            _plt = " → ".join(ROT_TASK_LABEL.get(t, t) for t in _pl) if _pl else _tlabel
             await _rot_stop(tenant, base,
-                            f"✅ 순환 종료 — {_tlabel} 전 계정 완료 "
+                            f"✅ 순환 종료 — 「{_plt}」 전 계정 완료 "
                             f"({len(st.get('tvisit') or [])}개 계정)")
             return
         if int(st.get("hops") or 0) + 1 > ROT_MAX_HOPS:
@@ -9452,12 +10362,24 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if not ok or not _alive():
             return
         st.setdefault("tvisit", []).append(str(nxt))
-        st.update({"stage": "switching", "since": _rot_now(),
-                   "expect_restart": True,
-                   "expect_until": _rot_now() + ROT_SWITCH_MAX,
-                   "target": ACCT_LABELS[nxt - 1],
-                   "hops": int(st.get("hops") or 0) + 1})
-        await _rot_say(tenant, base, f"{_tlabel} 끝 → 계정{nxt} 로 전환", routine=True)
+        _upd = {"stage": "switching", "since": _rot_now(),
+                "expect_restart": True,
+                "expect_until": _rot_now() + ROT_SWITCH_MAX,
+                "target": ACCT_LABELS[nxt - 1],
+                "hops": int(st.get("hops") or 0) + 1}
+        # ★새 계정에서는 plan 을 처음부터 다시 돈다 (계정-우선)★
+        #   switching 분기가 다음 틱에 st["task"] 를 그대로 보내므로 여기서 갈아둔다.
+        if _plan:
+            _upd.update({"task": _plan[0], "queue": _plan[1:],
+                         "other": "", "retask": False,
+                         "fp": "", "fp_at": _rot_now()})
+        st.update(_upd)
+        _rest = (f" (계정{nxt} 에서 {' → '.join(ROT_TASK_LABEL.get(t, t) for t in _plan)})"
+                 if len(_plan) > 1 else "")
+        await _rot_say(tenant, base,
+                       (f"{_tlabel} {_undone} → 계정{nxt} 로 전환" if _undone
+                        else f"{_tlabel} 끝 → 계정{nxt} 로 전환") + _rest,
+                       routine=not _oth)
         return
 
     # ── ① 사냥 중 — 완주를 기다린다 ────────────────────────────────────────
