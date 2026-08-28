@@ -1654,7 +1654,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
   .acct-tab-none{opacity:.38;cursor:not-allowed}
   .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
-  /* ★★총 계정 수 배지 (2026-08-28 주인님 그림)★★ 탭 줄 ★오른쪽 끝★.
+  /* ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님 그림 + 정정)★★ 탭 줄 ★오른쪽 끝★.
      margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
      탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */
   .acct-total{margin-left:auto;margin-right:2px;flex:none;align-self:flex-end;
@@ -1662,7 +1662,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     font-size:11px;font-weight:800;line-height:1;letter-spacing:.02em;white-space:nowrap;
     background:#0d1424;border:1px solid #2b3648;border-bottom:none;
     border-radius:9px 9px 0 0;color:#7c8aa0;cursor:default}
-  /* 자격증명이 등록된 계정보다 탭이 많으면(=카드만 있고 아이디가 비었으면) 앰버로 알린다 */
+  /* 캐릭 정보가 일부 계정에만 있으면(=합계가 실제보다 작을 수 있으면) 앰버로 알린다 */
   .acct-total.acct-total-gap{color:#f59e0b;border-color:#78350f}
   .acct-tab .tdot{width:5px;height:5px;border-radius:50%;background:#22c55e;
     box-shadow:0 0 5px rgba(34,197,94,.9);flex:none}
@@ -3247,33 +3247,33 @@ setInterval(pendTick, 1000);
    // esc가 따옴표까지 막으므로 속성값에 그대로 안전
 
 const STATUS_CFG = {
-  hunting:      {label:'사냥 중',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
-  selling:      {label:'판매 중',   bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
-  abyss:        {label:'어비스',   bg:'bg-fuchsia-500/20', border:'border-fuchsia-700', badge:'bg-fuchsia-500', text:'text-fuchsia-400', online:true},
-  moving:       {label:'사냥 중',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
-  switching:    {label:'캐릭 전환', bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-400', text:'text-purple-400', online:true},
-  reconnecting: {label:'재연결 중', bg:'bg-orange-500/20', border:'border-orange-700', badge:'bg-orange-400', text:'text-orange-400', online:true},
-  captcha:      {label:'캡차',      bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
-  dead:         {label:'사망',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
-  idle:         {label:'대기',      bg:'bg-gray-700/20',   border:'border-gray-600',   badge:'bg-gray-500',   text:'text-gray-400',   online:true},
-  subquest:     {label:'서브퀘',   bg:'bg-lime-500/20',   border:'border-lime-700',   badge:'bg-lime-500',   text:'text-lime-400',   online:true},
-  dungeon:      {label:'던전',    bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-500', text:'text-purple-400', online:true},
-  nightmare:    {label:'악몽',    bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
-  awakening:    {label:'각성전',  bg:'bg-indigo-500/20', border:'border-indigo-700', badge:'bg-indigo-500', text:'text-indigo-400', online:true},
-  awakening_wait:{label:'각성전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
-  nightmare_wait:{label:'악몽전 대기', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
-  corridor:     {label:'회랑',    bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
+  hunting:      {label:'사냥 중', vi:'Đang săn',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
+  selling:      {label:'판매 중', vi:'Đang bán',   bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
+  abyss:        {label:'어비스', vi:'Abyss',   bg:'bg-fuchsia-500/20', border:'border-fuchsia-700', badge:'bg-fuchsia-500', text:'text-fuchsia-400', online:true},
+  moving:       {label:'사냥 중', vi:'Đang săn',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
+  switching:    {label:'캐릭 전환', vi:'Đổi nhân vật', bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-400', text:'text-purple-400', online:true},
+  reconnecting: {label:'재연결 중', vi:'Đang kết nối lại', bg:'bg-orange-500/20', border:'border-orange-700', badge:'bg-orange-400', text:'text-orange-400', online:true},
+  captcha:      {label:'캡차', vi:'Captcha',      bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
+  dead:         {label:'사망', vi:'Đã chết',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
+  idle:         {label:'대기', vi:'Chờ',      bg:'bg-gray-700/20',   border:'border-gray-600',   badge:'bg-gray-500',   text:'text-gray-400',   online:true},
+  subquest:     {label:'서브퀘', vi:'Nhiệm vụ phụ',   bg:'bg-lime-500/20',   border:'border-lime-700',   badge:'bg-lime-500',   text:'text-lime-400',   online:true},
+  dungeon:      {label:'던전', vi:'Hầm ngục',    bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-500', text:'text-purple-400', online:true},
+  nightmare:    {label:'악몽', vi:'Ác mộng',    bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
+  awakening:    {label:'각성전', vi:'Trận thức tỉnh',  bg:'bg-indigo-500/20', border:'border-indigo-700', badge:'bg-indigo-500', text:'text-indigo-400', online:true},
+  awakening_wait:{label:'각성전 대기', vi:'Chờ trận thức tỉnh', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
+  nightmare_wait:{label:'악몽전 대기', vi:'Chờ trận ác mộng', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
+  corridor:     {label:'회랑', vi:'Hành lang',    bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
   // ★매크로는 이 상태를 보내는데 대시보드가 몰랐다 (2026-08-28 하네스가 잡음)★
   //   lc/sealed_dungeon.py:49 report_status("sealed_dungeon") — 여기 없으면
   //   STATUS_CFG[st]||STATUS_CFG.offline 로 떨어져 ★봉인던전 도는 PC 가 빨간 오프라인★ 으로 보인다.
-  sealed_dungeon:{label:'봉인던전', bg:'bg-violet-500/20', border:'border-violet-700', badge:'bg-violet-500', text:'text-violet-400', online:true},
-  collecting:   {label:'정보수집', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
-  paused:       {label:'일시정지', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
-  error:        {label:'에러',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
+  sealed_dungeon:{label:'봉인던전', vi:'Hầm ngục phong ấn', bg:'bg-violet-500/20', border:'border-violet-700', badge:'bg-violet-500', text:'text-violet-400', online:true},
+  collecting:   {label:'정보수집', vi:'Thu thập thông tin', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
+  paused:       {label:'일시정지', vi:'Tạm dừng', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
+  error:        {label:'에러', vi:'Lỗi',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
   // ★오프라인은 빨갛게 (2026-08-20 사용자 지시)★ — 카드가 자리를 안 옮기게 바꿨으니
   //   (아래로 안 내려간다) 죽었다는 걸 ★색으로★ 확실히 알려야 한다. 회색은 안 보인다.
-  offline:      {label:'오프라인',  bg:'bg-red-950/40',    border:'border-red-800/70', badge:'bg-red-700',    text:'text-red-400',    online:false},
-  other_account:{label:'다른 계정', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
+  offline:      {label:'오프라인', vi:'Ngoại tuyến',  bg:'bg-red-950/40',    border:'border-red-800/70', badge:'bg-red-700',    text:'text-red-400',    online:false},
+  other_account:{label:'다른 계정', vi:'Tài khoản khác', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
@@ -4238,17 +4238,41 @@ function buildStack(s){
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
     tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}">${k}${dot}</button>`;
   }
-  // ★총 계정 수 배지★ — 아이디가 등록된 계정 수를 먼저 세고, 없으면 탭 수를 쓴다.
-  //   둘이 다르면(카드는 있는데 info.txt 에 아이디가 없다) 앰버로 표시해 알린다.
-  const nIds = idNums.length;
-  const gap = nIds > 0 && nIds !== hiNum;
-  const totTip = nIds > 0
-    ? (gap ? `계정 ${hiNum}개 — 그중 아이디가 등록된 것은 ${nIds}개입니다 `
-             + `(info.txt 를 확인해 주세요)`
-           : `이 PC 의 총 계정 수 ${hiNum}개 (전부 아이디 등록됨)`)
-    : `이 PC 의 총 계정 수 ${hiNum}개 (아이디 정보 없음)`;
-  const total = `<span class="acct-total${gap ? ' acct-total-gap' : ''}" `
-    + `title="${esc(totTip)}">계정 ${hiNum}${gap ? ` · 등록 ${nIds}` : ''}</span>`;
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님)★★
+  //   주인님: "계정수가 아니라 ★캐릭수★ 를 적어야하는데"
+  //   근거는 `acct_names` — 매크로가 info.txt 에서 읽어 보고하는
+  //   ★{계정번호: {슬롯: 캐릭이름}} 전 계정 지도★ 다. 실측(PC-03):
+  //     {"1":{6명}, "2":{2명}, "3":{2명}}  → 총 10캐릭
+  //   ★같은 물리 PC 의 모든 카드가 같은 지도를 들고 있다★ 그래서 지금 보는 계정이
+  //   어느 것이든 총계가 같다 = 탭을 눌러도 배지가 안 흔들린다.
+  //   ★폴백★ 지도가 없으면(옛 매크로/수집 전) 카드별 daily_progress 길이를 더한다.
+  //     그건 ★카드가 있는 계정만★ 세므로 실제보다 작을 수 있어 앰버로 알린다.
+  // ══════════════════════════════════════════════════════════════════════
+  const nameMap = {};
+  s.list.forEach(p => Object.assign(nameMap, p.acct_names || {}));
+  let nChar = 0, nCharAcct = 0;
+  for (const k of Object.keys(nameMap)) {
+    const cnt = Object.values(nameMap[k] || {}).filter(v => String(v || '').trim()).length;
+    if (cnt > 0) { nChar += cnt; nCharAcct++; }
+  }
+  let charGap = '';
+  if (!nChar) {                      // 지도가 없다 → 카드에서 센다(모자랄 수 있다)
+    const seen = {};
+    s.list.forEach(p => { const k = acctNumOf(p.pc_id);
+      seen[k] = Math.max(seen[k] || 0, (p.daily_progress || []).length); });
+    nChar = Object.values(seen).reduce((a, b) => a + b, 0);
+    nCharAcct = Object.keys(seen).filter(k => seen[k] > 0).length;
+    charGap = '캐릭 이름 정보가 없어 ★카드에 보인 슬롯만★ 셌습니다 (정보수집을 돌리면 정확해집니다)';
+  } else if (nCharAcct < hiNum) {
+    charGap = `계정 ${hiNum}개 중 ★${nCharAcct}개만★ 캐릭 정보가 있습니다 `
+            + `(나머지는 정보수집이 안 됐거나 info.txt 에 캐릭 이름이 비어 있습니다)`;
+  }
+  const totTip = `이 PC 의 ★총 캐릭 ${nChar}명★ · 계정 ${hiNum}개`
+    + (idNums.length && idNums.length !== hiNum ? ` (아이디 등록 ${idNums.length}개)` : '')
+    + (charGap ? ` \u2014 ${charGap}` : '');
+  const total = `<span class="acct-total${charGap ? ' acct-total-gap' : ''}" `
+    + `title="${esc(totTip)}">캐릭 ${nChar}</span>`;
   return `<div id="stack-${s.base}" class="acct-stack">
     <div class="acct-tabs">${tabs}${total}</div>
     <div class="acct-body relative">${buildCard(s.top)}</div></div>`;
@@ -5749,6 +5773,16 @@ async function requestLogs() {
 //   게임일은 ★새벽 5시★ 기준(주인님 지시). 5시 전이면 전날로 친다.
 // ═══════════════════════════════════════════════════════════════════════════
 let aiLang = localStorage.getItem('aiLang') || 'vi';   // ★기본 베트남어 (직원분들)★
+// ★AI 모달 ★안에서만★ 쓰는 상태 라벨★ — 이름에 ai 를 박은 이유가 있다.
+//   카드·전광판·자동진행 confirm 문장은 ★한국어 전용 영역★ 이다(페이지에 언어 전환이 없다).
+//   거기서 이 함수를 부르면 주인님 화면이 베트남어로 바뀐다. ★부르지 말 것.★
+//   AI 모달만 aiLang 을 따르는데 STATUS_CFG 라벨이 한국어라 한 줄에 두 언어가 섞였다
+//   (실측 2026-08-28 프로덕션: `ĐANG SĂN` 배지 옆에 「사냥 중」).
+function aiStLabel(st) {
+  const c = STATUS_CFG[st];
+  if (!c) return st || '';
+  return (aiLang === 'vi' && c.vi) ? c.vi : (c.label || st || '');
+}
 // ★★상위/하위 던전 (2026-08-23 주인님 지시)★★
 //   원문: "오늘의던전 옆에 상위던전 이라고 버튼 만들어서 그걸 눌렀을때 280k 이상 되는
 //          출력하면되고 그옆에 하위던전 버튼하나만들어서 그걸 눌렀을때는 280k 미만인
@@ -5768,7 +5802,7 @@ const AI_T = {
         fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k', fHunt:'🏹 Đang săn',
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
-        huntBusyOther:(a)=>`máy này đang săn bằng tài khoản ${a}`,
+        huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
         huntHuman:'⚠ CẦN NGƯỜI', huntHumanWhy:(a,w)=>`tài khoản ${a}: ${w} — nhân vật đang ở trong hầm ngục, cần người xử lý`,
         huntStale:(d)=>`im lặng ${d} ngày`, huntStaleNote:'thẻ cũ — không tính vào số còn lại',
         huntFoot:'Tài khoản chưa xong hôm nay (theo ô). Nếu máy đó đang săn bằng tài khoản khác thì có nhãn ĐANG SĂN. Tài khoản im lặng nhiều ngày được tách riêng và KHÔNG tính vào số còn lại. Tự cập nhật theo thời gian thực.',
@@ -5783,7 +5817,7 @@ const AI_T = {
         fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓', fHunt:'🏹 사냥',
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
-        huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 로 사냥 중`,
+        huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
         huntHuman:'⚠ 사람이 가야 함', huntHumanWhy:(a,w)=>`계정${a}: ${w} — 캐릭이 던전 안에 있습니다`,
         huntStale:(d)=>`${d}일째 소식 없음`, huntStaleNote:'옛 카드 — 남은 수에 안 셉니다',
         huntFoot:'오늘 슬롯을 다 못 끝낸 계정만 (슬롯 기준). 그 컴퓨터가 다른 계정으로 사냥 중이면 사냥중 배지가 붙습니다. 며칠째 안 뜬 계정은 따로 갈라 놓고 남은 수에 안 셉니다(옛 카드가 박제된 것이라 오늘 안 한 게 아닙니다). 실시간으로 갱신됩니다.',
@@ -6013,7 +6047,7 @@ function aiBuildHunt(){
       const cfg = STATUS_CFG[p.status || 'offline'] || STATUS_CFG.offline;
       accts.push({ pc: p.pc_id, n: acctNumOf(p.pc_id) || 1,
                    done: done, total: dp.length, left: dp.length - done,
-                   status: p.status || 'offline', label: cfg.label || '',
+                   status: p.status || 'offline', label: aiStLabel(p.status || 'offline'),
                    online: !!cfg.online,
                    stale: aiStaleDays(p),          // ★며칠째 소식 없나 (0 = 오늘)★
                    busy: AUTO_IDLE_BUSY.includes(p.status) });
@@ -6025,9 +6059,17 @@ function aiBuildHunt(){
     //   "40개 남았다" 같은 숫자가 부풀어 판단을 흐린다(실측: PC-21 이 6으로 잡혔다).
     const liveLeft = accts.filter(a => !a.stale).reduce((s, a) => s + a.left, 0);
     out.push({ base: b, busy: busy, busyAcct: busy ? (acctNumOf(busy.pc_id) || 1) : 0,
+               // ★배지에 「사냥중」을 박아두면 거짓말을 한다★ (실렌더 2026-08-28: reconnecting 인데 「사냥중」)
+               //   AUTO_IDLE_BUSY 에는 재연결·캐릭전환·캡차도 들어있다. 실제 상태를 같이 낸다.
+               busySt: busy ? (busy.status || '') : '',
                held: held, heldSt: held ? held.status : '',
                heldAcct: held ? (acctNumOf(held.pc_id) || 1) : 0,
                left: liveLeft, staleLeft: accts.reduce((s, a) => s + a.left, 0) - liveLeft,
+               // ★live 카드가 하나도 없으면 「0 남음」이 거짓말을 한다★ (실측 PC-23: 2·2·4일)
+               //   사람이 「할 일 없음」으로 읽는데 실제로는 며칠째 소식이 없는 PC 다.
+               //   ★가장 최근 소식(최솟값)★ 을 쓴다 — 최댓값이면 4일이라 쓰고 2일 전 카드를 못 본 게 된다.
+               //   목록에 남은 카드는 전부 left>=1 이므로 liveLeft===0 ⟺ 전부 stale 이다.
+               minStale: liveLeft ? 0 : Math.min.apply(null, accts.map(a => a.stale)),
                accts: accts });
   });
   // ★맨 위 = 사람이 가야 하는 PC★ (각성전/악몽 대기 — 캐릭이 던전 안에 서 있다)
@@ -6061,18 +6103,20 @@ function renderAiHunt(){
     const heldBadge = r.held
       ? `<span style="background:rgba(244,63,94,.22);color:#fda4af;border:1px solid #fb7185"
                class="px-2 py-0.5 rounded text-xs font-extrabold">${esc(T.huntHuman)}</span>
-         <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, (STATUS_CFG[r.heldSt]||{}).label || r.heldSt))}</span>`
+         <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, aiStLabel(r.heldSt)))}</span>`
       : '';
     const busyBadge = (!r.held && r.busy)
       ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399"
-               class="px-2 py-0.5 rounded text-xs font-bold">${T.huntBusy}</span>
+               class="px-2 py-0.5 rounded text-xs font-bold">${esc(aiStLabel(r.busySt) || T.huntBusy)}</span>
          <span class="text-[11px] text-emerald-300/80">${esc(T.huntBusyOther(r.busyAcct))}</span>`
       : '';
     h += `<div class="mb-3 rounded-lg border ${r.held ? 'border-rose-700' : (r.busy ? 'border-emerald-800/70' : 'border-amber-800/70')} bg-gray-800/40">
       <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60 flex-wrap">
         <span style="font-size:16px;font-weight:800;color:#fff">${esc(r.base)}</span>
         ${heldBadge}${busyBadge}
-        <span class="ml-auto text-xs ${r.busy ? 'text-gray-400' : 'text-amber-300 font-bold'}">${r.left} ${esc(T.huntLeft)}</span>
+        ${(r.left || !r.minStale)
+          ? `<span class="ml-auto text-xs ${r.busy ? 'text-gray-400' : 'text-amber-300 font-bold'}">${r.left} ${esc(T.huntLeft)}</span>`
+          : `<span class="ml-auto text-xs text-gray-500 font-bold" title="${esc(T.huntStaleNote)}">${esc(T.huntStale(r.minStale))}</span>`}
         ${r.staleLeft ? `<span class="text-[11px] text-gray-500">(+${r.staleLeft} ${esc(T.huntStaleNote)})</span>` : ''}
       </div>`;
     r.accts.forEach(a => {
