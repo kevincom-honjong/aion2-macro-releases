@@ -2133,6 +2133,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .dk-quote-by b{color:var(--dk-t2);font-weight:700}
   .dk-quote-by:empty{display:none}   /* 출처 없는 문장에서 빈 여백이 안 생기게 */
   @media(max-width:1100px){.dk-quote{max-width:22ch}}
+  /* ★구독 O/X 칸 (2026-08-29 주인님: "큰글자로 적절하게")★ 명언 ★왼쪽★.
+     flex:none 이라 명언(flex:1)이 남은 폭을 갖는다 — 줄이 밀리지 않는다. */
+  .dk-hero-sub{position:relative;z-index:1;flex:none;display:flex;flex-direction:column;
+    gap:7px;justify-content:center;padding-right:22px;margin-right:2px;
+    border-right:1px solid rgba(255,255,255,.10)}
+  .dk-hero-sub .r{display:flex;align-items:baseline;gap:9px;white-space:nowrap}
+  .dk-hero-sub .l{font-size:13px;font-weight:800;letter-spacing:.04em}
+  .dk-hero-sub .n{font-family:var(--dk-disp);font-variant-numeric:tabular-nums;
+    font-size:34px;font-weight:800;line-height:1;margin-left:auto}
+  .dk-hero-sub .on  .l{color:#6ee7b7}  .dk-hero-sub .on  .n{color:#34d399}
+  .dk-hero-sub .off .l{color:#fca5a5}  .dk-hero-sub .off .n{color:#f87171}
   .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
   .dk-sm{text-align:right}
   .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
@@ -2141,7 +2152,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .dk-sm .v i{font-size:12px;color:var(--dk-t2);font-style:normal;margin-left:2px}
   .dk-sm.gold .v{color:var(--dk-gold)}
   @media(max-width:760px){.dk-hero{gap:16px}.dk-hero-side{margin-left:0;gap:16px}
-    .dk-hero-n{font-size:44px}}
+    .dk-hero-n{font-size:44px}
+    .dk-hero-sub{padding-right:14px;gap:4px}.dk-hero-sub .n{font-size:26px}
+    .dk-hero-sub .l{font-size:11px}}
 
 /* ══════════════════════════════════════════════════════════════════════════
    ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
@@ -2522,6 +2535,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
        그대로 두고(id 하나도 안 건드림) 위에 얹기만 하므로 되돌리기 쉽다.
        값은 renderCards 끝에서 dkHero()가 채운다 — 실패해도 화면은 멀쩡하다. -->
   <div class="dk-hero">
+    <!-- ★구독 O/X (2026-08-29 주인님)★ 판정은 오드에너지 분모(840=구독/560=해제),
+         ★계정 단위★. AI 던전 목록과 ★같은 파서★ 를 쓴다 — 어긋나면 안 된다. -->
+    <div class="dk-hero-sub" id="dk-h-subbox">
+      <div class="r on"><span class="l">구독 O :</span><span class="n" id="dk-h-sub-on">–</span></div>
+      <div class="r off"><span class="l">구독 X :</span><span class="n" id="dk-h-sub-off">–</span></div>
+    </div>
     <div class="dk-hero-main">
       <div class="dk-eyebrow" id="dk-q-day">오늘의 한마디</div>
       <blockquote class="dk-quote" id="dk-q-text">…</blockquote>
@@ -2530,8 +2549,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <div class="dk-hero-side">
       <div class="dk-sm"><div class="k">평균 효율</div><div class="v" id="dk-h-eff">–</div>
         <svg width="104" height="26" id="dk-spark" aria-hidden="true"></svg></div>
-      <div class="dk-sm gold"><div class="k">창고 키나</div><div class="v" id="dk-h-kina">–</div></div>
-      <div class="dk-sm"><div class="k">완료 캐릭</div><div class="v" id="dk-h-done">–</div></div>
+      <!-- ★'창고 키나' → '키나' (창고+거래 합) (2026-08-29 주인님)★
+           '완료 캐릭' 타일은 뺐다 — 전광판에 같은 숫자가 그대로 있다. -->
+      <div class="dk-sm gold"><div class="k">키나</div><div class="v" id="dk-h-kina">–</div></div>
     </div>
   </div>
 
@@ -3605,6 +3625,29 @@ function dkQuote(){
     `${kst.getMonth()+1}월 ${kst.getDate()}일 ${kst.getHours() < 12 ? '오전' : '오후'} · 한마디`;
 }
 
+// 전광판(refreshSummary)이 구한 합계를 히어로가 물려받는다 — ★한 곳에서만 센다★
+const DK_SUM = {kina: 0, trade: null};
+
+// ★구독 O/X 세기 (2026-08-29)★ — 오드에너지 분모 ≥840 = 구독, 560 = 해제.
+//   ★계정(카드) 단위★ 라 pc_id 로 묶고 그 계정 캐릭 중 ★분모 최댓값★ 으로 판정한다
+//   (aiBuildPlan 과 같은 규칙·같은 파서 — 두 화면이 다른 답을 내면 안 된다).
+//   ★오드에너지를 아직 못 읽은 계정은 어느 쪽도 아니다★ — X 로 세지 않고 따로 알린다.
+function dkSubCount(){
+  const max = {};
+  (charTableData||[]).forEach(r => {
+    const oe = aiParseOdd(r.odd_energy);
+    if (!oe || !oe.max) return;
+    const k = r.pc_id || '';
+    max[k] = Math.max(max[k] || 0, oe.max);
+  });
+  let sub = 0, nosub = 0;
+  Object.values(max).forEach(m => { if (m >= 840) sub++; else nosub++; });
+  // 판정 불가 = 카드가 있는데 오드에너지가 하나도 안 읽힌 계정
+  const known = new Set(Object.keys(max));
+  const unknown = Object.keys(state || {}).filter(id => !known.has(id)).length;
+  return {sub, nosub, unknown};
+}
+
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
@@ -3613,10 +3656,22 @@ function dkHero(){
   const ef = pcs.filter(p=>p.efficiency);
   const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
   $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
-  $('dk-h-kina').textContent = fmtKinaShort(pcs.reduce((a,p)=>a+(p._total_kina||0),0));
-  const done = pcs.reduce((a,p)=>a+((p.daily_progress||[]).filter(dpDone).length),0);
-  const tot  = pcs.reduce((a,p)=>a+((p.chars||[]).length),0);
-  $('dk-h-done').innerHTML = done+`<i>/${tot||'–'}</i>`;
+  // ★키나 = 창고 + 거래 (2026-08-29 주인님)★ — 전광판이 센 값을 그대로 쓴다.
+  const kw = DK_SUM.kina || 0, kt = DK_SUM.trade;
+  const kEl = $('dk-h-kina');
+  kEl.textContent = fmtKinaShort(kw + (kt || 0));
+  kEl.parentElement.title = kt == null
+    ? `창고키나 ${fmtKina(kw)} — ★거래키나는 아직 수집 전이라 안 더해졌습니다★`
+    : `창고키나 ${fmtKina(kw)} + 거래키나 ${fmtKina(kt)} = ${fmtKina(kw + kt)}`;
+
+  // ★구독 O / X★
+  const sc = dkSubCount();
+  const on = $('dk-h-sub-on'), off = $('dk-h-sub-off'), box = $('dk-h-subbox');
+  if (on)  on.textContent  = sc.sub;
+  if (off) off.textContent = sc.nosub;
+  if (box) box.title = `오드에너지 분모로 판정합니다 — 840=구독 / 560=구독 해제 (계정 단위)`
+    + `\n구독 ${sc.sub}개 · 해제 ${sc.nosub}개`
+    + (sc.unknown ? `\n★${sc.unknown}개는 오드에너지 미수집이라 판정 불가★ — 어느 쪽에도 안 셌습니다 (정보수집을 돌리면 채워집니다)` : '');
 
   // 스파크라인 — 각 PC 효율을 이어 그린 실제 데이터(장식 아님)
   const vs = ef.map(p=>p.efficiency);
@@ -4500,6 +4555,10 @@ function refreshSummary(pcs) {
   elDone.textContent = c.completedChars;
   elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
   document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
+  // ★히어로가 ★같은 값★ 을 쓰게 넘겨둔다 (2026-08-29)★ — 따로 더하면 전광판과 갈린다.
+  //   renderCards 안에서 refreshSummary 가 dkHero 보다 먼저 불린다(4389 → 4394).
+  DK_SUM.kina  = c.totalKina;
+  DK_SUM.trade = tradeSeen ? totalTrade : null;
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
