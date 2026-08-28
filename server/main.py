@@ -1654,6 +1654,16 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
   .acct-tab-none{opacity:.38;cursor:not-allowed}
   .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
+  /* ★★총 계정 수 배지 (2026-08-28 주인님 그림)★★ 탭 줄 ★오른쪽 끝★.
+     margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
+     탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */
+  .acct-total{margin-left:auto;margin-right:2px;flex:none;align-self:flex-end;
+    height:22px;padding:0 9px;display:inline-flex;align-items:center;gap:4px;
+    font-size:11px;font-weight:800;line-height:1;letter-spacing:.02em;white-space:nowrap;
+    background:#0d1424;border:1px solid #2b3648;border-bottom:none;
+    border-radius:9px 9px 0 0;color:#7c8aa0;cursor:default}
+  /* 자격증명이 등록된 계정보다 탭이 많으면(=카드만 있고 아이디가 비었으면) 앰버로 알린다 */
+  .acct-total.acct-total-gap{color:#f59e0b;border-color:#78350f}
   .acct-tab .tdot{width:5px;height:5px;border-radius:50%;background:#22c55e;
     box-shadow:0 0 5px rgba(34,197,94,.9);flex:none}
   .acct-tab .tdot-rot{background:#c084fc;box-shadow:0 0 5px rgba(192,132,252,.9)}
@@ -4200,8 +4210,13 @@ function buildStack(s){
   s.list.forEach(p => { const k = acctNumOf(p.pc_id); if (!byNum[k]) byNum[k] = p; });
   const topNum = acctNumOf(s.top.pc_id);
   byNum[topNum] = s.top;
+  // ★총 계정 수는 ★자격증명(acct_ids)★ 도 같이 봐야 한다★ — 옛 매크로는 acct_total 을
+  //   안 보내므로 카드 수만 세면 「계정 5개인데 탭 2개」가 된다.
+  const idNums = Object.keys(maps.ids || {})
+      .filter(k => String((maps.ids || {})[k] || '').trim())
+      .map(k => parseInt(k, 10)).filter(n => n >= 1 && n <= MAX_ACCT);
   const hiNum = Math.min(MAX_ACCT,
-      Math.max(1, s.n, topNum, ...s.list.map(p => acctNumOf(p.pc_id))));
+      Math.max(1, s.n, topNum, ...idNums, ...s.list.map(p => acctNumOf(p.pc_id))));
   let tabs = '';
   for (let k = 1; k <= hiNum; k++) {
     const g = byNum[k];
@@ -4223,8 +4238,19 @@ function buildStack(s){
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
     tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}">${k}${dot}</button>`;
   }
+  // ★총 계정 수 배지★ — 아이디가 등록된 계정 수를 먼저 세고, 없으면 탭 수를 쓴다.
+  //   둘이 다르면(카드는 있는데 info.txt 에 아이디가 없다) 앰버로 표시해 알린다.
+  const nIds = idNums.length;
+  const gap = nIds > 0 && nIds !== hiNum;
+  const totTip = nIds > 0
+    ? (gap ? `계정 ${hiNum}개 — 그중 아이디가 등록된 것은 ${nIds}개입니다 `
+             + `(info.txt 를 확인해 주세요)`
+           : `이 PC 의 총 계정 수 ${hiNum}개 (전부 아이디 등록됨)`)
+    : `이 PC 의 총 계정 수 ${hiNum}개 (아이디 정보 없음)`;
+  const total = `<span class="acct-total${gap ? ' acct-total-gap' : ''}" `
+    + `title="${esc(totTip)}">계정 ${hiNum}${gap ? ` · 등록 ${nIds}` : ''}</span>`;
   return `<div id="stack-${s.base}" class="acct-stack">
-    <div class="acct-tabs">${tabs}</div>
+    <div class="acct-tabs">${tabs}${total}</div>
     <div class="acct-body relative">${buildCard(s.top)}</div></div>`;
 }
 
