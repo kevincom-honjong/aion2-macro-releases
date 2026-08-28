@@ -1633,9 +1633,24 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      wrapper 만 늘어나고 ★안쪽 카드는 auto 로 남았다★ = 이 수정의 목적과 정반대였다.
      (적대검증 실측: 단일계정 카드 3장이 194/194/194 → 74/194/74 로 무너졌다)
      grid-template-rows:auto 1fr 로 둘째 칸을 늘리고, 그 안에서 카드를 늘린다. */
-  .acct-stack{position:relative;display:grid;grid-template-rows:auto 1fr}
-  .acct-stack > .acct-body{display:flex}
-  .acct-stack > .acct-body > [id^="card-"]{flex:1 1 auto;width:100%}
+  /* ★★min-width:0 이 없으면 카드가 옆 카드를 덮는다 (2026-08-28 주인님 스샷)★★
+     grid item 과 flex item 의 기본값은 `min-width:auto` = ★내용 최소폭을 존중★ 이다.
+     #grid-online 은 minmax(285px,1fr) 인데, 카드 안에 긴 것(이메일 주소·계정 칩 줄)이
+     있으면 ★셀보다 넓어져 그대로 옆으로 삐져나간다.★ 예전엔 카드가 grid 직계 자식이라
+     한 겹이었는데, 탭 때문에 wrapper(grid) + .acct-body(flex) 를 끼우면서 ★세 겹★ 이
+     됐고 그만큼 잘 터진다. 세 곳 전부에 min-width:0 을 박는다.
+     ★★내가 세 번 놓친 이유 — 재는 대상이 틀렸다 (2026-08-28)★★
+     겹침을 ★wrapper 좌표★ 로만 쟀다. wrapper 는 셀에 맞아 안 겹치고
+     ★안쪽 카드★ 가 셀 밖으로 나간다. 그래서 「겹침 0」이 세 번 다 거짓이었다.
+     ★프로덕션 실측 (수정 켰다 껐다)★
+       셀 291 → 6장이 최대 39px 넘침 / 수정 적용 0장
+       셀 290 → 6장이 최대 40px 넘침 / 수정 적용 0장
+       셀 289 → 7장이 최대 40px 넘침 / 수정 적용 0장
+     주인님: "확대를 하면 안겹쳐지는데 축소하거나 기본 100%일때 겹쳐보여"
+     — 축소하면 열이 늘어 셀이 285px(최소)에 붙고, 그때 내용이 밀어낸다. */
+  .acct-stack{position:relative;display:grid;grid-template-rows:auto 1fr;min-width:0}
+  .acct-stack > .acct-body{display:flex;min-width:0}
+  .acct-stack > .acct-body > [id^="card-"]{flex:1 1 auto;width:100%;min-width:0}
   /* ★탭 크기 = 주인님이 지적한 바로 그 문제다★ — "버튼 누르기도 좇같고".
      예전 띠는 높이 16px. 첫 판에서 26×19px 로 만들었는데 ★실측해보니 여전히 작았다★
      → 36×26px(활성 29px). 손가락/마우스 조준이 편해지고, 줄 높이는 30px 로 고정이라
@@ -1647,7 +1662,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      vs 탭줄 677). 탭은 최대 5개 x 40px + gap = 216px 이고 카드 최소폭이 285px 이라
      가로로 넘칠 일이 없으므로 hidden 으로 막을 이유가 없다. */
   .acct-tabs{display:flex;align-items:flex-end;gap:3px;height:32px;padding-left:10px;
-    overflow:visible}
+    min-width:0;overflow:visible}
   .acct-tab{position:relative;top:1px;min-width:36px;height:26px;padding:0 10px;
     display:inline-flex;align-items:center;justify-content:center;gap:5px;
     font-size:13px;font-weight:800;line-height:1;letter-spacing:.02em;
@@ -4476,6 +4491,38 @@ function selectAllPcs() {
 function baseId(id){ return (id && isAcctSuf(id.slice(-1))) ? id.slice(0,-1) : id; }
 async function selUpdaterCmd(command, args={}) {
   if(selectedPcs.size===0){alert('PC를 선택하세요');return;}
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★업데이터 명령에도 확인창 (2026-08-28 실사고)★★
+  //   주인님: "카드만 업데이트할것만 선택해서 업데이트를 눌럿는데
+  //            ★선택안한것도 업데이트해버리네★"
+  //   실측: 14:46:54~14:47:00 ★6초 안에 23대★ 에 update 가 나갔다(전부 acked).
+  //   곧이어 start{rotate} 8건 — ★사냥 중인 PC 를 끊고 순환이 다시 시작시켰다.★
+  //   ★원인은 단정 못 한다★(오클릭인지 선택 잔류인지). 확실한 것은
+  //   `selCmd`·`rotCmd`·`autoIdleCmd` 는 전부 묻는데 ★여기만 안 물었다★ 는 것이다.
+  //   「전체선택」 버튼이 바로 옆에 있고 selectedPcs 는 카드가 사라져도 남는다.
+  //   update 는 매크로를 ★멈췄다 재시작★ 하므로 사냥이 끊긴다 — 물어야 할 일이다.
+  // ══════════════════════════════════════════════════════════════════════
+  {
+    const NL = String.fromCharCode(10);
+    const bases = [...new Set([...selectedPcs].map(id => baseId(id)))].sort();
+    // 지금 사냥/콘텐츠를 도는 PC 는 ★따로 세어 앞에 보여준다★ — 끊기는 쪽이다
+    const busyNow = bases.filter(b => Object.values(state).some(p =>
+        baseId(p.pc_id||'') === b && AUTO_IDLE_BUSY.includes(p.status)));
+    const LBL = {update:'업데이트 + 재시작', restart:'업데이터 재시작',
+                 update_only:'업데이트(재시작 없음)'};
+    const what = LBL[command] || command;
+    const lines = bases.map(b => '  \u00b7 ' + b
+        + (busyNow.includes(b) ? '   \u2190 ★지금 사냥/콘텐츠 중★' : ''));
+    if (!confirm('\u2191 ' + what + ' \u2014 ★' + bases.length + '대★' + NL + NL
+        + (busyNow.length
+             ? '★' + busyNow.length + '대가 지금 사냥/콘텐츠 중입니다 \u2014 끊깁니다.★' + NL + NL
+             : '')
+        + '대상:' + NL + lines.join(NL) + NL + NL
+        + (command === 'update'
+             ? '업데이트는 매크로를 ★멈췄다 다시 켭니다.★ 진행 중인 사냥/던전이 끊깁니다.' + NL
+             : '')
+        + '이 목록이 맞습니까?')) return;
+  }
   const sent=new Set(); const failed=[];
   for(const id of selectedPcs) {
     const b=baseId(id); if(sent.has(b))continue; sent.add(b);   // 같은 PC의 여러 계정 카드 중복 제거
@@ -6465,6 +6512,8 @@ async function sendUpdaterCmd(pc_id, command, args={}) {
   }
 }
 
+// ★전체 대상 업데이터 명령★ — 지금 화면에 호출부가 없다. 생기면 반드시 확인창을 붙일 것.
+//   (2026-08-28: selUpdaterCmd 가 확인 없이 23대에 나간 사고가 있었다)
 async function bulkUpdaterCmd(command, args={}) {
   const ids = [...new Set(Object.keys(state).map(baseId))];   // 계정 카드 중복 → base로 접어 1대당 1회
   if (!ids.length) { showToast('연결된 PC 없음'); return; }
