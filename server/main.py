@@ -3644,7 +3644,13 @@ function dkSubCount(){
   Object.values(max).forEach(m => { if (m >= 840) sub++; else nosub++; });
   // 판정 불가 = 카드가 있는데 오드에너지가 하나도 안 읽힌 계정
   const known = new Set(Object.keys(max));
-  const unknown = Object.keys(state || {}).filter(id => !known.has(id)).length;
+  // ★renderCards 와 ★같은 모집단★ 을 쓴다★ — PC-TEST/PC-DEMO 는 카드로 안 그린다(4409).
+  //   여기서 세면 화면에 없는 카드가 '판정 불가' 로 잡혀 툴팁이 조용히 틀린다.
+  const unknown = Object.keys(state || {}).filter(id => {
+    const b = baseId(id || '').toUpperCase();
+    if (b === 'PC-TEST' || b === 'PC-DEMO') return false;
+    return !known.has(id);
+  }).length;
   return {sub, nosub, unknown};
 }
 
