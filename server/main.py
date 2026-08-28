@@ -966,6 +966,14 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                     # ★계정-우선이 되면서 한 PC 가 tasking 에 훨씬 오래 머문다 (2026-08-28)★
                     #   「이 계정에서 몇 개 남았나」가 없으면 화면에서 진단이 안 된다.
                     pc["_rot_left"] = len([x for x in (_rs.get("queue") or []) if x])
+                # ★「사냥만 도는 순환」과 「할일까지 도는 순환」을 화면이 갈라야 한다★
+                #   (2026-08-28) 안 그러면 자동진행이 사냥 순환을 「이미 무장됨」으로
+                #   제외해 그 PC 는 할 일을 영영 안 한다.
+                if _rs.get("full"):
+                    pc["_rot_full"] = True
+                    pc["_rot_plan"] = " → ".join(
+                        ROT_TASK_LABEL.get(t, t)
+                        for t in (_rs.get("plan") or []) if t)
                 # ★전환 목표도 싣는다 (2026-08-21 주인님 요청 "전환중이라는 표시")★
                 #   stage 만으로는 '어디로' 가 안 보여서 화면에서 진단이 안 된다.
                 # ★★2026-08-23 수리: target 은 'b' 같은 ★글자★ 인데 int() 로 읽고 있었다.★★
@@ -2424,8 +2432,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <div class="cmd-group cmd-rot">
     <span class="cmd-legend">⚡ 노는 PC 자동진행</span>
     <button onclick="autoIdleCmd()" class="chip chip-green"
-            title="카드를 ★고르고★ 누르면 그 PC 만, ★아무것도 안 고르고★ 누르면 지금 사냥하지 않는 PC 전부.
-각 계정에서 일일던전 → 회랑 → 악몽 을 ★다 끝내고★ 다음 계정으로 넘어갑니다.
+            title="카드를 ★고르고★ 누르면 그 PC 만, ★아무것도 안 고르고★ 누르면 사냥만 돌거나 놀고 있는 PC 전부.
+한 계정에서 ★사냥(전 캐릭 완주) → 일일던전 → 회랑 → 악몽 → 정보수집★ 을 다 끝내고
+다음 계정으로 전환해 또 처음부터 합니다. 계정을 한 바퀴 다 돌면 종료합니다.
 누르기 전에 대상과 할 일을 전부 보여주고, 제외한 PC 는 사유까지 보여줍니다.">⚡ 남은 할 일 자동진행</button>
   </div>
 
@@ -4911,14 +4920,24 @@ function autoIdleTargets(){
     const busySt = (cards.find(c => AUTO_IDLE_BUSY.includes(c.status)) || {}).status || '';
     const heldSt = (cards.find(c => AUTO_IDLE_HELD.includes(c.status)) || {}).status || '';
     const armed  = (cards.find(c => c._rot) || {})._rot || '';
+    // ★★「사냥만 도는 순환」과 「할일까지 도는 순환」은 다르다 (2026-08-28 주인님)★★
+    //   주인님: "내가 남은 할일 자동진행을 ★체크를 해서 하든 안해서하든★ 각 계정의
+    //            할일들을 다하고 캐릭터들도 다하고 그냥 다음계정으로 넘어가서 또 하게끔"
+    //   ★예전 문제★ 사냥 순환이 걸린 PC 를 「이미 무장됨」으로 통째로 제외했는데,
+    //   그 순환은 사냥→수집→전환만 돌고 ★일일던전·회랑·악몽을 영영 안 한다.★
+    //   그래서 그 PC 들은 자동진행 대상에서도 빠지고 스스로도 할 일을 안 했다.
+    //   → 서버가 `_rot_full` 로 「할일까지 도는 순환인가」를 알려준다.
+    //     사냥만 도는 순환이면 ★대상에 넣어 할 일을 얹는다.★
+    const armedFull = !!(cards.find(c => c._rot_full) || null);
     if (!picked) {
-      // ★이미 순환이 무장돼 있으면 또 걸지 않는다★ — 두 번 걸면 작업이 겹친다
-      if (armed)  { skip.push({base:b, why:'이미 순환 무장됨 (\u{1F501} ' + armed + ')'}); continue; }
+      // 이미 ★할일까지★ 도는 순환이면 또 걸지 않는다 — 두 번 걸면 작업이 겹친다
+      if (armedFull) { skip.push({base:b, why:'이미 할 일까지 도는 순환 중 (\u{1F501} ' + armed + ')'}); continue; }
       if (busySt) { skip.push({base:b, why:'지금 ' + AUTO_IDLE_DOING(busySt)}); continue; }
       if (heldSt) { skip.push({base:b, why:AUTO_IDLE_STLABEL(heldSt) + ' \u2014 ★사람이 와야 풀립니다★'}); continue; }
     }
     const warn = [];
-    if (armed)  warn.push('이미 순환 무장됨(\u{1F501} ' + armed + ') \u2014 ★덮어씁니다★');
+    if (armedFull) warn.push('이미 할 일까지 도는 순환 중(\u{1F501} ' + armed + ') \u2014 ★덮어씁니다★');
+    else if (armed) warn.push('지금 ★사냥만★ 도는 순환 중(\u{1F501} ' + armed + ') \u2014 여기에 할 일을 얹습니다');
     if (busySt) warn.push('★지금 ' + AUTO_IDLE_DOING(busySt) + '★ \u2014 끊고 시작합니다');
     if (heldSt) warn.push(AUTO_IDLE_STLABEL(heldSt) + ' 상태');
     out.push({base: b, id: cur.pc_id, off: !live,
@@ -4955,8 +4974,8 @@ async function autoIdleCmd(){
   });
   if (!confirm(`⚡ 남은 할 일 자동진행 — ${tg.length}대  ${r.picked ? '(★고른 PC만★)' : '(자동 탐색)'}
 
-할 일: ${names}
-범위 : 각 PC의 ★전 계정★ — ★한 계정에서 ${AUTO_IDLE_TASKS.length}가지를 다 끝내고★ 다음 계정으로
+할 일: ★사냥(전 캐릭 완주)★ → ${names} → 정보수집
+범위 : 각 PC의 ★전 계정★ — ★한 계정에서 위를 전부 끝내고★ 다음 계정으로 넘어가 또 합니다
 
 대상 (온라인 ${on} / 오프라인 ${off}):
 ${lines.join(NLx)}${skipTxt}
@@ -4965,12 +4984,14 @@ ${lines.join(NLx)}${skipTxt}
 되돌리려면 각 PC에 ■정지를 눌러야 합니다.
 
 진행할까요?`)) return;
-  const first = AUTO_IDLE_TASKS[0];
-  const rest = AUTO_IDLE_TASKS.slice(1);
+  // ★★start + queue = full 순환★★ (2026-08-28 주인님)
+  //   예전엔 첫 작업(일일던전)을 바로 보냈다 = 사냥을 건너뛰고 던전부터 돌았다.
+  //   이제 ★사냥부터★ 시작해서 완주하면 그 계정에서 할 일을 펴고, 끝나면 정보수집,
+  //   그다음 계정으로 넘어가 또 사냥부터 한다.
   // ★withBulk 로 감싼다★ — 안 감싸면 sendCmd 의 「또 누르셨습니까」 중복확인이
   //   대상 대수만큼 연달아 튀어나온다(rotCmd·selCmd 는 이미 감싸고 있었다).
   await withBulk(() => Promise.all(
-      tg.map(t => sendCmd(t.id, first, {rotate: true, queue: rest}))));
+      tg.map(t => sendCmd(t.id, 'start', {rotate: true, queue: AUTO_IDLE_TASKS}))));
   showToast(`⚡ ${tg.length}대 자동진행 시작 — ${names}`);
   loadCmdHistory();
   clearSelection();
@@ -7755,9 +7776,15 @@ async def send_command(pc_id: str, request: Request):
     #   (그쪽은 이미 무장 상태를 들고 있다 — 이중 무장/덮어쓰기 없음).
     try:
         if command == "start" and bool((args or {}).get("rotate")):
-            _ok, _why = await _rot_arm(tenant, pc_id)
+            # ★★start 에 queue 를 실으면 ★full 순환★ 이다 (2026-08-28 주인님 지시)★★
+            #   "각 계정의 할일들을 다하고 캐릭터들도 다하고 그냥 다음계정으로 넘어가서 또"
+            #   → 한 계정에서 ★사냥 완주 → 실은 작업 전부 → 정보수집★ 을 하고 넘어간다.
+            #   queue 가 없으면 예전 그대로(사냥만 도는 완주 순환)라 되돌림이 없다.
+            _fq = [str(x) for x in ((args or {}).get("queue") or [])
+                   if str(x) in ROT_TASKS]
+            _ok, _why = await _rot_arm(tenant, pc_id, queue=_fq, full=bool(_fq))
             await _rot_save(force=True)
-            _rot_result = {"armed": _ok, "why": _why}
+            _rot_result = {"armed": _ok, "why": _why, "queue": _fq}
             if not _ok:
                 print(f"[순환] {pc_id} 무장 거부: {_why}")
         elif command in ROT_TASKS and bool((args or {}).get("rotate")):
@@ -9847,7 +9874,7 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
 
 # ── 무장 / 해제 ──────────────────────────────────────────────────────────────
 async def _rot_arm(tenant: str, pc_id: str, task: str = "",
-                   queue: list | None = None) -> tuple[bool, str]:
+                   queue: list | None = None, full: bool = False) -> tuple[bool, str]:
     """▶시작 버튼을 누르면 무장. ★부팅이 아니라 사람의 '시작' 이 방아쇠★ (사용자 지시).
 
     ★task 를 주면 '작업 순환' 이다 (2026-08-23)★ — 사냥 완주가 아니라 그 작업
@@ -9881,20 +9908,28 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
     # ★작업이 바뀌면 왕복 가드도 새로 센다★ — 일일던전 순환 뒤에 회랑 순환을 걸면
     #   그건 새 일이다. 같은 작업을 다시 누른 것만 hops 를 이어받아 폭주를 막는다.
     _same = str(_old.get("task") or "") == str(task or "")
-    _ROT[key] = {"stage": ("tasking" if task else "hunting"), "since": _rot_now(),
+    # ★★full = 사냥 + 할일을 ★한 계정에서 다★ 하고 넘어간다 (2026-08-28 주인님)★★
+    #   시작은 ★사냥(hunting)★ 이다 — 캐릭터를 다 돌고 나서 plan 을 편다.
+    #   그래서 stage 는 작업 순환이 아니라 완주 순환과 같은 hunting 으로 연다.
+    _stage0 = "hunting" if (full or not task) else "tasking"
+    _ROT[key] = {"stage": _stage0, "since": _rot_now(),
                  "armed_at": _rot_now(), "expect_restart": False, "target": "",
                  "day": _kst_today_key(),   # ★게임일 [C3]★
-                 "task": str(task or ""),
+                 "task": ("" if full else str(task or "")),
+                 # ★full★ 한 계정에서 사냥까지 끝내고 plan 을 편다(주인님 지시)
+                 "full": bool(full),
                  # 작업 순환 전용 — sent_at: 명령을 보낸 시각 / busy: 실제로 시작된 증거 /
                  #                  tvisit: 이번 무장에서 작업을 보낸 계정 번호들
                  "sent_at": _rot_now(), "busy": False,
                  # other: 그 작업 말고 ★다른 일★ 을 하고 있던 status (사유 보고용)
                  # retask: 거부 감지 후 재전송을 이미 한 번 했나 (무한 재시도 금지)
                  "other": "", "retask": False,
-                 "tvisit": ([str(_rot_acct_no(pc_id))] if task else []),
+                 # ★full 도 ★지금 계정★ 을 방문 완료로 넣는다★ — 안 넣으면 한 바퀴 돈 뒤
+                 #   ★계정1 로 되돌아가 같은 일을 또 한다★(하네스 T15 가 실측으로 잡았다).
+                 "tvisit": ([str(_rot_acct_no(pc_id))] if (task or full) else []),
                  # ★작업 큐 (2026-08-25 주인님 지시)★ — 한 작업이 전 계정을 돌면
                  #   여기서 다음 작업을 꺼내 이어서 돈다. 비면 그때 종료한다.
-                 "queue": [str(q) for q in (queue or []) if str(q)],
+                 "queue": ([] if full else [str(q) for q in (queue or []) if str(q)]),
                  # ★★plan — 계정-우선 순환 (2026-08-28 주인님 확답)★★
                  #   주인님: "각 계정에 할일다하고 다음계정으로 넘어가는거 맞지?"
                  #   → ★아니었다.★ 원판은 ★작업-우선★ 이었다:
@@ -9907,8 +9942,9 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
                  #   queue 를 plan[1:] 로 되감아 새 계정에서 처음부터 다시 돈다.
                  #   ★plan 이 없는 무장(옛 서버가 디스크에 남긴 것)은 아래에서
                  #     예전 작업-우선 경로로 그대로 흘러간다 = 되돌림 없는 이행.★
-                 "plan": ([str(task)] + [str(q) for q in (queue or []) if str(q)]
-                          if task else []),
+                 "plan": ([str(q) for q in (queue or []) if str(q)] if full
+                          else ([str(task)] + [str(q) for q in (queue or []) if str(q)]
+                                if task else [])),
                  "hops": int(_old.get("hops") or 0) if _same else 0,
                  "visits": dict(_old.get("visits") or {}) if _same else {}}
     # ★★②-a: 부팅지문 자리를 미리 깔아둔다★★
@@ -10370,6 +10406,30 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                              f"(이 계정 남은 작업 {len(_aq)}개)",
                            routine=not _oth)
             return
+        # ══════════════════════════════════════════════════════════
+        # ★★full 순환: 이 계정 할 일이 끝났으면 ★정보수집★ 으로 간다 (2026-08-28)★★
+        #   계정 전환은 정보수집이 끝난 뒤 완주 순환의 경로가 한다 —
+        #   미완 계정 우선·왕복 가드(visits)를 그대로 쓰기 위해서다.
+        # ══════════════════════════════════════════════════════════
+        if st.get("full") and not _aq:
+            st["char_before"] = str(active.get("_char_collected_at") or "")
+            if not _alive():
+                return
+            if not await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
+                return
+            if not _alive():
+                return
+            _acct_done = _rot_acct_no(active.get("pc_id"))
+            st.update({"stage": "collecting", "task": "", "queue": [],
+                       "since": _rot_now(), "recollect": False,
+                       "other": "", "retask": False})
+            await _rot_save(force=True)
+            await _rot_say(tenant, base,
+                           (f"계정{_acct_done} 는 {_tlabel} {_undone} → " if _undone
+                            else f"계정{_acct_done} 「{_tlabel}」 끝 → ")
+                           + "이 계정 할 일 완료 → 정보수집",
+                           routine=not _oth)
+            return
         if nxt == 0:
             # ══════════════════════════════════════════════════════════
             # ★★작업 큐 — 다음 할 일로 이어간다 (2026-08-25 주인님 지시)★★
@@ -10439,7 +10499,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 "hops": int(st.get("hops") or 0) + 1}
         # ★새 계정에서는 plan 을 처음부터 다시 돈다 (계정-우선)★
         #   switching 분기가 다음 틱에 st["task"] 를 그대로 보내므로 여기서 갈아둔다.
-        if _plan:
+        if _plan and not st.get("full"):
             _upd.update({"task": _plan[0], "queue": _plan[1:],
                          "other": "", "retask": False,
                          "fp": "", "fp_at": _rot_now()})
@@ -10478,6 +10538,28 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         acct = _rot_acct_no(active.get("pc_id"))
         # ★수집 전후를 비교할 기준점 [S10 / A2-②]★ — 초판은 존재하지도 않는 필드명
         #   (char_updated_at)을 저장하고 읽지도 않았다. 실제 필드는 _char_collected_at.
+        # ══════════════════════════════════════════════════════════════
+        # ★★full 순환: 완주했으면 ★이 계정에서 할 일부터★ 한다 (2026-08-28)★★
+        #   정보수집은 할 일을 다 끝낸 뒤에 한다 — 수집이 마지막이어야
+        #   그 계정의 최종 상태(티켓·진행도)가 서버에 남는다.
+        # ══════════════════════════════════════════════════════════════
+        _fplan = [str(x) for x in (st.get("plan") or []) if str(x)]
+        if st.get("full") and _fplan:
+            if not _alive():
+                return
+            if not await _rot_send(tenant, str(active.get("pc_id")), _fplan[0], {}):
+                return                               # ★송신 실패면 단계를 안 넘긴다 [S13]★
+            if not _alive():
+                return
+            st.update({"stage": "tasking", "task": _fplan[0], "queue": _fplan[1:],
+                       "since": _rot_now(), "sent_at": _rot_now(), "busy": False,
+                       "other": "", "retask": False, "fp": "", "fp_at": _rot_now()})
+            await _rot_save(force=True)
+            await _rot_say(tenant, base,
+                           f"계정{acct} 사냥 완주 → 이 계정에서 "
+                           f"「{' → '.join(ROT_TASK_LABEL.get(t, t) for t in _fplan)}」 시작",
+                           routine=True)
+            return
         st["char_before"] = str(active.get("_char_collected_at") or "")
         if not _alive():
             return
@@ -10587,7 +10669,18 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                             f"(char_info 갱신 없음). 화면 확인 필요")
             return
 
-        nxt, why = _rot_next_acct(cards, active)
+        # ══════════════════════════════════════════════════════════════
+        # ★★full 순환은 「미완 계정」이 아니라 「아직 안 간 계정」으로 간다 (2026-08-28)★★
+        #   _rot_next_acct 는 ★오늘 사냥이 미완인 계정★ 을 찾는다 — 완주 순환에는 맞다.
+        #   그런데 [⚡ 자동진행] 의 대상은 ★전부 오늘 완주한 PC★ 다. 그 규칙을 그대로 쓰면
+        #   계정1 에서 할 일을 하고 곧바로 「✅ 남은 계정 없음」 으로 끝나
+        #   ★계정2·3·4 는 영영 안 간다★ (하네스 T15 가 실측으로 잡았다).
+        #   full 은 할 일을 하러 가는 것이므로 ★이번 무장에서 안 간 계정★ 을 고른다.
+        # ══════════════════════════════════════════════════════════════
+        if st.get("full"):
+            nxt, why = _rot_next_acct_task(cards, active, st)
+        else:
+            nxt, why = _rot_next_acct(cards, active)
         if nxt < 0:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — {why}\n"
@@ -10647,6 +10740,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if not ok or not _alive():
             return
         _vis[str(nxt)] = _prog
+        if st.get("full"):
+            st.setdefault("tvisit", []).append(str(nxt))   # ★안 간 계정 목록을 갱신★
         st.update({"stage": "switching", "since": _rot_now(),
                    # ★만료를 같이 심는다 [C2]★ — 부팅 지문이 유실되면(실측 83회 중 4회)
                    #   expect_restart 가 True 로 남아 ★다음번 주인님의 재시작을 삼킨다.★
@@ -10707,6 +10802,21 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                 #   loot.py 의 start 는 "오늘 모든 슬롯 완료 → 시작 불가"로 조용히 반환한다.
                 #   그러면 7분 뒤 오경보로 순환이 죽는다. 여기서 미리 걸러 다음 계정으로.
                 if _rot_done(active):
+                    # ══════════════════════════════════════════════════════
+                    # ★★full 순환은 완주한 계정에도 ★할 일★ 이 남아 있다 (2026-08-28)★★
+                    #   주인님: "각 계정의 할일들을 다하고 캐릭터들도 다하고 다음계정으로"
+                    #   여기서 건너뛰면 ★완주한 계정은 던전·회랑·악몽을 영영 안 한다.★
+                    #   (하네스 T15 실측: 계정2 도착 → 「이미 완주」 → 계정1 → 종료)
+                    #   stage 를 hunting 으로 두면 다음 틱에 위 hunting 분기가
+                    #   `_rot_done` 을 보고 ★plan 을 펴는 같은 경로★ 를 탄다(중복 없음).
+                    # ══════════════════════════════════════════════════════
+                    if st.get("full") and [x for x in (st.get("plan") or []) if x]:
+                        st.update({"stage": "hunting", "since": _rot_now(),
+                                   **_rot_boot_grace(st)})
+                        await _rot_say(tenant, base,
+                                       f"계정{want_no} 전환 완료 — 오늘 사냥은 끝난 계정이라 "
+                                       f"★할 일부터★ 합니다", routine=True)
+                        return
                     # ★수집을 안 했으니 수집 증거를 요구하면 안 된다 [재검증 S-F]★
                     #   초판은 char_before 에 ★현재값★ 을 넣고 collecting 으로 넘겼다.
                     #   수집을 보낸 적이 없으니 그 값은 영원히 안 바뀌고, 7분 뒤
