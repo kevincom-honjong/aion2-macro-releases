@@ -1690,6 +1690,25 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .acct-tab .tdot{width:5px;height:5px;border-radius:50%;background:#22c55e;
     box-shadow:0 0 5px rgba(34,197,94,.9);flex:none}
   .acct-tab .tdot-rot{background:#c084fc;box-shadow:0 0 5px rgba(192,132,252,.9)}
+  /* ★사냥 완주한 계정 탭 — 숫자 옆 초록 ✓ (2026-08-29 주인님)★
+     ★:hover / .acct-tab-on 이 color 를 다시 칠하므로 반드시 그 규칙들 ★뒤★ 에 온다.★ */
+  .acct-tab-done{background:#0c1f16;border-color:#166534;color:#4ade80}
+  .acct-tab-done:hover{background:#12301f;border-color:#22c55e;color:#86efac}
+  .acct-tab-on.acct-tab-done{background:#14311f;color:#86efac;border-color:#22c55e;
+    box-shadow:0 2px 0 0 #14311f}
+  .acct-tab-on.acct-tab-done:hover{background:#14311f;color:#86efac;border-color:#22c55e}
+  .acct-tab .tchk{font-style:normal;font-weight:900;font-size:12px;line-height:1;flex:none;
+    color:#22c55e;text-shadow:0 0 6px rgba(34,197,94,.85)}
+  .acct-tab-on .tchk,.acct-tab-done .tchk{color:#4ade80}
+  /* ★진행도·효율이 잘 안 보인다 (2026-08-29 주인님)★ 라벨을 밝히고 값을 키운다.
+     예전: 라벨 #9ca3af 14px / 값 white 14px medium → 라벨이 배경에 묻혔다. */
+  .pv-k{color:#aab6c8;font-size:12px;font-weight:600;letter-spacing:.02em}
+  .pv-v{color:#f8fafc;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+  .pv-bad{color:#f87171;text-shadow:0 0 9px rgba(248,113,113,.5)}
+  /* ★서버 이름이 안 보인다 (2026-08-29 주인님)★ 반투명 글자 → 칩.
+     ★Tailwind 클래스로 쓰면 안 칠해진다★ — 번들에 없는 조합은 조용히 무시된다(실측). */
+  .srv-chip{padding:1px 7px;border-radius:6px;font-size:11px;font-weight:800;line-height:1.5;
+    letter-spacing:.02em;background:#0e4d5c;color:#a5f3fc;border:1px solid #0e7490}
   /* 선택 강조가 켜지면 남의 탭줄도 같이 죽인다 — 카드만 흐려지면 탭이 떠 보인다 */
   main:has(.card-sel) .acct-stack:not(:has(.card-sel)) .acct-tabs{opacity:.45}
   .card-sel{outline:2.5px solid #22d3ee!important;outline-offset:2px;
@@ -3701,6 +3720,17 @@ const nameMismatch = pc => {
 
 카드는 수집값이 이깁니다. info.txt 를 고쳐도 안 바뀝니다 — 정보수집을 다시 돌리십시오.">이름≠</span>`;
 };
+// ★파섹 네이티브가 안 깔린 PC 를 표시한다★ (사고 326, 2026-08-29)
+//   웹 파섹이 안 붙는 PC(15·16·17·21)에 ★네이티브 폴백★ 을 넣는데,
+//   ★네이티브가 없으면 폴백 자체가 불가★ 하다 — 사람이 설치해야 한다.
+//   ★있으면 아무것도 안 띄운다★ — 정상이 대부분이라 배지를 달면 노이즈만 된다.
+//   보고가 아예 없으면(옛 매크로) 조용히 넘어간다 — ★모르는 것을 「없다」로 쓰지 않는다.★
+const nativeMark = pc => {
+  if (!('parsec_native' in (pc || {}))) return '';      // 옛 매크로 = 판정 불가
+  if (String(pc.parsec_native || '').trim()) return ''; // 깔려 있다 = 조용히
+  return ` · <span class="text-rose-400" title="파섹 네이티브 클라이언트가 없습니다 — 웹 파섹이 안 붙는 PC 라면 되살릴 방법이 없습니다(사람이 Parsec 을 설치해야 합니다)">파섹✕</span>`;
+};
+
 const cdpMark = pc => {
   const multi = Object.values(pc.acct_ids || {}).filter(v => String(v||'').trim()).length > 1;
   if (!multi) return '';
@@ -3709,12 +3739,23 @@ const cdpMark = pc => {
   return ` · <span class="text-gray-600" title="CDP 보고 없음 — 매크로가 옛 버전(1.1.571 이하)이거나 죽어 있음">CDP?</span>`;
 };
 
+// ★표식 줄★ — 수집시각·CDP·파섹·이름불일치. cdpMark 류는 자기가 앞에 ' · ' 를 붙이므로
+//   맨 앞에 남는 구분자를 여기서 한 번만 걷어낸다(「오늘 완료」를 지우면서 생긴 자리).
+function dpMarks(pc) {
+  const head = (pc._char_collected_at
+      ? `<span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>` : '')
+    + cdpMark(pc) + nativeMark(pc) + nameMismatch(pc);
+  return head.replace(/^\s*\u00b7\s*/, '');
+}
+
 // ─── 오늘 진행 현황 ──────────────────────────────────────────────────────────
 function buildDailyProgress(dp, activeSlot, charNames, pc) {
   if (!dp || !dp.length) return '';
   // ★오늘 완료만 센다★ — 서버가 붙인 today 플래그(=completed_time 이 오늘 게임일)를 쓴다.
   //   플래그가 없는 옛 응답이면 예전처럼 completed 만 본다(today!==false).
-  const completed = dp.filter(dpDone).length;
+  // ★「오늘 완료 N/M」·「🔁 순환」을 지웠다 (2026-08-29 주인님)★
+  //   완료는 아래 슬롯 칸(✓ 초록)과 계정 탭의 ✓ 가 이미 말하고,
+  //   순환은 상태 옆 칩이 이미 말한다 — 같은 말을 세 번 하면 아무것도 안 읽힌다.
   const total = dp.length;
   const slots = dp.map(c => {
     const done = dpDone(c);
@@ -3739,7 +3780,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   }).join('');
   return `<div class="mt-2 pt-2 border-t border-gray-800/60">
     <div class="flex items-center justify-between mb-1">
-      <span class="text-gray-400" style="font-size:10px">오늘 완료 <span class="${completed===total?'text-green-500':'text-gray-500'}">${completed}/${total}</span>${pc._char_collected_at?` · <span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>`:''}${pc._rot?` · <span class="text-purple-400" title="계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다">🔁 ${esc((ROT_CHIP[pc._rot]||{}).t||pc._rot)}</span>`:''}${cdpMark(pc)}${nameMismatch(pc)}</span>
+      <span class="text-gray-400" style="font-size:10px">${dpMarks(pc)}</span>
       ${pc._total_kina?`<span class="text-yellow-400 font-semibold whitespace-nowrap" style="font-size:12px">창고키나 ${fmtKinaShort(pc._total_kina)}</span>`:''}
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
@@ -3863,23 +3904,10 @@ function isMultiAcct(pid){
   if (isAcctSuf((pid||'').slice(-1))) return true;
   return ACCT_SUFFIX.split('').some(s => state[b+s]);
 }
-function acctChip(pid){
-  if(!pid) return '';
-  const c = pid.slice(-1);
-  if(!isAcctSuf(c)){
-    // ★본계정도 멀티계정 PC에선 '계정 1' 칩(2026-08-15 사용자: "계정2는 나오는데 계정1은
-    //   안 나온다")★ — 단일 계정 PC(함대 17대)는 칩 없음 그대로.
-    if (!isMultiAcct(pid)) return '';
-    return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none bg-emerald-800/70 text-emerald-200 border-emerald-600" style="font-size:10px" title="같은 PC의 계정 1 (본계정)">계정 1</span>`;
-  }
-  // ★계정을 늘리면 색도 같이 늘린다 — 없으면 회색 폴백(칩이 사라지지는 않게)★
-  const color = {b:'bg-purple-800/70 text-purple-200 border-purple-600',
-                 c:'bg-teal-800/70 text-teal-200 border-teal-600',
-                 d:'bg-amber-800/70 text-amber-200 border-amber-600',
-                 e:'bg-rose-800/70 text-rose-200 border-rose-600'}[c]
-              || 'bg-slate-700/70 text-slate-200 border-slate-500';
-  return `<span class="ml-1 shrink-0 px-1 py-0 rounded border text-xs leading-none ${color}" style="font-size:10px" title="같은 PC의 계정 ${acctNum(c)}">계정 ${acctNum(c)}</span>`;
-}
+// ★★acctChip() 은 2026-08-29 에 지웠다 (호출처 0)★★
+//   주인님: "2번째줄에 계정3 이건 없애도될거같아 카드위에서 말해주고잇으니까"
+//   — 지금 계정은 ①카드 위 ★계정 탭★ 과 ②카드 맨 아래 ★🔑 계정 N★ 줄이 말한다.
+//   되살릴 일이 생기면 색 규약은 acctTagSpread() 의 동그라미 숫자와 맞출 것.
 // ★★순환 단계 칩 — '전환중' 이 한눈에 보이게 (2026-08-21 주인님 요청)★★
 //   원문: "그리고 대시보드에 전환중이라는 표시도 보여야할거같아"
 //   예전엔 카드 맨 아래 10px 회색으로 `🔁 switching` 만 찍혀서 ①영어고 ②안 보였다.
@@ -3889,7 +3917,7 @@ const ROT_CHIP = {
   collecting: {t:'📋 정보수집중',  c:'bg-cyan-800/80 text-cyan-100 border-cyan-500',    p:true},
   switching : {t:'🔄 계정 전환중', c:'bg-amber-700/85 text-amber-100 border-amber-400', p:true},
   starting  : {t:'▶ 사냥 시작중',  c:'bg-green-800/80 text-green-100 border-green-500', p:true},
-  hunting   : {t:'🔁 순환 ON',     c:'bg-purple-900/60 text-purple-300 border-purple-700', p:false},
+  hunting   : {t:'🔁 순환',        c:'bg-purple-900/60 text-purple-300 border-purple-700', p:false},
   // ★작업 순환 (2026-08-23)★ — 무슨 작업인지는 pc._rot_task 로 뒤에 붙는다
   tasking   : {t:'🔁 순환',        c:'bg-sky-800/85 text-sky-100 border-sky-400',       p:true},
 };
@@ -3915,7 +3943,7 @@ function buildCard(pc) {
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
   const bugBadge = (pc._bug_count||0)>0
-    ? `<span class="ml-1.5 px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
+    ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
   // ★낡은 보고는 색칠하지 않는다 (2026-08-20 PC-23)★ — 업데이터가 마지막으로 전송에
   //   성공한 값을 신선도 검사 없이 초록으로 칠하는 바람에, 14.6시간 죽은 PC 가
@@ -3933,14 +3961,13 @@ function buildCard(pc) {
     ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
     : '';
   const activeSlot = pc.slot||0;
-  const activeDp = (pc.daily_progress||[]).find(c=>c.slot===activeSlot&&!dpDone(c));
-  const activeName = activeDp
-    ? ((pc.chars&&pc.chars[activeSlot-1]) || activeDp.name || String(activeSlot))
-    : '';
   const isOnline = (STATUS_CFG[st]||STATUS_CFG.offline).online;
-  const activeTag = (activeName && isOnline)
-    ? `<span class="ml-1 px-1 py-0 bg-yellow-700/60 text-yellow-200 border border-yellow-700/80 rounded text-xs leading-none whitespace-nowrap" style="font-size:10px">${activeSlot} ${esc(activeName)}</span>`
-    : '';
+  // ★효율 60% 미만은 빨강 (2026-08-29 주인님)★ — ★온라인 카드만★ 칠한다.
+  //   꺼진 PC 는 마지막 값이 그대로 박제돼 있어 전부 빨개지면 신호가 노이즈가 된다.
+  const _effLow = (typeof pc.efficiency === 'number') && pc.efficiency < 60 && isOnline;
+  // ★[슬롯 캐릭이름] 태그는 2026-08-29 에 뺐다 (주인님: "1캐릭터이름 이것도 없애도될거같아")★
+  //   지금 도는 캐릭은 아래 진행 칸의 ▶ 가 이미 노랗게 말한다 — 두 번 말하면서
+  //   뱃지 줄을 밀어내 🏹⚔🏰🌀 가 잘렸다. 되살릴 거면 ★뱃지 줄이 아닌 곳★ 에 넣을 것.
   // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3 / 🏰보라=일일던전 티켓 소진
   const doneBadges =
     (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹</span>`:'') +
@@ -3966,9 +3993,7 @@ function buildCard(pc) {
             <!-- ★접미사(PC-20b) 노출 금지(v1.1.424 사용자: "20b 필요없어 그냥 20 하면 되고")
                  — 계정은 아랫줄 [계정 N] 칩이 말한다. 단일 계정 PC는 원래 접미사 없음.★ -->
             <span class="shrink-0">${esc(baseId(pc.pc_id||'')||'?')}</span>
-            <span class="shrink-0 flex items-center">${bugBadge}</span>
           </div>
-          ${(acctChip(pc.pc_id)||doneBadges||activeTag)?`<div class="mt-0.5 flex items-center gap-1 whitespace-nowrap overflow-hidden min-w-0">${acctChip(pc.pc_id)}${doneBadges}${activeTag}</div>`:''}
         </div>
       </div>
       <!-- 상태 쪽이 양보한다(min-w-0+truncate) — PC명은 shrink-0라 절대 안 잘림 -->
@@ -3979,15 +4004,24 @@ function buildCard(pc) {
         </span>
       </div>
     </div>
+    <!-- ★★뱃지 줄 — 헤더 ★밖★ 전폭 한 줄 (2026-08-29 주인님)★★
+         원문: "스크린샷을 2번째 제일왼쪽으로 내리고 뱃지들나오게 …
+                2번째줄에서 오른쪽으로 쌓여가면서 좀 짤리는거같은데"
+         ★왜 잘렸나★ 예전 2번째줄은 헤더(flex justify-between) ★안★ 에 있어서
+         오른쪽 상태 문구와 폭을 나눠 가졌다. 거기에 [계정N]·[1 캐릭이름] 까지
+         얹히니 whitespace-nowrap+overflow-hidden 이 뒤쪽 뱃지를 통째로 잘랐다
+         (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
+         → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
+    ${(bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
-      <div><span class="text-gray-400">진행도</span> <span class="text-white font-medium">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
-      <div class="whitespace-nowrap"><span class="text-gray-400">효율</span> <span class="text-white font-medium">${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
-      <div class="col-span-2"><span class="text-gray-400">맵</span> <span class="text-white font-medium">${esc(pc.map_name||'–')}</span></div>
-      <div><span class="text-gray-400">업타임</span> <span class="text-white font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
-      ${pc.server?`<div><span class="text-gray-400">서버</span> <span class="text-white font-medium">${pc.server}</span></div>`:''}
-      <div><span class="text-gray-400">최근</span> <span class="text-white font-medium">${relTime(pc.last_active)}</span></div>
-      <div><span class="text-gray-400">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-white font-medium'}">${pc.deaths_30m||0}회</span></div>
+      <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
+      <div class="whitespace-nowrap"><span class="pv-k">효율</span> <span class="pv-v${_effLow?' pv-bad':''}"${_effLow?' title="효율 60% 미만 — 오래 지속되면 텔레그램 알람이 나갑니다"':''}>${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
+      <div class="col-span-2"><span class="pv-k">맵</span> <span class="text-gray-100 font-medium">${esc(pc.map_name||'–')}</span></div>
+      <div><span class="pv-k">업타임</span> <span class="text-gray-100 font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
+      ${pc.server?`<div><span class="pv-k">서버</span> <span class="text-gray-100 font-medium">${esc(pc.server)}</span></div>`:''}
+      <div><span class="pv-k">최근</span> <span class="text-gray-100 font-medium">${relTime(pc.last_active)}</span></div>
+      <div><span class="pv-k">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-gray-100 font-medium'}">${pc.deaths_30m||0}회</span></div>
     </div>
     ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
@@ -4022,13 +4056,15 @@ function acctRow(pc){
   const isNC     = !!(pl && pl.label === 'NC');
   const useId    = (!pl || isNC) && !!id;
   const shown    = useId ? id : (pl ? pl.label : id);
-  const shownCls = useId ? 'text-gray-400' : (pl ? pl.cls : '');
-  return `<div class="mt-2 pt-1.5 border-t border-gray-800/80 flex items-center gap-1.5 text-gray-500 whitespace-nowrap overflow-hidden" style="font-size:11px">
-      <span class="shrink-0 text-purple-300/90">🔑 계정 ${n}</span>
-      ${isNC ? `<span class="shrink-0 text-sky-300/80" style="font-size:10px" title="플랫폼: NC">NC</span>` : ''}
-      <span class="truncate ${shownCls}" title="${esc(id || plat)}">${esc(shown)}</span>
-      ${pc.acct_nick?`<span class="shrink-0 text-gray-600">${esc(pc.acct_nick)}</span>`:''}
-      ${srv?`<span class="ml-auto shrink-0 text-cyan-400/80">${esc(srv)}</span>`:''}
+  // ★★맨 아랫줄이 안 보인다 (2026-08-29 주인님: "존더 비비드하게")★★
+  //   예전: 11px · 컨테이너 text-gray-500 · 아이디 text-gray-400 · 서버 cyan/80.
+  //   전부 반투명·회색이라 카드 배경(#111827)에 묻혔다. → 12px + 불투명 + 굵게.
+  const shownCls = useId ? 'text-slate-100' : (pl ? pl.cls : '');
+  return `<div class="mt-2 pt-1.5 border-t border-gray-700/70 flex items-center gap-1.5 whitespace-nowrap overflow-hidden" style="font-size:12px">
+      <span class="shrink-0 font-bold text-violet-300">🔑 계정 ${n}</span>
+      ${isNC ? `<span class="shrink-0 font-bold text-sky-300" style="font-size:10px" title="플랫폼: NC">NC</span>` : ''}
+      <span class="truncate font-semibold ${shownCls}" title="${esc(id || plat)}">${esc(shown)}</span>
+      ${srv?`<span class="ml-auto shrink-0 srv-chip" title="게임 서버">${esc(srv)}</span>`:''}
     </div>`;
 }
 
@@ -4256,11 +4292,18 @@ function buildStack(s){
       ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${rot?' · 🔁 순환중':''}`
         + (cur ? ' (지금 보는 계정)' : ' — 누르면 이 계정 카드를 봅니다')
       : `계정 ${k}${idTxt?' · '+idTxt:''} — 아직 카드가 없습니다(자격증명만 등록됨)`;
-    const cls = 'acct-tab' + (cur ? ' acct-tab-on' : '') + (g ? '' : ' acct-tab-none');
+    // ★★사냥 다 끝난 계정은 탭에 ★초록 ✓★ (2026-08-29 주인님)★★
+    //   원문: "계정이 사냥이 다끝나면 … 카드위에 숫자 1 V 이런식으로 초록색 체크"
+    //   판정은 카드의 🏹 뱃지와 ★같은 함수★(isHuntDone) — 두 곳이 다르게 말하면 안 된다.
+    //   ★카드가 없는 계정(acct-tab-none)은 판정 자체가 불가★ 라 아무 표시도 안 한다.
+    const hdone = !!(g && isHuntDone(g.daily_progress));
+    const cls = 'acct-tab' + (cur ? ' acct-tab-on' : '') + (g ? '' : ' acct-tab-none')
+              + (hdone ? ' acct-tab-done' : '');
     const dot = on ? `<i class="tdot${rot?' tdot-rot':''}"></i>` : '';
+    const chk = hdone ? `<i class="tchk">✓</i>` : '';
     const click = (g && !cur)
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
-    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}">${k}${dot}</button>`;
+    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${chk}${dot}</button>`;
   }
   // ══════════════════════════════════════════════════════════════════════
   // ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님)★★
