@@ -4016,7 +4016,7 @@ function buildCard(pc) {
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
-      <div class="whitespace-nowrap"><span class="pv-k">효율</span> <span class="pv-v${_effLow?' pv-bad':''}"${_effLow?' title="효율 60% 미만 — 오래 지속되면 텔레그램 알람이 나갑니다"':''}>${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
+      <div class="whitespace-nowrap"><span class="pv-k">효율</span> <span class="pv-v${_effLow?' pv-bad':''}"${_effLow?' title="효율 60%/h 미만 (주인님 기준). ★텔레그램 알람은 이것과 다른 문턱★ 이라 아직 안 나갑니다 — 알람은 15%/h 미만이 45분 이어질 때입니다"':''}>${pc.efficiency!=null ? pc.efficiency.toFixed(1)+'%/h' : '–'}</span></div>
       <div class="col-span-2"><span class="pv-k">맵</span> <span class="text-gray-100 font-medium">${esc(pc.map_name||'–')}</span></div>
       <div><span class="pv-k">업타임</span> <span class="text-gray-100 font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="pv-k">서버</span> <span class="text-gray-100 font-medium">${esc(pc.server)}</span></div>`:''}
