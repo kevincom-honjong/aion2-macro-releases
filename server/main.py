@@ -4611,11 +4611,34 @@ function refreshSummary(pcs) {
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
+// ★★사고 337 (2026-08-30) — 선택 단위를 ★사람이 보는 것★ 에 맞춘다★★
+//   주인님: "전체선택하고 몇개해제햇는데 ★해제한 번호도 들어가있어★. 저번에 고치라고한거임"
+//   ★두 번째다.★ 2026-08-28 의 「선택 안 한 것도 업데이트해버리네」와 같은 뿌리인데,
+//   그때는 ★확인창을 붙여 증상만 가렸다★(아래 selUpdaterCmd 주석). 그래서 재발했다.
+//
+//   화면에는 PC 당 카드가 ★한 장★(스택의 top)만 그려지는데, selectedPcs 에는
+//   ★계정 카드 전부★ 가 들어간다(PC-22 · 22b · 22c · 22d · 22e). 그래서
+//   전체선택이 24대인데 「61개」 였고, 카드를 눌러 빼면 ★top 하나만★ 빠졌다.
+//   → 카드 한 장 = PC 한 대. 스택을 통째로 고르고 통째로 뺀다.
+function stackIds(pc_id) {
+  const b = baseId(pc_id || '');
+  const out = Object.keys(state || {}).filter(id => baseId(id) === b);
+  return out.length ? out : [pc_id];
+}
+function selectedBases() {
+  return [...new Set([...selectedPcs].map(id => baseId(id)))].sort();
+}
 function toggleSelect(pc_id, e) {
   if (e && (e.target.tagName === 'BUTTON' || e.target.closest('.drag-handle'))) return;
-  selectedPcs.has(pc_id) ? selectedPcs.delete(pc_id) : selectedPcs.add(pc_id);
-  const card = document.getElementById(`card-${pc_id}`);
-  if (card) card.classList.toggle('card-sel', selectedPcs.has(pc_id));
+  const ids = stackIds(pc_id);
+  const on = !ids.some(id => selectedPcs.has(id));   // 하나라도 켜져 있으면 → 통째로 끈다
+  ids.forEach(id => { if (on) selectedPcs.add(id); else selectedPcs.delete(id); });
+  // 화면에 그려진 건 top 한 장이지만, 탭을 옮기면 다른 카드가 top 이 될 수 있으므로
+  // 그 스택의 어떤 카드가 그려져 있든 표시를 맞춘다.
+  ids.forEach(id => {
+    const c = document.getElementById(`card-${id}`);
+    if (c) c.classList.toggle('card-sel', on);
+  });
   updateSelBar();
 }
 
@@ -4626,8 +4649,9 @@ function clearSelection() {
 }
 
 function updateSelBar() {
-  const n=selectedPcs.size;
-  document.getElementById('sel-label').textContent=n>0?`${n}개 선택`:'선택 없음';
+  // ★사고 337★ ★물리 PC 수★ 를 센다 — 예전엔 계정 카드를 세서 24대가 「61개」 였다.
+  const n = selectedBases().length;
+  document.getElementById('sel-label').textContent = n > 0 ? `${n}대 선택` : '선택 없음';
 }
 
 function selectAllPcs() {
@@ -4974,7 +4998,7 @@ async function bulkCmd(command, args={}) {
 //   ★내가 스크립트로 쏘는 것★ 을 막는 규칙이다(a7guard.py). 여기는 사람의 클릭이다.
 async function selCmd(command, args={}) {
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
-  const n=selectedPcs.size;
+  const n = selectedBases().length;      // ★사고 337★ 물리 PC 수로 묻는다
   // ★★2026-08-28 주인님 지적 — "저거 누르니까 진짜 전pc가 다 돌던데?"★★
   //   이 줄의 이름이 「선택한 카드 1개만」 인데 실제로는 ★선택된 카드 전부★ 에 보낸다.
   //   ('1개만' 은 "순환 없이 그 계정 1회" 라는 뜻이었지 "PC 1대" 가 아니었다)
@@ -4983,7 +5007,9 @@ async function selCmd(command, args={}) {
   //   ★이게 §A7 이 막으려는 모양이다★ — 한 번 눌러 함대가 움직이는데 아무도 안 묻는다.
   //   → 2대 이상이면 대상 이름을 보여주고 묻는다. 1대면 예전처럼 바로 간다.
   if (n >= 2) {
-    const names = [...selectedPcs].sort().join(', ');
+    // ★사고 337★ 확인창도 ★물리 PC 이름★ 으로 접는다 — 예전엔 PC-22b·22c… 가
+    //   그대로 나와서, 해제한 카드가 목록에 남은 것처럼 보였다(주인님 스샷).
+    const names = selectedBases().join(', ');
     if (!confirm(`⚠️ ${command} 을 ★${n}대★ 에 보냅니다
 
 ${names}
@@ -4993,6 +5019,8 @@ ${names}
 
 진행할까요?`)) return;
   }
+  // ★보내는 것은 안 바꾼다★ — 명령은 지금처럼 ★카드별★ 로 나간다(전체선택 때 이미 그랬다).
+  //   바뀐 건 고르는 방법과 보여주는 숫자뿐이다(사고 337).
   await withBulk(() => Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args))));
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
