@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.8"
+UPDATER_VERSION  = "3.1.10"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -660,12 +660,6 @@ def start_macro() -> bool:
     → ★일부러 켜는 여기서 지운다.★ 여기까지 왔다는 건 '사용자가 끈 상태' 가 아니다.
     """
     global macro_proc
-    try:
-        if os.path.exists(NO_RESTART_PATH):
-            os.remove(NO_RESTART_PATH)
-            log("[매크로] 되살림 금지 표시 제거 (지금 일부러 켜는 중)")
-    except Exception as e:
-        err(f"[매크로] 되살림 금지 표시 제거 실패(무시): {e}")
     with _state_lock:
         if macro_proc is not None and macro_proc.poll() is None:
             log("[매크로] 이미 실행 중")
@@ -685,6 +679,19 @@ def start_macro() -> bool:
         )
         with _state_lock:
             macro_proc = proc
+        # ★★표식은 ★띄운 뒤★ 지운다 (적대검토 2차)★★
+        #   초입에서 지우면 ①아무것도 안 띄우고 나가는 경로 넷(이미 실행 중 · 외부 기동 감지 ·
+        #   EXE 없음 · Popen 실패)에서도 지워져 「표식이 없다 = 지금 켜졌다」가 거짓이 되고,
+        #   ②restart(stop→2초→start)가 매크로 부활 예약(powershell 이 죽음+3초에 검사)과
+        #   ★경합★ 해 매크로가 2개 뜰 수 있다.
+        #   여기까지 왔다는 건 ★실제로 새 프로세스를 띄웠다★ 는 뜻이다.
+        #   ★기동에 실패하면 표식이 남는다★ — PC-19 가 겨냥한 그 안전판은 그대로다.
+        try:
+            if os.path.exists(NO_RESTART_PATH):
+                os.remove(NO_RESTART_PATH)
+                log("[매크로] 되살림 금지 표시 제거 (방금 실제로 띄웠다)")
+        except Exception as e:
+            err(f"[매크로] 되살림 금지 표시 제거 실패(무시): {e}")
         _set_state("running")
         log(f"[매크로] 시작 완료 PID={proc.pid}")
         # 콘솔 최소화 → 게임 화면 클릭
@@ -845,7 +852,11 @@ def self_update(updater_info: dict):
 #   예전엔 exe 다운로드가 실패해도 이미지 한 장만 성공하면 「완료!」 를 찍고
 #   옛 버전으로 매크로를 켰다. 호출부는 그걸 성공으로 읽었다(사고 220 부류).
 #   이제 여기에 사실을 남기고, update 명령이 그걸 보고 다시 받는다.
-_LAST_UPD = {"exe_target": None, "exe_ok": True, "img_fail": 0}
+#   ★exe_ok 의 기본은 ★None(모름)★ 이다 — True(성공) 가 아니다.★
+#   적대검토(2026-08-29)가 잡았다: 서버 연결 실패는 조기 return 이라 여기를 안 건드리는데,
+#   기본이 True 면 「연결도 못 했다」가 ★성공★ 으로 읽혀 재시도도 재시작도 안 했다.
+#   ★모르는 것을 성공으로 세지 않는다★ — 본 것만 채운다.
+_LAST_UPD = {"exe_target": None, "exe_ok": None, "img_fail": 0}
 
 
 def check_and_update() -> bool:
@@ -854,7 +865,7 @@ def check_and_update() -> bool:
     ★exe 가 실제로 갱신됐는지는 반환값이 아니라 `_LAST_UPD` 를 봐야 한다★ —
     반환값은 「뭐라도 바뀌었나」라서 이미지만 받아도 True 다.
     """
-    _LAST_UPD.update({"exe_target": None, "exe_ok": True, "img_fail": 0})
+    _LAST_UPD.update({"exe_target": None, "exe_ok": None, "img_fail": 0})
     log("[업데이트] 체크 시작")
     _set_state("updating")
     local = load_local_version()
@@ -879,7 +890,10 @@ def check_and_update() -> bool:
         resp.raise_for_status()
         result = resp.json()
     except Exception as e:
-        err(f"[업데이트] 서버 연결 실패: {e}")
+        # ★★적대검토 치명 ①★★ 예전엔 여기서 _LAST_UPD 를 안 건드리고 나갔다.
+        #   기본이 True 였으므로 「서버에 연결도 못 했다」가 ★성공★ 으로 읽혔다.
+        _LAST_UPD["exe_ok"] = False
+        err(f"[업데이트] 서버 연결 실패: {e} — ★확인 못 했다(성공 아님)★")
         _set_state("stopped")
         return False
 
@@ -930,6 +944,7 @@ def check_and_update() -> bool:
                 except Exception as e:
                     err(f"[업데이트] 복구 실패: {e}")
     else:
+        _LAST_UPD["exe_ok"] = True          # 받을 게 없다 = 최신이다(확인됨)
         log(f"[업데이트] ✓ 매크로 exe 최신 (v{local.get('exe_version', '?')})")
 
     # ── 이미지 업데이트 ─────────────────────────────────────────────────────
@@ -960,7 +975,7 @@ def check_and_update() -> bool:
     # ★★거짓 「완료!」 금지 (2026-08-29)★★ 예전엔 exe 가 실패해도 이미지 한 장만
     #   받으면 「완료!」 였다. 화면에는 「눌렀는데 그대로」로만 보여서 주인님이 직접
     #   가보셔야 알았다. ★안 된 건 안 됐다고 찍는다.★
-    if not _LAST_UPD["exe_ok"]:
+    if _LAST_UPD["exe_ok"] is not True:
         err(f"[업데이트] ★실패★ — 매크로 exe v{_LAST_UPD['exe_target']} 를 못 받았다 "
             f"(옛 버전으로 계속한다). 이미지 실패 {_LAST_UPD['img_fail']}장")
     elif _LAST_UPD["img_fail"]:
@@ -1104,9 +1119,20 @@ def _restart_self(why: str) -> bool:
         err(f"[업데이터] 자기 재시작 불가 — 실행 파일이 없다: {exe}")
         return False
     try:
+        _log_shutdown(f"자기 재시작: {why}")   # ★Popen 앞에서 남긴다★ — 뒤에 두면
+    except Exception:                          #   자식이 부모를 죽일 때 사유가 통째로 사라진다
+        pass
+    try:
         args = [exe] if getattr(sys, "frozen", False) else [sys.executable, exe]
+        # ★★자식이 ★부모를 죽이지 않게★ 한다 (적대검토 치명 ②)★★
+        #   자식 main() 첫 줄의 `_kill_stale_updater_processes()` 는 다른 updater.exe 를
+        #   전부 죽인다 — ★5초 자고 있는 이 부모가 그 대상★ 이다. 그러면 아래
+        #   「살아 있는지 확인」이 아예 실행되지 않고, 자식이 곧 죽으면 그 PC 엔
+        #   업데이터가 ★하나도 없다.★ 부모는 어차피 스스로 나가므로 정리는 불필요하다.
+        _env = dict(os.environ)
+        _env["AION2_UPD_RESTART"] = "1"
         proc = subprocess.Popen(
-            args, cwd=os.path.dirname(exe),
+            args, cwd=os.path.dirname(exe), env=_env,
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
     except Exception as e:
         err(f"[업데이터] 자기 재시작 실패 — 계속 산다: {e}")
@@ -1117,15 +1143,20 @@ def _restart_self(why: str) -> bool:
             f"★나가지 않는다★ (나가면 이 PC 에 업데이터가 없어진다)")
         return False
     log(f"[업데이터] ★자기 재시작★ — {why} (새 PID={proc.pid}) → 이 프로세스는 나간다")
-    try:
-        _log_shutdown(f"자기 재시작: {why}")
-    except Exception:
-        pass
     time.sleep(1.5)
     os._exit(0)
 
 
-def _update_with_retry() -> bool:
+# ★★업데이트는 한 번에 하나만 (적대검토 2차, 배포차단)★★
+#   명령은 수신할 때마다 ★새 데몬 스레드★ 다(_poll_thread). 그런데 _LAST_UPD 는 락 없는
+#   전역이고, _update_with_retry 는 이제 수 분짜리이며 그 안에 os._exit 가 있다.
+#   겹치는 경로가 둘 다 코드로 있다 — ①대시보드를 두 번 누르면 큐에 두 행
+#   ②ack POST 가 실패하면(except: pass) 같은 명령이 10초마다 재배달된다.
+#   겹치면 서로의 판정을 덮고, 한쪽이 74MB 를 쓰는 도중 다른 쪽이 프로세스를 죽인다.
+_upd_busy = threading.Lock()
+
+
+def _update_with_retry(allow_restart: bool = True) -> bool:
     """★[업데이트] 명령 전용 — 안 되면 벌려서 다시, 그래도 안 되면 재시작★
 
     ★왜 (2026-08-29 20:07 함대 실측)★ 24대가 ★동시에 74MB★ 를 받는다.
@@ -1136,6 +1167,17 @@ def _update_with_retry() -> bool:
     그래서 ①번호로 흩뜨리고 ②실패하면 한참 벌려서 다시 받고 ③그래도 안 되면
     ★부팅 경로(자기 재시작)★ 로 넘긴다. 성공하면 즉시 빠져나온다.
     """
+    if not _upd_busy.acquire(blocking=False):
+        log("[업데이트] ★이미 업데이트가 도는 중이다 — 이번 명령은 그냥 돌려보낸다★ "
+            "(겹치면 서로의 판정을 덮고 다운로드 중에 프로세스가 죽는다)")
+        return False
+    try:
+        return _update_once(allow_restart)
+    finally:
+        _upd_busy.release()
+
+
+def _update_once(allow_restart: bool = True) -> bool:
     delay = _pc_slot(6) * 7          # 0~35초 — 동시 출발을 깬다
     if delay:
         log(f"[업데이트] 동시 다운로드를 피해 {delay}초 기다렸다 받는다 "
@@ -1145,17 +1187,18 @@ def _update_with_retry() -> bool:
         try:
             check_and_update()
         except Exception as e:
+            _LAST_UPD["exe_ok"] = False       # 예외 = 확인 못 했다(성공 아님)
             err(f"[업데이트] 체크 예외({_try}차): {e}")
-        if _LAST_UPD["exe_ok"] and not _LAST_UPD["img_fail"]:
+        if _LAST_UPD["exe_ok"] is True and not _LAST_UPD["img_fail"]:
             return True
-        what = ("매크로 exe v%s" % _LAST_UPD["exe_target"]) if not _LAST_UPD["exe_ok"] \
-            else ("이미지 %d장" % _LAST_UPD["img_fail"])
+        what = ("매크로 exe v%s" % _LAST_UPD["exe_target"]) \
+            if _LAST_UPD["exe_ok"] is not True else ("이미지 %d장" % _LAST_UPD["img_fail"])
         if _try == 1:
             wait = 25 + _pc_slot(9) * 5      # 25~65초 — 몰린 것이 빠지길 기다린다
             log(f"[업데이트] ★{what} 를 못 받았다 — {wait}초 뒤 다시 받아 본다★ "
                 f"(포기하지 않는다)")
             time.sleep(wait)
-    if not _LAST_UPD["exe_ok"]:
+    if _LAST_UPD["exe_ok"] is not True and allow_restart:
         # ★여기까지 왔으면 두 번 다 실패했다 — 주인님이 손으로 하시던 그 방법을 쓴다★
         _restart_self(f"매크로 exe v{_LAST_UPD['exe_target']} 를 두 번 다 못 받았다")
         # _restart_self 가 나가지 않았다면(새 프로세스가 못 떴다) 여기로 온다
@@ -1188,7 +1231,9 @@ def handle_command(cmd: dict):
     elif command == "update_only":
         stop_macro()
         time.sleep(1.0)
-        _update_with_retry()
+        # ★재시작하지 않는다 (적대검토 ③)★ — 재시작하면 자식이 부팅 끝에 start_macro 를
+        #   불러서 ★「업데이트만」 인데 매크로가 켜진다.★ 이름과 정반대가 된다.
+        _update_with_retry(allow_restart=False)
 
     elif command == "screenshot":
         threading.Thread(target=take_bug_screenshot, args=(True,), daemon=True).start()
@@ -1475,6 +1520,18 @@ def _upload_bugs():
 # 진입점
 # ==================================================
 def _kill_stale_updater_processes():
+    # ★★재시작으로 태어났으면 정리하지 않는다 (적대검토 치명 ②)★★
+    #   부모가 「새 놈이 5초 살아 있나」를 보고 나서 나가기로 돼 있는데, 여기서
+    #   그 부모를 죽여버리면 그 확인이 통째로 무의미해진다. 부모는 스스로 나간다.
+    # ★★★pop 이다 — get 이 아니다 (적대검토 2차, 배포차단)★★★
+    #   get 으로 두면 표식이 `os.environ` 에 ★영원히★ 남아 ★모든 자손★ 이 물려받는다:
+    #     재시작 자식 → start_macro 가 띄운 매크로 → 매크로 자가치유가 다시 띄운 updater.exe
+    #   그러면 v3.0.5 의 이중 실행 방어가 ★그 PC 에서 영영 꺼진다★ —
+    #   증상이 「명령이 반만 먹는다」로만 보여서 진단이 제일 어려운 부류다.
+    if os.environ.pop("AION2_UPD_RESTART", None) == "1":
+        log("[정리] 자기 재시작으로 태어났다 — 이번 한 번만 잔여 정리를 건너뛴다"
+            "(부모가 스스로 나간다). ★표식은 여기서 지웠다★")
+        return
     """다른 updater 프로세스 강제 종료 (v3.0.5) — 자가업데이트 후 구버전이 안 죽고 남으면
     이중 실행(명령 나눠먹기, updater_old.exe 잠금으로 파일 정리 실패, 재자가업데이트 루프)이
     되던 것 차단. 새 인스턴스가 부팅하며 잔여를 정리하므로 어떤 경로로 꼬여도 1개로 수렴."""
