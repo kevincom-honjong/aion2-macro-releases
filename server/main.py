@@ -1976,6 +1976,18 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .done-corridor{color:#bae6fd;background:rgba(14,165,233,.2);border:1px solid rgba(56,189,248,.6);
     box-shadow:0 0 8px -2px rgba(56,189,248,.65)}
 
+  /* ★구독 O/X 뱃지 — PC명 옆 동그라미 (2026-08-29 주인님: "V(체크) 동그라미 / X 동그라미")★
+     판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제. ★계정 단위 속성★.
+     ★모름은 X 가 아니다★ — 회색 ? 로 따로 낸다(사고 219: 모름을 미구독으로 읽지 말 것). */
+  .sub-badge{display:inline-flex;align-items:center;justify-content:center;
+    width:17px;height:17px;border-radius:999px;font-size:11px;line-height:1;
+    font-weight:800;margin-left:6px;flex:0 0 auto;cursor:help}
+  .sub-on {color:#bbf7d0;background:rgba(34,197,94,.20);border:1px solid rgba(74,222,128,.75);
+    box-shadow:0 0 8px -2px rgba(74,222,128,.7)}
+  .sub-off{color:#fecaca;background:rgba(239,68,68,.20);border:1px solid rgba(248,113,113,.8);
+    box-shadow:0 0 8px -2px rgba(248,113,113,.7)}
+  .sub-unk{color:#6b7280;background:rgba(107,114,128,.15);border:1px solid rgba(107,114,128,.5)}
+
   /* ── 섹션 헤더 네온 라인 / 토스트 ── */
   main section h2{position:relative}
   main section h2::after{content:'';position:absolute;left:0;bottom:-5px;width:170px;height:2px;border-radius:2px;
@@ -3641,24 +3653,16 @@ const DK_SUM = {kina: 0, trade: null};
 //   (aiBuildPlan 과 같은 규칙·같은 파서 — 두 화면이 다른 답을 내면 안 된다).
 //   ★오드에너지를 아직 못 읽은 계정은 어느 쪽도 아니다★ — X 로 세지 않고 따로 알린다.
 function dkSubCount(){
-  const max = {};
-  (charTableData||[]).forEach(r => {
-    const oe = aiParseOdd(r.odd_energy);
-    if (!oe || !oe.max) return;
-    const k = r.pc_id || '';
-    max[k] = Math.max(max[k] || 0, oe.max);
-  });
-  let sub = 0, nosub = 0;
-  Object.values(max).forEach(m => { if (m >= 840) sub++; else nosub++; });
-  // 판정 불가 = 카드가 있는데 오드에너지가 하나도 안 읽힌 계정
-  const known = new Set(Object.keys(max));
-  // ★renderCards 와 ★같은 모집단★ 을 쓴다★ — PC-TEST/PC-DEMO 는 카드로 안 그린다(4409).
-  //   여기서 세면 화면에 없는 카드가 '판정 불가' 로 잡혀 툴팁이 조용히 틀린다.
-  const unknown = Object.keys(state || {}).filter(id => {
+  // ★카드 뱃지(subBadge)와 ★같은 함수★ 로 센다 (2026-08-29)★ — 예전엔 여기서 따로
+  //   `>= 840` 으로 세는 바람에 전광판 숫자와 카드 뱃지가 어긋날 수 있었다.
+  //   ★renderCards 와 같은 모집단★ 을 쓴다 — PC-TEST/PC-DEMO 는 카드로 안 그린다(4409).
+  let sub = 0, nosub = 0, unknown = 0;
+  Object.keys(state || {}).forEach(id => {
     const b = baseId(id || '').toUpperCase();
-    if (b === 'PC-TEST' || b === 'PC-DEMO') return false;
-    return !known.has(id);
-  }).length;
+    if (b === 'PC-TEST' || b === 'PC-DEMO') return;
+    const v = subState(id);
+    if (v === 'on') sub++; else if (v === 'off') nosub++; else unknown++;
+  });
   return {sub, nosub, unknown};
 }
 
@@ -3743,6 +3747,37 @@ function isAwakenDone(pc_id){
   // (수요일 05시 초기화 후엔 게임이 3/3으로 돌아가고 다음 정보수집 때 DB 갱신돼 자연 소멸)
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
   return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
+}
+// ★구독 O/X — PC명 옆 동그라미 뱃지 (2026-08-29 주인님 요청)★
+//   판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제.
+//   ★lc/info_collector._subscribed(사고 219) · dkSubCount(3644) 와 같은 규칙·같은 파서★ —
+//   세 곳이 다른 답을 내면 화면끼리 싸운다.
+//   ★분모는 계정 단위 속성이다★ — baseId 가 아니라 ★그 카드에 떠 있는 계정(pc_id)★ 으로
+//   본다. 스택을 넘겨 뒷계정을 보면 뱃지도 같이 바뀐다(그게 "계정마다" 의 뜻).
+//   ★못 읽은 것을 X 로 읽지 않는다★ — 그게 사고 219 의 교훈이다(모름 ≠ 미구독). 회색 ?.
+// ★문턱은 700 이다 — 840 이 아니다 (2026-08-29 실측으로 정정)★
+//   `lc/info_collector._subscribed` 는 `>= 700` 으로 판정한다(분모 840 ★또는 800★ = 구독).
+//   이 화면이 840 을 쓰고 있어서 ★분모 800 인 계정을 매크로는 「구독」, 화면은 「구독 X」★
+//   로 서로 다르게 답했다. 실측: PC-17 슬롯1 이 `/800` 이다.
+//   ★행동을 가르는 쪽(매크로)이 정본이다★ — 화면이 매크로를 따라간다.
+const SUB_DEN_MIN = 700;
+function subState(pc_id){
+  let max = 0, seen = false;
+  (charTableData||[]).forEach(r => {
+    if (r.pc_id !== pc_id) return;
+    const oe = aiParseOdd(r.odd_energy);
+    if (!oe || !oe.max) return;
+    seen = true; max = Math.max(max, oe.max);
+  });
+  if (!seen) return 'unknown';
+  return max >= SUB_DEN_MIN ? 'on' : 'off';
+}
+function subBadge(pc_id){
+  const s = subState(pc_id);
+  const a = esc(pc_id || '');
+  if (s === 'on')  return `<span class="sub-badge sub-on" title="구독 O — ${a} · 오드에너지 분모 840 (던전 한 판 80 = 2배 효율, 거래소·원격창고 사용 가능)">✓</span>`;
+  if (s === 'off') return `<span class="sub-badge sub-off" title="★구독 X — ${a}★ · 오드에너지 분모 560 (던전 한 판 40, 거래소 판매 불가, 원격창고 불가)">✕</span>`;
+  return `<span class="sub-badge sub-unk" title="구독 판정 불가 — ${a} 의 오드에너지를 아직 못 읽었습니다(정보수집을 돌리면 채워집니다). ★모름을 구독 X 로 읽지 않습니다★">?</span>`;
 }
 function isCorridorDone(pc_id){
   // 어비스 회랑 완료 = 매크로가 보고한 '남은 캐릭 수'가 0 (적 진영 제외 기준, 수·토 22시 리셋).
@@ -4061,7 +4096,7 @@ function buildCard(pc) {
           <div class="font-bold text-base flex items-center gap-0">
             <!-- ★접미사(PC-20b) 노출 금지(v1.1.424 사용자: "20b 필요없어 그냥 20 하면 되고")
                  — 계정은 아랫줄 [계정 N] 칩이 말한다. 단일 계정 PC는 원래 접미사 없음.★ -->
-            <span class="shrink-0">${esc(baseId(pc.pc_id||'')||'?')}</span>
+            <span class="shrink-0">${esc(baseId(pc.pc_id||'')||'?')}</span>${subBadge(pc.pc_id)}
           </div>
         </div>
       </div>
