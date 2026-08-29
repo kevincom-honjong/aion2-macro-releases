@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.7"
+UPDATER_VERSION  = "3.1.8"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -649,7 +649,23 @@ def _macro_running_anywhere() -> bool:
 
 
 def start_macro() -> bool:
+    """★★매크로를 켠다 — 켜는 순간 「되살리지 마라」 표시는 끝난 이야기다 (2026-08-29)★★
+
+    ★실사고 PC-19★ 업데이트가 `stop_macro` 로 표시를 남겼는데 그 표시가 안 지워져서,
+    나중에 매크로가 죽었을 때 크래시 감시가
+      `[되살림] no_restart 표시 있음 — 사용자가 끈 것이므로 두고 본다`
+    로 손을 놓았다. ★그 PC 는 그대로 멈춰 있었다.★
+    표시는 매크로가 부팅 때 지우기로 돼 있는데, ★매크로가 안 뜨면 영영 남는다★ —
+    지우는 책임을 「뜨는 쪽」에 뒀는데 정작 안 뜨는 게 문제였다.
+    → ★일부러 켜는 여기서 지운다.★ 여기까지 왔다는 건 '사용자가 끈 상태' 가 아니다.
+    """
     global macro_proc
+    try:
+        if os.path.exists(NO_RESTART_PATH):
+            os.remove(NO_RESTART_PATH)
+            log("[매크로] 되살림 금지 표시 제거 (지금 일부러 켜는 중)")
+    except Exception as e:
+        err(f"[매크로] 되살림 금지 표시 제거 실패(무시): {e}")
     with _state_lock:
         if macro_proc is not None and macro_proc.poll() is None:
             log("[매크로] 이미 실행 중")
@@ -825,8 +841,20 @@ def self_update(updater_info: dict):
         except: pass
 
 
+# ★★마지막 업데이트가 ★진짜로★ 됐는지 (2026-08-29)★★
+#   예전엔 exe 다운로드가 실패해도 이미지 한 장만 성공하면 「완료!」 를 찍고
+#   옛 버전으로 매크로를 켰다. 호출부는 그걸 성공으로 읽었다(사고 220 부류).
+#   이제 여기에 사실을 남기고, update 명령이 그걸 보고 다시 받는다.
+_LAST_UPD = {"exe_target": None, "exe_ok": True, "img_fail": 0}
+
+
 def check_and_update() -> bool:
-    """서버 버전 체크 후 필요시 업데이트. True = 업데이트 있었음."""
+    """서버 버전 체크 후 필요시 업데이트. True = 업데이트 있었음.
+
+    ★exe 가 실제로 갱신됐는지는 반환값이 아니라 `_LAST_UPD` 를 봐야 한다★ —
+    반환값은 「뭐라도 바뀌었나」라서 이미지만 받아도 True 다.
+    """
+    _LAST_UPD.update({"exe_target": None, "exe_ok": True, "img_fail": 0})
     log("[업데이트] 체크 시작")
     _set_state("updating")
     local = load_local_version()
@@ -886,11 +914,14 @@ def check_and_update() -> bool:
             ok = _download_from_seed(f"{seed}/{asset}", MACRO_EXE, exe_info.get("sha256"))
         if not ok:
             ok = download_file(exe_info["download_url"], MACRO_EXE, exe_info.get("sha256"))
+        _LAST_UPD["exe_target"] = new_ver
         if ok:
             local["exe_version"] = new_ver
             any_update = True
+            _LAST_UPD["exe_ok"] = True
             log(f"[업데이트] ✓ 매크로 exe v{new_ver} 완료")
         else:
+            _LAST_UPD["exe_ok"] = False
             err(f"[업데이트] ✗ 매크로 exe 다운로드 실패")
             if os.path.exists(MACRO_EXE_BACKUP):
                 try:
@@ -918,6 +949,7 @@ def check_and_update() -> bool:
             else:
                 fail_cnt += 1
                 err(f"[업데이트] ✗ 이미지 실패: {fname}")
+        _LAST_UPD["img_fail"] = fail_cnt
         log(f"[업데이트] 이미지 완료 — 성공 {ok_cnt} / 실패 {fail_cnt}")
     else:
         log(f"[업데이트] ✓ 이미지 최신 ({len(local_image_hashes)}개)")
@@ -925,7 +957,16 @@ def check_and_update() -> bool:
     local["image_hashes"] = local_image_hashes
     local["last_check"]   = time.strftime('%Y-%m-%d %H:%M:%S')
     save_local_version(local)
-    log("[업데이트] 완료!" if any_update else "[업데이트] 모든 항목 최신")
+    # ★★거짓 「완료!」 금지 (2026-08-29)★★ 예전엔 exe 가 실패해도 이미지 한 장만
+    #   받으면 「완료!」 였다. 화면에는 「눌렀는데 그대로」로만 보여서 주인님이 직접
+    #   가보셔야 알았다. ★안 된 건 안 됐다고 찍는다.★
+    if not _LAST_UPD["exe_ok"]:
+        err(f"[업데이트] ★실패★ — 매크로 exe v{_LAST_UPD['exe_target']} 를 못 받았다 "
+            f"(옛 버전으로 계속한다). 이미지 실패 {_LAST_UPD['img_fail']}장")
+    elif _LAST_UPD["img_fail"]:
+        err(f"[업데이트] 일부 실패 — 이미지 {_LAST_UPD['img_fail']}장 못 받았다")
+    else:
+        log("[업데이트] 완료!" if any_update else "[업데이트] 모든 항목 최신")
     _set_state("stopped")
     return any_update
 
@@ -1038,6 +1079,90 @@ def _hotkey_thread():
 # ==================================================
 # 명령 처리
 # ==================================================
+def _pc_slot(mod: int) -> int:
+    """pc_id 의 숫자로 0..mod-1 자리를 준다 — ★24대가 동시에 안 받게 흩뜨리는 데 쓴다★."""
+    try:
+        import re as _re
+        m = _re.search(r"(\d+)", str(pc_id or ""))
+        return (int(m.group(1)) % mod) if m else 0
+    except Exception:
+        return 0
+
+
+def _restart_self(why: str) -> bool:
+    """★업데이터 자신을 다시 띄운다 (주인님 제안, 2026-08-29)★
+
+    부팅 경로는 `check_and_update()` 를 무조건 한 번 돌기 때문에, 다운로드가
+    계속 실패할 때 ★가장 확실한 재시도★ 다(주인님이 손으로 하시던 그 동작).
+
+    ★★새 프로세스가 살아 있는 걸 보고 나서만 나간다★★ — 안 그러면 그 PC 는
+    업데이터가 통째로 사라져서 ★사람이 직접 가야만★ 살아난다. 그건 지금 증상보다
+    훨씬 나쁘다. 못 띄우면 그냥 계속 산다(다음 명령을 기다린다).
+    """
+    exe = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
+    if not os.path.exists(exe):
+        err(f"[업데이터] 자기 재시작 불가 — 실행 파일이 없다: {exe}")
+        return False
+    try:
+        args = [exe] if getattr(sys, "frozen", False) else [sys.executable, exe]
+        proc = subprocess.Popen(
+            args, cwd=os.path.dirname(exe),
+            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0)
+    except Exception as e:
+        err(f"[업데이터] 자기 재시작 실패 — 계속 산다: {e}")
+        return False
+    time.sleep(5.0)
+    if proc.poll() is not None:
+        err(f"[업데이터] 새 업데이터가 5초 만에 죽었다(rc={proc.poll()}) — "
+            f"★나가지 않는다★ (나가면 이 PC 에 업데이터가 없어진다)")
+        return False
+    log(f"[업데이터] ★자기 재시작★ — {why} (새 PID={proc.pid}) → 이 프로세스는 나간다")
+    try:
+        _log_shutdown(f"자기 재시작: {why}")
+    except Exception:
+        pass
+    time.sleep(1.5)
+    os._exit(0)
+
+
+def _update_with_retry() -> bool:
+    """★[업데이트] 명령 전용 — 안 되면 벌려서 다시, 그래도 안 되면 재시작★
+
+    ★왜 (2026-08-29 20:07 함대 실측)★ 24대가 ★동시에 74MB★ 를 받는다.
+    내부망 시드 서버 한 대가 23대를 먹이다 전송이 끊기고(IncompleteRead 32건),
+    GitHub 폴백도 같은 순간에 몰려 실패한다. 그런데 예전 코드는 4번 연속 실패하면
+    ★그대로 포기하고 「완료!」 를 찍은 뒤 옛 버전으로 매크로를 켰다.★
+
+    그래서 ①번호로 흩뜨리고 ②실패하면 한참 벌려서 다시 받고 ③그래도 안 되면
+    ★부팅 경로(자기 재시작)★ 로 넘긴다. 성공하면 즉시 빠져나온다.
+    """
+    delay = _pc_slot(6) * 7          # 0~35초 — 동시 출발을 깬다
+    if delay:
+        log(f"[업데이트] 동시 다운로드를 피해 {delay}초 기다렸다 받는다 "
+            f"(24대가 한꺼번에 받으면 시드가 끊긴다)")
+        time.sleep(delay)
+    for _try in (1, 2):
+        try:
+            check_and_update()
+        except Exception as e:
+            err(f"[업데이트] 체크 예외({_try}차): {e}")
+        if _LAST_UPD["exe_ok"] and not _LAST_UPD["img_fail"]:
+            return True
+        what = ("매크로 exe v%s" % _LAST_UPD["exe_target"]) if not _LAST_UPD["exe_ok"] \
+            else ("이미지 %d장" % _LAST_UPD["img_fail"])
+        if _try == 1:
+            wait = 25 + _pc_slot(9) * 5      # 25~65초 — 몰린 것이 빠지길 기다린다
+            log(f"[업데이트] ★{what} 를 못 받았다 — {wait}초 뒤 다시 받아 본다★ "
+                f"(포기하지 않는다)")
+            time.sleep(wait)
+    if not _LAST_UPD["exe_ok"]:
+        # ★여기까지 왔으면 두 번 다 실패했다 — 주인님이 손으로 하시던 그 방법을 쓴다★
+        _restart_self(f"매크로 exe v{_LAST_UPD['exe_target']} 를 두 번 다 못 받았다")
+        # _restart_self 가 나가지 않았다면(새 프로세스가 못 떴다) 여기로 온다
+        err("[업데이트] ★재시작도 못 했다 — 옛 버전 그대로 둔다★ (사람 확인 필요)")
+    return False
+
+
 def handle_command(cmd: dict):
     command = cmd.get("command", "")
     log(f"[명령] 수신: {command}")
@@ -1056,14 +1181,14 @@ def handle_command(cmd: dict):
     elif command == "update":
         stop_macro()
         time.sleep(1.0)
-        check_and_update()
+        _update_with_retry()          # ★실패하면 벌려서 다시 → 그래도 안 되면 자기 재시작★
         time.sleep(1.0)
         start_macro()
 
     elif command == "update_only":
         stop_macro()
         time.sleep(1.0)
-        check_and_update()
+        _update_with_retry()
 
     elif command == "screenshot":
         threading.Thread(target=take_bug_screenshot, args=(True,), daemon=True).start()
