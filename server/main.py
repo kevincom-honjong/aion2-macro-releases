@@ -6058,6 +6058,7 @@ const AI_T = {
         kinaNone:'Chưa đọc được kina kho của tài khoản có gói nào.',
         kinaSummary:(n,k)=>`${n} tài khoản · tổng ${k}`,
         kinaHPc:'PC', kinaHSrv:'Máy chủ', kinaHKina:'Kina kho',
+        kinaSearch:'🔍 Tìm máy chủ…',
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
         huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
@@ -6079,6 +6080,7 @@ const AI_T = {
         kinaNone:'창고키나를 읽은 구독 계정이 아직 없습니다.',
         kinaSummary:(n,k)=>`구독 계정 ${n}개 · 합계 ${k}`,
         kinaHPc:'PC', kinaHSrv:'서버', kinaHKina:'창고키나',
+        kinaSearch:'🔍 서버 검색…',
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
         huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
@@ -6381,44 +6383,116 @@ function aiBuildKina(){
               kina: Number(p._total_kina) || 0,
               seen: p._total_kina != null});
   });
-  // PC 번호 → 계정 순. 사람이 목록에서 찾는 순서다.
-  out.sort((x, y) => x.base.localeCompare(y.base) || x.pid.localeCompare(y.pid));
   return out;
+}
+
+// ★정렬·검색 상태 — 화면을 닫았다 열어도 보던 대로 (2026-08-31)★
+let aiKinaSort = {key: 'pid', dir: 'asc'};
+try {
+  const _sv = JSON.parse(localStorage.getItem('aiKinaSort') || 'null');
+  if (_sv && _sv.key) aiKinaSort = _sv;
+} catch (e) {}
+let aiKinaQ = '';
+
+function kinaSorted(){
+  const q = (aiKinaQ || '').trim().toLowerCase();
+  let rows = aiBuildKina();
+  // ★서버로 검색★ (주인님 지시). 못 읽은 서버('')는 검색어가 있으면 빠진다.
+  if (q) rows = rows.filter(r => String(r.srv || '').toLowerCase().includes(q));
+  const k = aiKinaSort.key, sgn = (aiKinaSort.dir === 'desc') ? -1 : 1;
+  rows.sort((x, y) => {
+    let d;
+    if (k === 'kina') {
+      // ★못 읽은 값은 언제나 맨 뒤★ — 0 으로 취급해 섞어버리면 '비었다'로 오해한다
+      if (x.seen !== y.seen) return x.seen ? -1 : 1;
+      d = x.kina - y.kina;
+    } else if (k === 'srv') {
+      d = String(x.srv).localeCompare(String(y.srv), 'ko');
+    } else {
+      d = String(x.base).localeCompare(String(y.base)) ||
+          String(x.pid).localeCompare(String(y.pid));
+    }
+    // 같으면 PC 순으로 고정 — 다시 그릴 때마다 줄이 움직이면 눈이 자리를 잃는다
+    return d ? d * sgn : String(x.pid).localeCompare(String(y.pid));
+  });
+  return rows;
+}
+
+function kinaArrow(key){
+  if (aiKinaSort.key !== key) return '<span class="opacity-30">⇅</span>';
+  return aiKinaSort.dir === 'asc'
+    ? '<span class="text-amber-300">▲</span>' : '<span class="text-amber-300">▼</span>';
+}
+
+function kinaSortBy(key){
+  // 같은 열을 다시 누르면 오름↔내림, 다른 열이면 오름부터
+  if (aiKinaSort.key === key) aiKinaSort.dir = (aiKinaSort.dir === 'asc') ? 'desc' : 'asc';
+  else aiKinaSort = {key, dir: 'asc'};
+  try { localStorage.setItem('aiKinaSort', JSON.stringify(aiKinaSort)); } catch (e) {}
+  kinaPaint();
+}
+
+function kinaSearch(v){
+  aiKinaQ = v || '';
+  kinaPaint();                       // ★tbody 만 갈아끼운다 — 입력 커서를 안 건드린다★
+}
+
+function kinaPaint(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  const tb = document.getElementById('ai-kina-tbody');
+  if (!tb) { renderAiKina(); return; }
+  const rows = kinaSorted();
+  const tot = rows.reduce((a, r) => a + (r.seen ? r.kina : 0), 0);
+  const sum = document.getElementById('ai-summary');
+  if (sum) sum.textContent = T.kinaSummary(rows.length, fmtKinaShort(tot))
+                             + (aiKinaQ ? `  ·  🔍 ${aiKinaQ}` : '');
+  ['pid', 'srv', 'kina'].forEach(k => {
+    const el = document.getElementById('ai-kina-h-' + k);
+    if (el) el.innerHTML = el.dataset.label + ' ' + kinaArrow(k);
+  });
+  if (!rows.length) {
+    tb.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-gray-400">${esc(T.kinaNone)}</td></tr>`;
+    return;
+  }
+  let h = '';
+  rows.forEach(r => {
+    // ★못 읽은 것을 0 으로 적지 않는다★ — 0 은 '비었다'로 읽히는데 사실은 '모른다'다.
+    //   ★줄임 표기를 써도 원본은 title 에 남긴다★ (6.8억 뒤의 실제 자릿수)
+    const kv = r.seen
+      ? `<span class="font-extrabold text-amber-300 text-lg" style="font-variant-numeric:tabular-nums"
+               title="${esc(fmtKina(r.kina))}">${esc(fmtKinaShort(r.kina))}</span>`
+      : `<span class="text-gray-500 text-base" title="아직 안 읽었습니다 — 정보수집을 돌리면 채워집니다">–</span>`;
+    h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/50">
+      <td class="px-3 py-2 font-extrabold text-white text-base">${esc(r.pid)}</td>
+      <td class="px-3 py-2"><span class="text-sky-300 font-bold text-base">${esc(r.srv || '–')}</span></td>
+      <td class="px-3 py-2 text-right">${kv}</td>
+    </tr>`;
+  });
+  tb.innerHTML = h;
 }
 
 function renderAiKina(){
   const T = AI_T[aiLang] || AI_T.vi;
   document.getElementById('ai-title').textContent = T.kinaTitle;
   document.getElementById('ai-foot').textContent = T.kinaFoot;
-  const rows = aiBuildKina();
   const body = document.getElementById('ai-body');
-  const sum = document.getElementById('ai-summary');
-  if (!rows.length) {
-    body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${esc(T.kinaNone)}</div>`;
-    sum.textContent = '';
-    return;
-  }
-  const tot = rows.reduce((a, r) => a + r.kina, 0);
-  sum.textContent = T.kinaSummary(rows.length, fmtKina(tot));
-  let h = `<table class="w-full text-sm">
-    <thead><tr class="text-left text-gray-400 border-b border-gray-700">
-      <th class="px-3 py-2">${esc(T.kinaHPc)}</th>
-      <th class="px-3 py-2">${esc(T.kinaHSrv)}</th>
-      <th class="px-3 py-2 text-right">${esc(T.kinaHKina)}</th>
-    </tr></thead><tbody>`;
-  rows.forEach(r => {
-    // ★못 읽은 것을 0 으로 적지 않는다★ — 0 은 '비었다' 로 읽히는데 사실은 '모른다' 다.
-    const kv = r.seen
-      ? `<span class="font-extrabold text-amber-300" style="font-variant-numeric:tabular-nums">${fmtKina(r.kina)}</span>`
-      : `<span class="text-gray-500" title="아직 안 읽었습니다 — 정보수집을 돌리면 채워집니다">–</span>`;
-    h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/40">
-      <td class="px-3 py-1.5 font-bold text-white">${esc(r.pid)}</td>
-      <td class="px-3 py-1.5 text-gray-300">${esc(r.srv || '–')}</td>
-      <td class="px-3 py-1.5 text-right">${kv}</td>
-    </tr>`;
-  });
-  h += '</tbody></table>';
-  body.innerHTML = h;
+  const th = 'px-3 py-2 cursor-pointer select-none hover:text-white text-gray-300 font-bold';
+  body.innerHTML = `
+    <div class="mb-3">
+      <input id="ai-kina-q" type="search" value="${esc(aiKinaQ)}"
+             oninput="kinaSearch(this.value)" placeholder="${esc(T.kinaSearch)}"
+             class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-base
+                    text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500">
+    </div>
+    <table class="w-full text-base">
+      <thead><tr class="text-left border-b border-gray-700">
+        <th id="ai-kina-h-pid"  data-label="${esc(T.kinaHPc)}"   onclick="kinaSortBy('pid')"  class="${th}"></th>
+        <th id="ai-kina-h-srv"  data-label="${esc(T.kinaHSrv)}"  onclick="kinaSortBy('srv')"  class="${th}"></th>
+        <th id="ai-kina-h-kina" data-label="${esc(T.kinaHKina)}" onclick="kinaSortBy('kina')" class="${th} text-right"></th>
+      </tr></thead>
+      <tbody id="ai-kina-tbody"></tbody>
+    </table>`;
+  kinaPaint();
 }
 
 function renderAiHunt(){
