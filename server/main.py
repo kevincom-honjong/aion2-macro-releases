@@ -2897,6 +2897,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
              던전 추천(charTableData=정보수집)과 달리 이 탭은 ★state(실시간 카드)★ 를 본다. -->
         <button onclick="setAiFilter('hunt')" id="ai-f-hunt"
                 class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
+        <!-- ★★키나 탭 (2026-08-31 주인님 지시)★★
+             원문: "사냥 옆에 탭하나 더만들자 키나 라고 만들고, 여기는 구독한거만
+                    나타나게하고 하는 PC 랑 서버 창고키나 딱 나오게"
+             구독 판정은 subState(문턱 700) 하나만 쓴다 — 탭마다 다른 답이 나오면 안 된다. -->
+        <button onclick="setAiFilter('kina')" id="ai-f-kina"
+                class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
       </div>
       <div class="flex items-center gap-2">
         <button onclick="setAiLang('vi')" id="ai-lang-vi" class="text-xs px-2 py-1 rounded bg-fuchsia-700 text-white font-bold">🇻🇳 VI</button>
@@ -6046,7 +6052,12 @@ const AI_T = {
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
-        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k', fHunt:'🏹 Đang săn',
+        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k', fHunt:'🏹 Đang săn', fKina:'💰 Kina',
+        kinaTitle:'💰 Kina kho (chỉ tài khoản có gói)',
+        kinaFoot:'Chỉ hiện tài khoản đang có gói (mẫu số Odd ≥700). Kina kho dùng chung theo tài khoản.',
+        kinaNone:'Chưa đọc được kina kho của tài khoản có gói nào.',
+        kinaSummary:(n,k)=>`${n} tài khoản · tổng ${k}`,
+        kinaHPc:'PC', kinaHSrv:'Máy chủ', kinaHKina:'Kina kho',
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
         huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
@@ -6062,7 +6073,12 @@ const AI_T = {
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
-        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓', fHunt:'🏹 사냥',
+        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓', fHunt:'🏹 사냥', fKina:'💰 키나',
+        kinaTitle:'💰 창고키나 (구독한 계정만)',
+        kinaFoot:'구독한 계정만 보입니다(오드에너지 분모 ≥700). 창고키나는 계정 단위 공유값입니다.',
+        kinaNone:'창고키나를 읽은 구독 계정이 아직 없습니다.',
+        kinaSummary:(n,k)=>`구독 계정 ${n}개 · 합계 ${k}`,
+        kinaHPc:'PC', kinaHSrv:'서버', kinaHKina:'창고키나',
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
         huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
@@ -6192,7 +6208,10 @@ function aiBuildPlan(){
   });
   const out = [];
   Object.values(acc).forEach(a => {
-    const sub = a.max >= 840;
+    // ★2026-08-31 — 여기만 840 으로 남아 있었다★ (2026-08-29 정정 때 빠졌다)
+    //   dkSubCount·subBadge 는 SUB_DEN_MIN(700) 인데 여기만 840 이라, 분모 800 계정을
+    //   ★던전 탭만 「구독 X」★ 로 봤다. 같은 모달 안에서 탭마다 답이 다르면 안 된다.
+    const sub = a.max >= SUB_DEN_MIN;
     // ★파워 기준선 하나로 상/하위를 가른다 (2026-08-23)★ 나머지 규칙은 그대로.
     const elig = a.chars
       .filter(c => aiFilter === 'lo' ? c.pw < AI_PW_CUT : c.pw >= AI_PW_CUT)
@@ -6215,7 +6234,7 @@ function aiBuildPlan(){
 
 // ★상/하위/사냥 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
 function setAiFilter(f){
-  aiFilter = (f === 'lo' || f === 'hunt') ? f : 'hi';
+  aiFilter = (f === 'lo' || f === 'hunt' || f === 'kina') ? f : 'hi';
   try{ localStorage.setItem('aiFilter', aiFilter); }catch(e){}
   renderAiPlan();
 }
@@ -6338,6 +6357,70 @@ function aiBuildHunt(){
   return out;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ★★키나 탭 (2026-08-31 주인님 지시)★★
+//   원문: "사냥 옆에 탭하나 더만들자 키나 라고 만들고, 여기는 구독한거만 나타나게하고
+//          하는 PC 랑 서버 창고키나 딱 나오게"
+//
+//   ★값을 새로 만들지 않는다★ — 셋 다 이미 정본이 있다:
+//     구독     subState(pc_id)                  (문턱 700, 카드 뱃지와 ★같은 함수★)
+//     창고키나  state[pc]._total_kina            (전광판 refreshSummary 가 쓰는 그 값)
+//     서버명   groupAcctMaps(base).servers[n]   (카드 계정줄이 쓰는 그 지도)
+//   ★창고키나는 계정 단위 공유값★ 이라 캐릭터별로 더하지 않는다(더하면 중복이다).
+// ═══════════════════════════════════════════════════════════════════════════
+function aiBuildKina(){
+  const out = [];
+  Object.values(state || {}).forEach(p => {
+    const pid = p.pc_id || '';
+    if (!pid || /^PC-(TEST|DEMO)/i.test(pid)) return;
+    if (subState(pid) !== 'on') return;                 // ★구독한 것만★
+    const n = acctNumOf(pid);
+    const srv = (p.acct_servers && p.acct_servers[n]) ||
+                groupAcctMaps(baseId(pid)).servers[n] || '';
+    out.push({pid, base: baseId(pid), srv,
+              kina: Number(p._total_kina) || 0,
+              seen: p._total_kina != null});
+  });
+  // PC 번호 → 계정 순. 사람이 목록에서 찾는 순서다.
+  out.sort((x, y) => x.base.localeCompare(y.base) || x.pid.localeCompare(y.pid));
+  return out;
+}
+
+function renderAiKina(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  document.getElementById('ai-title').textContent = T.kinaTitle;
+  document.getElementById('ai-foot').textContent = T.kinaFoot;
+  const rows = aiBuildKina();
+  const body = document.getElementById('ai-body');
+  const sum = document.getElementById('ai-summary');
+  if (!rows.length) {
+    body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${esc(T.kinaNone)}</div>`;
+    sum.textContent = '';
+    return;
+  }
+  const tot = rows.reduce((a, r) => a + r.kina, 0);
+  sum.textContent = T.kinaSummary(rows.length, fmtKina(tot));
+  let h = `<table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-400 border-b border-gray-700">
+      <th class="px-3 py-2">${esc(T.kinaHPc)}</th>
+      <th class="px-3 py-2">${esc(T.kinaHSrv)}</th>
+      <th class="px-3 py-2 text-right">${esc(T.kinaHKina)}</th>
+    </tr></thead><tbody>`;
+  rows.forEach(r => {
+    // ★못 읽은 것을 0 으로 적지 않는다★ — 0 은 '비었다' 로 읽히는데 사실은 '모른다' 다.
+    const kv = r.seen
+      ? `<span class="font-extrabold text-amber-300" style="font-variant-numeric:tabular-nums">${fmtKina(r.kina)}</span>`
+      : `<span class="text-gray-500" title="아직 안 읽었습니다 — 정보수집을 돌리면 채워집니다">–</span>`;
+    h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/40">
+      <td class="px-3 py-1.5 font-bold text-white">${esc(r.pid)}</td>
+      <td class="px-3 py-1.5 text-gray-300">${esc(r.srv || '–')}</td>
+      <td class="px-3 py-1.5 text-right">${kv}</td>
+    </tr>`;
+  });
+  h += '</tbody></table>';
+  body.innerHTML = h;
+}
+
 function renderAiHunt(){
   const T = AI_T[aiLang] || AI_T.vi;
   document.getElementById('ai-title').textContent = T.huntTitle;
@@ -6418,9 +6501,14 @@ function renderAiPlan(){
     bHi.className = (aiFilter === 'hi') ? on : off;
     bLo.className = (aiFilter === 'lo') ? on : off;
     if (bHt) { bHt.textContent = T.fHunt || '🏹'; bHt.className = (aiFilter === 'hunt') ? onHunt : off; }
+    // ★키나 탭은 호박색★ — 던전(자홍)·사냥(초록)과 목적이 또 다르다
+    const bKi = document.getElementById('ai-f-kina');
+    const onKina = 'text-xs px-2.5 py-1 rounded font-bold bg-amber-600 text-white';
+    if (bKi) { bKi.textContent = T.fKina || '💰'; bKi.className = (aiFilter === 'kina') ? onKina : off; }
   }
   // ★사냥 탭은 state(실시간 카드)를 보므로 여기서 갈라 나간다★
   if (aiFilter === 'hunt') { renderAiHunt(); return; }
+  if (aiFilter === 'kina') { renderAiKina(); return; }
   const plan = aiBuildPlan();
   const body = document.getElementById('ai-body');
   if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
