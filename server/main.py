@@ -6060,6 +6060,11 @@ const AI_T = {
         kinaHPc:'PC', kinaHSrv:'Máy chủ', kinaHKina:'Kina kho',
         kinaSearch:'🔍 Tìm máy chủ…',
         kinaNoHit:(q)=>`Không có máy chủ nào khớp "${q}".`,
+        kinaHSold:'Đã bán', kinaReset:'↺ Xoá dấu',
+        kinaSold:(n,m)=>`Đã bán ${n}/${m}`,
+        kinaResetTip:'Xoá toàn bộ dấu đã bán (tự động xoá lúc 5h sáng)',
+        kinaResetAsk:(n)=>`Xoá ${n} dấu đã bán?`,
+        kinaResetOk:'✓ Đã xoá dấu đã bán',
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
         huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
@@ -6083,6 +6088,11 @@ const AI_T = {
         kinaHPc:'PC', kinaHSrv:'서버', kinaHKina:'창고키나',
         kinaSearch:'🔍 서버 검색…',
         kinaNoHit:(q)=>`"${q}" 에 맞는 서버가 없습니다. (읽은 게 없는 게 아니라 검색 결과입니다)`,
+        kinaHSold:'판매완료', kinaReset:'↺ 체크 리셋',
+        kinaSold:(n,m)=>`판매 ${n}/${m}`,
+        kinaResetTip:'판매완료 체크를 전부 지웁니다 (새벽 5시에도 자동으로 지워집니다)',
+        kinaResetAsk:(n)=>`판매완료 체크 ${n}개를 전부 지울까요?`,
+        kinaResetOk:'✓ 판매완료 체크를 지웠습니다',
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
         huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
@@ -6119,6 +6129,58 @@ async function aiLoadDone(){
     // ★게임일이 바뀌었으면 통째로 버린다 = 새벽 5시 리셋★
     aiDone = (v && v.day === aiGameDay()) ? {day:v.day, keys:v.keys||[]} : {day:aiGameDay(), keys:[]};
   }catch(e){ aiDone = {day:aiGameDay(), keys:[]}; }
+}
+
+// ★★판매완료 체크 (2026-08-31 주인님 지시) — aiDone 과 같은 규약★★
+//   저장은 서버 설정이다(브라우저가 아니다) — 여럿이 같이 보는 화면이라
+//   한 사람이 체크하면 다른 사람 화면에도 있어야 한다.
+//   ★게임일(새벽 5시)이 바뀌면 통째로 버린다★ — 어제 판 것이 오늘 체크로 남으면
+//   「판 줄 알았는데 안 팔림」이 된다.
+let aiKinaSold = { day: '', keys: [] };
+
+async function aiLoadKinaSold(){
+  try{
+    const r = await fetch('/setting/ai_kina_sold');
+    const j = await r.json();
+    const v = JSON.parse(j.value || '{}');
+    aiKinaSold = (v && v.day === aiGameDay()) ? {day:v.day, keys:v.keys||[]}
+                                              : {day:aiGameDay(), keys:[]};
+  }catch(e){ aiKinaSold = {day:aiGameDay(), keys:[]}; }
+}
+
+async function aiSaveKinaSold(){
+  aiKinaSold.day = aiGameDay();
+  try{
+    await fetch('/setting/ai_kina_sold', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({value: JSON.stringify(aiKinaSold)})});
+  }catch(e){ showToast('⛔ 판매완료 저장 실패'); }
+}
+
+async function aiToggleKinaSold(key, el){
+  const i = aiKinaSold.keys.indexOf(key);
+  if (i >= 0) aiKinaSold.keys.splice(i,1); else aiKinaSold.keys.push(key);
+  // ★줄은 안 움직인다★ — 그 자리에서 흐려지기만 한다(던전 탭과 같은 규칙)
+  const tr = el && el.closest('tr');
+  if (tr) tr.style.opacity = (i >= 0) ? '' : '.45';
+  const c = document.getElementById('ai-kina-cnt');
+  if (c) c.textContent = kinaSoldLabel();
+  await aiSaveKinaSold();
+}
+
+function kinaSoldLabel(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  const rows = kinaSorted();
+  const n = rows.filter(r => aiKinaSold.keys.includes(r.pid)).length;
+  return T.kinaSold(n, rows.length);
+}
+
+async function aiResetKinaSold(){
+  const T = AI_T[aiLang] || AI_T.vi;
+  if (!confirm(T.kinaResetAsk(aiKinaSold.keys.length))) return;
+  aiKinaSold.keys = [];
+  await aiSaveKinaSold();
+  kinaPaint();
+  showToast(T.kinaResetOk);
 }
 
 async function aiSaveDone(){
@@ -6195,6 +6257,7 @@ function aiAcctInfo(pcid){
 async function openAiPlan(){
   document.getElementById('ai-modal').classList.remove('hidden');
   await aiLoadDone();
+  await aiLoadKinaSold();          // ★판매완료 체크도 서버에서 받아온다 (2026-08-31)★
   setAiLang(aiLang);
 }
 
@@ -6457,7 +6520,7 @@ function kinaPaint(){
     //   검색 중인데 "창고키나를 읽은 구독 계정이 아직 없습니다" 라고 적으면
     //   사람이 정보수집을 의심하러 간다 — 오늘 하루 내내 잡은 그 부류다.
     const msg = aiKinaQ ? T.kinaNoHit(aiKinaQ) : T.kinaNone;
-    tb.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-gray-400">${esc(msg)}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="4" class="px-3 py-8 text-center text-gray-400">${esc(msg)}</td></tr>`;
     return;
   }
   let h = '';
@@ -6468,13 +6531,22 @@ function kinaPaint(){
       ? `<span class="font-extrabold text-amber-300 text-lg" style="font-variant-numeric:tabular-nums"
                title="${esc(fmtKina(r.kina))}">${esc(fmtKinaShort(r.kina))}</span>`
       : `<span class="text-gray-500 text-base" title="아직 안 읽었습니다 — 정보수집을 돌리면 채워집니다">–</span>`;
-    h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/50">
+    // ★체크해도 자리는 그대로★ — 흐리게만 한다(정렬 키에 done 을 안 넣는다)
+    const sold = aiKinaSold.keys.includes(r.pid);
+    h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/50" style="${sold?'opacity:.45':''}">
       <td class="px-3 py-2 font-extrabold text-white text-base">${esc(r.pid)}</td>
       <td class="px-3 py-2"><span class="text-sky-300 font-bold text-base">${esc(r.srv || '–')}</span></td>
       <td class="px-3 py-2 text-right">${kv}</td>
+      <td class="px-3 py-2 text-center">
+        <input type="checkbox" ${sold?'checked':''}
+               onchange="aiToggleKinaSold('${esc(r.pid)}', this)"
+               class="w-5 h-5 accent-emerald-500 cursor-pointer" title="${esc(T.kinaHSold)}">
+      </td>
     </tr>`;
   });
   tb.innerHTML = h;
+  const c = document.getElementById('ai-kina-cnt');
+  if (c) c.textContent = kinaSoldLabel();
 }
 
 function renderAiKina(){
@@ -6484,17 +6556,23 @@ function renderAiKina(){
   const body = document.getElementById('ai-body');
   const th = 'px-3 py-2 cursor-pointer select-none hover:text-white text-gray-300 font-bold';
   body.innerHTML = `
-    <div class="mb-3">
+    <div class="mb-3 flex items-center gap-2">
       <input id="ai-kina-q" type="search" value="${esc(aiKinaQ)}"
              oninput="kinaSearch(this.value)" placeholder="${esc(T.kinaSearch)}"
-             class="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-base
+             class="flex-1 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-base
                     text-gray-100 placeholder-gray-500 focus:outline-none focus:border-amber-500">
+      <span id="ai-kina-cnt" class="text-sm text-gray-400 whitespace-nowrap"></span>
+      <button onclick="aiResetKinaSold()"
+              class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-rose-700 text-gray-200 text-sm
+                     font-bold whitespace-nowrap transition-colors"
+              title="${esc(T.kinaResetTip)}">${esc(T.kinaReset)}</button>
     </div>
     <table class="w-full text-base">
       <thead><tr class="text-left border-b border-gray-700">
         <th id="ai-kina-h-pid"  data-label="${esc(T.kinaHPc)}"   onclick="kinaSortBy('pid')"  class="${th}"></th>
         <th id="ai-kina-h-srv"  data-label="${esc(T.kinaHSrv)}"  onclick="kinaSortBy('srv')"  class="${th}"></th>
         <th id="ai-kina-h-kina" data-label="${esc(T.kinaHKina)}" onclick="kinaSortBy('kina')" class="${th} text-right"></th>
+        <th class="px-3 py-2 text-center text-gray-300 font-bold whitespace-nowrap">${esc(T.kinaHSold)}</th>
       </tr></thead>
       <tbody id="ai-kina-tbody"></tbody>
     </table>`;
