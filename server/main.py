@@ -6059,6 +6059,7 @@ const AI_T = {
         kinaSummary:(n,k)=>`${n} tài khoản · tổng ${k}`,
         kinaHPc:'PC', kinaHSrv:'Máy chủ', kinaHKina:'Kina kho',
         kinaSearch:'🔍 Tìm máy chủ…',
+        kinaNoHit:(q)=>`Không có máy chủ nào khớp "${q}".`,
         huntTitle:'🏹 Chưa săn xong', huntNone:'✅ Tất cả tài khoản đã săn xong hôm nay.',
         huntBusy:'ĐANG SĂN', huntOff:'ngoại tuyến', huntSlot:'ô', huntLeft:'còn',
         huntBusyOther:(a)=>`máy này đang chạy tài khoản ${a}`,
@@ -6081,6 +6082,7 @@ const AI_T = {
         kinaSummary:(n,k)=>`구독 계정 ${n}개 · 합계 ${k}`,
         kinaHPc:'PC', kinaHSrv:'서버', kinaHKina:'창고키나',
         kinaSearch:'🔍 서버 검색…',
+        kinaNoHit:(q)=>`"${q}" 에 맞는 서버가 없습니다. (읽은 게 없는 게 아니라 검색 결과입니다)`,
         huntTitle:'🏹 아직 사냥 안 끝난 계정', huntNone:'✅ 오늘 전 계정이 사냥을 마쳤습니다.',
         huntBusy:'사냥중', huntOff:'오프라인', huntSlot:'슬롯', huntLeft:'남음',
         huntBusyOther:(a)=>`이 컴퓨터는 지금 계정${a} 이 돌고 있습니다`,
@@ -6451,7 +6453,11 @@ function kinaPaint(){
     if (el) el.innerHTML = el.dataset.label + ' ' + kinaArrow(k);
   });
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-gray-400">${esc(T.kinaNone)}</td></tr>`;
+    // ★「검색에 안 걸렸다」와 「읽은 게 없다」는 다르다 (2026-08-31)★
+    //   검색 중인데 "창고키나를 읽은 구독 계정이 아직 없습니다" 라고 적으면
+    //   사람이 정보수집을 의심하러 간다 — 오늘 하루 내내 잡은 그 부류다.
+    const msg = aiKinaQ ? T.kinaNoHit(aiKinaQ) : T.kinaNone;
+    tb.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-gray-400">${esc(msg)}</td></tr>`;
     return;
   }
   let h = '';
