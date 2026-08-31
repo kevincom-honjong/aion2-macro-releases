@@ -9830,6 +9830,26 @@ async def serve_image(fname: str):
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+@app.post("/check/purge")
+async def check_purge(request: Request):
+    """★version.json 캐시를 즉시 비운다 (사고 357)★
+
+    ★왜★ `_load_version_json` 은 300초 캐시라 릴리스 직후에도 옛 버전을 광고한다.
+    그동안 배포 스크립트는 ★가만히 기다린다★ — 매 배포마다 최대 5분을 버렸다.
+    릴리스가 끝난 쪽에서 이걸 한 번 때리면 다음 `/check` 가 바로 새 값을 읽는다.
+
+    ★캐시를 없애지는 않는다★ — 함대 21대가 5분마다 찌르는 걸 전부 GitHub raw 로
+    보내면 rate limit 에 걸린다. ★비우는 문만 열어둔다.★
+    """
+    if not check_api_key(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    _old = ((_version_cache.get("data") or {}).get("exe") or {}).get("version")
+    _version_cache["data"] = {}
+    _version_cache["ts"] = 0
+    _new = (_load_version_json().get("exe") or {}).get("version")
+    return {"ok": True, "was": _old, "now": _new}
+
+
 @app.post("/check")
 async def updater_check(request: Request):
     """updater.exe가 호출 — exe/이미지/updater 업데이트 필요 여부 응답"""
