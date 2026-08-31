@@ -698,6 +698,28 @@ app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
 # ─────────────────────────────────────────────────────────────────────────────
 OFFLINE_TIMEOUT = timedelta(seconds=90)
 
+# ★★매크로 침묵 임계 (사고 355, 2026-08-31)★★
+#   업데이터가 살아 있어도 ★매크로가 서버에 닿은 지★ 이만큼 지나면 카드를 오프라인으로 내린다.
+#   실측 근거: 살아있는 매크로의 서버 수신 나이 최대 ★47초★ (하트비트 30초 톱니) → 여유 19배.
+#   ★매크로가 찍은 시각(last_active)이 아니라 서버가 받은 시각으로 잰다★ — 시계가 PC 마다
+#   최대 273초 어긋나 있어서(실측) 그걸로 재면 멀쩡한 PC 가 오프라인이 된다.
+MACRO_SILENT_TIMEOUT = 900
+
+
+def _age_s(ts_str):
+    """타임스탬프가 몇 초 전인가. 못 읽으면 None(=모름) — ★모름을 '늙었다'로 읽지 않는다★."""
+    if not ts_str:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(ts_str).replace("Z", ""))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds()
+    except Exception:
+        return None
+
+
+
 def _is_stale(updated_at_str: str | None) -> bool:
     """updated_at 타임스탬프가 ★90초★(OFFLINE_TIMEOUT) 이상 지났으면 True.
 
@@ -834,6 +856,40 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 pc["status"] = "offline"
         else:
             # base 카드인데 updater 기록 자체가 없으면 offline (기존 규칙)
+            pc["status"] = "offline"
+
+        # ══════════════════════════════════════════════════════════════════
+        # ★★사고 355 — 매크로가 죽어도 카드가 「사냥중」으로 영원히 남았다★★
+        #   주인님(2026-08-31): "14번컴퓨터 플도 꺼졋는데 왜자꾸 사냥중이라고 떠잇는거임?"
+        #
+        # ★실측★ PC-14: 10:14:27 사냥 도중 매크로가 죽었고(마지막 로그가 「[키나] 패널
+        #   열림 확인 ✓」, 작별 인사 없음 · 내부망 8765 접속 타임아웃 = 프로세스 없음),
+        #   ★11.5시간 뒤에도 카드가 hunting★ 이었다. 서버 수신 나이 41,460초.
+        #
+        # ★왜 기존 규칙이 못 잡았나★
+        #   · 위 elif(833) 는 ★업데이터★ 보고 나이만 본다. PC-14 의 업데이터는 17초마다
+        #     멀쩡히 보고 중이라 영원히 안 걸린다. PC 는 켜져 있고 매크로만 죽은 것이다.
+        #   · 위 if(823) 는 ★부계정 카드★ 에만 적용된다. base 카드(PC-14)는 매크로 자신의
+        #     신선도를 ★한 번도 안 본다.★
+        #   · 설계 의도는 「매크로가 떠나며 마지막 offline 보고」(829~831) 였는데,
+        #     그 작별은 exit/restart/계정전환 세 경로에만 있다(loot.py:752·820, config.py:575).
+        #     ★크래시·강제종료·정전에는 작별이 없다★ (main.py 의 finally 에도 없다).
+        #
+        # ★임계는 음성이 정했다★ — 살아있는 매크로의 ★서버 수신★ 나이 실측 최대 47초
+        #   (하트비트 30초, report_module._heartbeat_thread). 900초면 여유 19배다.
+        #   ★last_active(매크로가 찍은 시각)로 재면 안 된다★ — PC 마다 시계가 최대 273초
+        #   어긋나 있어(PC-09 실측: 수신 27초인데 매크로시각 301초) 그걸로 재면
+        #   멀쩡한 PC 가 상수 오프셋만으로 오프라인이 된다. ★서버가 받은 시각으로만 잰다.★
+        #
+        # ★세 가지가 ★전부★ 죽었을 때만 내린다★ — 하나라도 살아 있으면 손대지 않는다.
+        # ══════════════════════════════════════════════════════════════════
+        _sil = _age_s(pc.get("_updated_at"))
+        pc["_macro_silent_s"] = int(_sil) if _sil is not None else -1
+        if (ns(tenant, pid) not in macro_ws_connections
+                and not seen_fresh(ns(tenant, pid), MACRO_SILENT_TIMEOUT)
+                and _sil is not None and _sil > MACRO_SILENT_TIMEOUT
+                and pc.get("status") != "offline"):
+            pc["_stale_flip"] = pc.get("status")      # ★무엇을 내렸는지 남긴다★
             pc["status"] = "offline"
         pc["_bug_count"] = bug_counts.get(_base_pc(pid), 0)   # ★PC 단위★ (2026-08-23)
         pc["deaths_30m"] = death_counts.get(pid, 0)
