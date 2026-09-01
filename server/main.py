@@ -818,6 +818,9 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
             u = updater_map[ukey]
             pc["_updater_state"]   = u.get("macro_state", "unknown")
             pc["_updater_version"] = u.get("updater_version", "")
+            # ★사고 384 (주인님 지시)★ 매크로가 죽어도 보이는 화면 주소.
+            #   「오프라인되면 볼수가없네」 — 매크로 lan_url 이 안 될 때 이걸로 본다.
+            pc["_view_url"]        = u.get("view_url", "")
             # ★★업데이터 보고가 얼마나 낡았는지 같이 싣는다 (2026-08-20 PC-23)★★
             #   _updater_state 는 업데이터가 ★마지막으로 전송에 성공한★ 값이다.
             #   그런데 카드는 신선도를 전혀 안 보고 그대로 초록색으로 칠했다.
@@ -932,6 +935,8 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                 "status":           "offline",
                 "_updater_state":   u.get("macro_state", "unknown"),
                 "_updater_version": u.get("updater_version", ""),
+                # ★사고 384★ 매크로가 죽은 카드 — 여기가 오히려 화면이 제일 필요한 자리다
+                "_view_url":        u.get("view_url", ""),
                 "_bug_count":       bug_counts.get(_base_pc(pid), 0),   # ★PC 단위★
                 "deaths_30m":       death_counts.get(pid, 0),
             }
@@ -4101,6 +4106,22 @@ function rotChip(pc) {
   return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${r.c}${r.p?' pulse':''}"
                 title="${title}">${r.t}${esc(tk)}${esc(tgt)}</span>`;
 }
+// ★★사고 391 — ★순회를 걸었는데 메인 카드에 안 보인다★★ (주인님 2026-09-01)
+//   원문: 「아직도 대시보드에 순회라고안뜨는데?」
+//   ★사고 380 에서 배지를 넣긴 했는데 ★사냥 탭(6689행) 한 곳에만★ 넣었다.★
+//   주인님이 늘 보시는 ★메인 카드★ 에는 안 붙어서 「안 걸렸다」로 보였다.
+//   /status 는 카드마다 tour("1/2 collect") · tour_seq("1→2") 를 이미 싣고 온다.
+//   ★rotChip 과 다른 것이다★ — rotChip 은 `_rot`(완주 감지 자동순환)이고
+//   이건 사람이/내가 명시적으로 건 `acct_tour` 다. 둘은 같이 떠도 된다.
+//   ★값이 없으면 아예 안 그린다★ — 「안 걸림」과 「옛 매크로라 못 보냄」을 뭉개지 않는다.
+function tourChip(pc) {
+  const t = pc.tour;
+  if (!t) return '';
+  const seq = pc.tour_seq ? ` (${pc.tour_seq})` : '';
+  return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none"
+                style="background:rgba(129,140,248,.2);color:#c7d2fe;border-color:#818cf8"
+                title="${esc('전 계정 순회 진행도: ' + t + seq + ' — 이 계정 작업이 끝나면 다음 계정으로 전환합니다')}">🔁 ${esc(t)}</span>`;
+}
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
@@ -4166,7 +4187,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>${rotChip(pc)}${pendChip(pc)}
+          <span class="truncate">${cfg.label}</span>${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
         </span>
       </div>
     </div>
@@ -5517,11 +5538,23 @@ function cardCmdSwitch() {
 function openLogFromMenu(){const id=menuPcId; closeCardMenu(); openLogModal(id);}
 function liveFromMenu(){const id=menuPcId; closeCardMenu(); openLive(id);}
 function lanFromMenu(){
-  const id=menuPcId, u=((state[id]||{}).lan_url)||'';
+  const id=menuPcId, st=(state[id]||{}), u=st.lan_url||'';
   closeCardMenu();
   // ★내부망 서버가 안 열린 PC★ — 아직 구버전이거나 info.txt에 lan_prefix가 없거나
   //   내부망 랜선이 안 꽂힌 경우다. 조용히 아무 일도 안 하면 원인을 알 수 없으니 알려준다.
   if(!/^http:\/\/[\d.]+:\d+\/\?k=/.test(u)){
+    // ★★사고 384 (주인님 지시) — ★매크로가 죽어도 화면은 봐야 한다★★
+    //   주인님: 「오프라인되면 볼수가없네」
+    //   매크로 화면서버(8765)는 매크로 안에 있어 같이 죽는다. 그런데 화면이
+    //   ★제일 필요한 순간이 바로 그때★ 다. 업데이터는 살아 있으므로
+    //   보기 전용 서버(8767)를 열어두고, 여기서 그리로 폴백한다.
+    //   ★보기만 된다★ — 조작은 8765(매크로)가 계속 맡는다.
+    const v = st._view_url||'';
+    if(/^http:\/\/[\d.]+:\d+\/frame\.jpg\?k=/.test(v)){
+      showToast('매크로가 꺼져 있어 ★업데이터 보기 전용★ 화면을 엽니다 (조작은 안 됩니다)');
+      window.open(v,'_blank');
+      return;
+    }
     showToast('내부망 주소 없음 — 매크로 v1.1.358+ 이고 info.txt에 lan_prefix= 가 있어야 합니다');
     return;
   }
