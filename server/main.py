@@ -6465,6 +6465,12 @@ function aiBuildHunt(){
                  return { name: (row && row.name) || ('슬롯' + w), slot: w };
                })(),
                heldAcct: held ? (acctNumOf(held.pc_id) || 1) : 0,
+               // ★사고 380 (주인님 지적)★ 「순회걸었다고 대시보드에는안뜨는데?」
+               //   매크로가 tour="2/4 hunt" · tour_seq="1→2→3→4" 를 보낸다.
+               //   ★옛 매크로는 안 보낸다★ → 값이 없으면 배지를 아예 안 그린다
+               //   (없는 것과 「안 걸림」을 뭉개지 않는다).
+               tour: (cards.find(c => c && c.tour) || {}).tour || "",
+               tourSeq: (cards.find(c => c && c.tour) || {}).tour_seq || "",
                left: liveLeft, staleLeft: accts.reduce((s, a) => s + a.left, 0) - liveLeft,
                // ★live 카드가 하나도 없으면 「0 남음」이 거짓말을 한다★ (실측 PC-23: 2·2·4일)
                //   사람이 「할 일 없음」으로 읽는데 실제로는 며칠째 소식이 없는 PC 다.
@@ -6662,6 +6668,11 @@ function renderAiHunt(){
          <span class="text-[11px] text-rose-300/90">${esc(T.huntHumanWhy(r.heldAcct, aiStLabel(r.heldSt)))}${
              r.heldWho ? esc(T.huntHumanWho(r.heldWho.name, r.heldWho.slot)) : ''}</span>`
       : '';
+    // ★사고 380★ 계정 순회가 걸려 있으면 그걸 보여준다 — 「걸었다」를 화면에서 확인한다
+    const tourBadge = r.tour
+      ? `<span style="background:rgba(129,140,248,.2);color:#c7d2fe;border:1px solid #818cf8"
+               class="px-2 py-0.5 rounded text-xs font-bold" title="계정 순회 ${esc(r.tourSeq)}">🔁 ${esc(r.tour)}</span>`
+      : '';
     const busyBadge = (!r.held && r.busy)
       ? `<span style="background:rgba(16,185,129,.2);color:#6ee7b7;border:1px solid #34d399"
                class="px-2 py-0.5 rounded text-xs font-bold">${esc(aiStLabel(r.busySt) || T.huntBusy)}</span>
@@ -6670,6 +6681,7 @@ function renderAiHunt(){
     h += `<div class="mb-3 rounded-lg border ${r.held ? 'border-rose-700' : (r.busy ? 'border-emerald-800/70' : 'border-amber-800/70')} bg-gray-800/40">
       <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/60 flex-wrap">
         <span style="font-size:16px;font-weight:800;color:#fff">${esc(r.base)}</span>
+        ${tourBadge}
         ${heldBadge}${busyBadge}
         ${(r.left || !r.minStale)
           ? `<span class="ml-auto text-xs ${r.busy ? 'text-gray-400' : 'text-amber-300 font-bold'}">${r.left} ${esc(T.huntLeft)}</span>`
