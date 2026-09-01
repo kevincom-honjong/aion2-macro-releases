@@ -4136,9 +4136,20 @@ function rotChip(pc) {
 //   이건 사람이/내가 명시적으로 건 `acct_tour` 다. 둘은 같이 떠도 된다.
 //   ★값이 없으면 아예 안 그린다★ — 「안 걸림」과 「옛 매크로라 못 보냄」을 뭉개지 않는다.
 function tourChip(pc) {
-  const t = pc.tour;
+  // ★사고 391-b★ 순회 값은 ★그 순회를 시작한 계정 카드★ 에 실려 온다.
+  //   전환이 끝나면 앞에 보이는 카드는 ★다른 계정★ 이라 자기 tour 가 비어 있고,
+  //   그러면 「순회 안 걸림」으로 보인다(PC-01 실측: PC-01 에 '2/2 collect',
+  //   화면에 보이는 PC-01b 는 ''). 사냥 탭(6502행)은 이미 스택 전체를 뒤진다 —
+  //   ★같은 것을 두 곳이 다르게 보면 안 된다★(§A8-5). 여기도 형제까지 본다.
+  let t = pc.tour, seqv = pc.tour_seq;
+  if (!t) {
+    for (const id of stackIds(pc.pc_id || '')) {
+      const sib = state[id];
+      if (sib && sib.tour) { t = sib.tour; seqv = sib.tour_seq; break; }
+    }
+  }
   if (!t) return '';
-  const seq = pc.tour_seq ? ` (${pc.tour_seq})` : '';
+  const seq = seqv ? ` (${seqv})` : '';
   return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none"
                 style="background:rgba(129,140,248,.2);color:#c7d2fe;border-color:#818cf8"
                 title="${esc('전 계정 순회 진행도: ' + t + seq + ' — 이 계정 작업이 끝나면 다음 계정으로 전환합니다')}">🔁 ${esc(t)}</span>`;
