@@ -2574,7 +2574,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <button onclick="rotAllowDlg()" class="chip chip-indigo"
             title="완주 후 자동으로 정보수집 → 다음 계정으로 넘어가는 ★자동순환★ 을
 어느 PC 에 허용할지 정합니다. 비어 있으면 ▶시작을 눌러도 무장되지 않습니다.
-★한 대로 시작해 넓히는 것이 원칙입니다★ (CLAUDE.md A7).">🔁 자동순환 허용…</button>
+★한 대로 시작해 넓히는 것이 원칙입니다★ (CLAUDE.md A7).">🔁 자동순환…</button>
   </div>
 
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
@@ -5310,6 +5310,25 @@ function autoIdleTargets(){
 //   실측 `rot_allow=''` = 카나리아 게이트가 아무도 통과 못 시킨다. ▶시작을 눌러도
 //   「허용 목록이 비어 있음」으로 조용히 거부된다. 그런데 켜는 길이 API 뿐이었다.
 //   ★지금 값을 먼저 보여준다★ — 「내가 뭘 바꾸는지」를 모르고 누르게 하지 않는다.
+// ★사고 395★ 자동순환이 켜져 있는지 ★버튼 라벨에서 바로★ 보이게 한다.
+//   꺼져 있으면 붉게 — 「기능이 통째로 죽어 있는데 아무도 모르는」 상태를 만들지 않는다.
+async function rotAllowBadge(){
+  const b = document.querySelector('button[onclick="rotAllowDlg()"]');
+  if (!b) return;
+  try {
+    const j = await (await fetch('/rotate', {credentials:'same-origin'})).json();
+    const al = j.allow || [], armed = Object.keys(j.rotating || {}).length;
+    let tag;
+    if (!al.length)              tag = '★꺼짐★';
+    else if (al.indexOf('*')>=0) tag = '전체';
+    else                         tag = al.length + '대';
+    b.textContent = '🔁 자동순환 ' + tag + (armed ? ' · 무장 ' + armed + '대' : '');
+    // ★꺼져 있으면 색으로 말한다★ — 글자만으로는 안 읽힌다(실측: 며칠간 아무도 몰랐다)
+    b.style.background = al.length ? '' : 'rgba(244,63,94,.25)';
+    b.style.borderColor = al.length ? '' : '#f43f5e';
+    b.style.color = al.length ? '' : '#fda4af';
+  } catch(e) { /* ★못 읽었다고 라벨을 거짓으로 바꾸지 않는다★ — 그대로 둔다 */ }
+}
 async function rotAllowDlg(){
   let cur = '', armed = 0;
   try {
@@ -8111,6 +8130,12 @@ function handleCharInfoMsg(msg) {
   if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   setInterval(renderCards,60000);
+  // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)
+  //   `rot_allow` 가 빈 채로 얼마나 오래 있었는지 아무도 몰랐다. ▶시작은 눌리는데
+  //   무장은 매번 조용히 거부됐고(토스트는 몇 초 뒤 사라진다), 주인님은
+  //   「정보수집하는것도 없어진거같고」로 ★증상으로만★ 알아채셨다.
+  //   → 버튼 라벨에 ★지금 상태★ 를 상시로 박는다. 꺼져 있으면 붉게 보인다.
+  rotAllowBadge(); setInterval(rotAllowBadge, 60000);
   setInterval(loadCharTable,120000);   // 각성티켓/뱃지 폴백 갱신(WS char_info 놓쳐도 2분 내 반영)
   checkServerBoot(); setInterval(checkServerBoot,5000);   // 서버 재시작 감지 → 자동 새로고침
   // 탭이 백그라운드면 배경 이펙트(별밭/오로라/혜성) 애니메이션 정지 — GPU 낭비 방지
