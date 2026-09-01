@@ -2564,6 +2564,17 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 한 계정에서 ★사냥(전 캐릭 완주) → 일일던전 → 회랑 → 악몽 → 정보수집★ 을 다 끝내고
 다음 계정으로 전환해 또 처음부터 합니다. 계정을 한 바퀴 다 돌면 종료합니다.
 누르기 전에 대상과 할 일을 전부 보여주고, 제외한 PC 는 사유까지 보여줍니다.">⚡ 남은 할 일 자동진행</button>
+    <!-- ★★사고 395 — ★켤 손잡이가 없는 옵트인은 꺼진 기능이다★★ (주인님 2026-09-01)
+         원문: 「지금 계정하나의 사냥 다끝나고 난뒤에 정보수집하는것도 없어진거같고」
+         ★실측★ `rot_allow` 가 ★빈 문자열★ 이었다 = 카나리아 게이트가 아무도 통과
+         못 시킨다. ▶시작을 눌러도 「허용 목록이 비어 있음」으로 조용히 거부된다.
+         그런데 이 값을 켜는 길이 ★POST /rotate/allow 뿐★ 이었고 대시보드 JS 는
+         `/rotate` 를 ★한 번도 안 불렀다.★ = 사람이 켤 수가 없는 기능이었다
+         (사고 345 와 같은 부류). → 화면에서 보고 켤 수 있게 만든다. -->
+    <button onclick="rotAllowDlg()" class="chip chip-indigo"
+            title="완주 후 자동으로 정보수집 → 다음 계정으로 넘어가는 ★자동순환★ 을
+어느 PC 에 허용할지 정합니다. 비어 있으면 ▶시작을 눌러도 무장되지 않습니다.
+★한 대로 시작해 넓히는 것이 원칙입니다★ (CLAUDE.md A7).">🔁 자동순환 허용…</button>
   </div>
 
   <!-- 그룹 4: 선택 카드만 (예전 CONTENT — 그 계정 한 번, 순환 없음) -->
@@ -3190,7 +3201,9 @@ const CMD_TRACK = {
   awakening:       {t:'⚔ 각성전',         ttl:180000, exp:['awakening','awakening_wait']},
   corridor:        {t:'🌀 회랑',          ttl:180000, exp:['corridor']},
   abyss:           {t:'🌌 어비스',        ttl:180000, exp:['abyss']},
-  acct_tour:       {t:'🔁 전 계정 순회',  ttl:300000, exp:['collecting','switching']},
+  // ★사고 392★ 순회의 전환 구간은 이제 acct_switching 을 보고한다 — 안 넣으면
+  //   전환 중인데 「기대 상태 미도달」로 보인다(캐릭 전환과 라벨을 갈랐기 때문).
+  acct_tour:       {t:'🔁 전 계정 순회',  ttl:300000, exp:['collecting','switching','acct_switching']},
   set_account:     {t:'🪪 카드 계정 변경', ttl:300000, acct:true},
   switch_launcher: {t:'🔄 계정 전환(본컴+원격컴)', ttl:420000, acct:true},
   switch_account:  {t:'🔄 계정 전환(원격컴)',      ttl:300000, acct:true},
@@ -3402,6 +3415,11 @@ const STATUS_CFG = {
   abyss:        {label:'어비스', vi:'Abyss',   bg:'bg-fuchsia-500/20', border:'border-fuchsia-700', badge:'bg-fuchsia-500', text:'text-fuchsia-400', online:true},
   moving:       {label:'사냥 중', vi:'Đang săn',   bg:'bg-green-500/20',  border:'border-green-700',  badge:'bg-green-500',  text:'text-green-400',  online:true},
   switching:    {label:'캐릭 전환', vi:'Đổi nhân vật', bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-400', text:'text-purple-400', online:true},
+  // ★★사고 392 — ★계정전환 중인데 카드가 「대기」였다★★ (주인님 2026-09-01)
+  //   원문: 「계정전환하고 있는데 그냥 대기라고 뜨니까 내가 뭐하는지 알수없다는거야」
+  //   ★위 `switching` 은 캐릭(슬롯) 전환이다★ — 계정전환은 본컴 런처까지 갈아끼우는
+  //   3~5분짜리 다른 일이라 라벨을 가른다. 옆에 switchStepChip 이 몇 단계인지 붙는다.
+  acct_switching:{label:'계정 전환', vi:'Đổi tài khoản', bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-400', text:'text-purple-300', online:true},
   reconnecting: {label:'재연결 중', vi:'Đang kết nối lại', bg:'bg-orange-500/20', border:'border-orange-700', badge:'bg-orange-400', text:'text-orange-400', online:true},
   captcha:      {label:'캡차', vi:'Captcha',      bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
   dead:         {label:'사망', vi:'Đã chết',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
@@ -3417,6 +3435,9 @@ const STATUS_CFG = {
   //   lc/sealed_dungeon.py:49 report_status("sealed_dungeon") — 여기 없으면
   //   STATUS_CFG[st]||STATUS_CFG.offline 로 떨어져 ★봉인던전 도는 PC 가 빨간 오프라인★ 으로 보인다.
   sealed_dungeon:{label:'봉인던전', vi:'Hầm ngục phong ấn', bg:'bg-violet-500/20', border:'border-violet-700', badge:'bg-violet-500', text:'text-violet-400', online:true},
+  // ★사고 393★ `wardrobe.py:39 report_status("wardrobe")` — sealed_dungeon 과 같은 부류.
+  //   여기 없으면 옷장 합성 도는 PC 가 ★빨간 오프라인★ 으로 보인다. 게이트 18 이 잡았다.
+  wardrobe:     {label:'옷장 합성', vi:'Ghép tủ đồ', bg:'bg-teal-500/20', border:'border-teal-700', badge:'bg-teal-500', text:'text-teal-400', online:true},
   collecting:   {label:'정보수집', vi:'Thu thập thông tin', bg:'bg-cyan-500/20',   border:'border-cyan-700',   badge:'bg-cyan-500',   text:'text-cyan-400',   online:true},
   paused:       {label:'일시정지', vi:'Tạm dừng', bg:'bg-amber-500/20',  border:'border-amber-700',  badge:'bg-amber-500',  text:'text-amber-400',  online:true},
   error:        {label:'에러', vi:'Lỗi',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
@@ -4122,6 +4143,23 @@ function tourChip(pc) {
                 style="background:rgba(129,140,248,.2);color:#c7d2fe;border-color:#818cf8"
                 title="${esc('전 계정 순회 진행도: ' + t + seq + ' — 이 계정 작업이 끝나면 다음 계정으로 전환합니다')}">🔁 ${esc(t)}</span>`;
 }
+// ★★사고 392 — ★몇 단계까지 왔는지★★ (주인님 2026-09-01)
+//   「계정 전환」이라고만 떠도 3~5분 내내 같은 글자라 진행이 안 보인다.
+//   매크로 Trace._row 가 단계마다 switch_step("09 계정 칩 클릭") 을 실어 보낸다.
+//   ★계정전환 중일 때만 그린다★ — 전환이 끝나면 마지막 단계가 카드에 남아
+//   「지금 그 단계다」로 읽히기 때문이다(값이 남아 있어도 안 그린다).
+function switchStepChip(pc) {
+  if ((pc.status || '') !== 'acct_switching') return '';
+  const s = pc.switch_step;
+  if (!s) return '';
+  const bad = (pc.switch_mark === '✘');
+  return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none"
+                style="background:${bad ? 'rgba(244,63,94,.2)' : 'rgba(167,139,250,.18)'};
+                       color:${bad ? '#fda4af' : '#ddd6fe'};
+                       border-color:${bad ? '#f43f5e' : '#a78bfa'}"
+                title="${esc('계정전환 진행 단계 — 총 15단계 (본컴 런처 → 원격컴 크롬 → 매크로 재시작)')}"
+          >${esc(pc.switch_mark || '')} ${esc(s)}</span>`;
+}
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
@@ -4187,7 +4225,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
+          <span class="truncate">${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
         </span>
       </div>
     </div>
@@ -5152,7 +5190,7 @@ const AUTO_IDLE_TASKS = ['daily_dungeon', 'corridor', 'nightmare'];
 //   (STATUS_CFG 에 실제로 있는 키만 넣는다 — 아래 자기검사가 콘솔로 알려준다)
 const AUTO_IDLE_BUSY = ['hunting','moving','selling','abyss','subquest','dead',
                         'dungeon','nightmare','awakening','corridor','sealed_dungeon',
-                        'collecting','switching','reconnecting','captcha'];
+                        'collecting','switching','acct_switching','reconnecting','captcha'];   // ★사고 392★ 계정전환 중인 PC 를 깨우면 전환이 깨진다
 // ★사람이 세워둔 것 / 사람이 와야 풀리는 것★ — 자동으로는 안 깨운다. 직접 고르면 예외.
 //   ★awakening_wait · nightmare_wait 는 '노는 중' 이 아니다 (2026-08-28 매크로 소스 실측)★
 //     · awakening_wait = 캐릭이 ★각성전 던전 안★ 에 서서 사람의 Scroll Lock 을 기다린다.
@@ -5256,6 +5294,48 @@ function autoIdleTargets(){
   return {picked: picked, targets: out, skipped: skip};
 }
 
+// ★★사고 395 — ★자동순환을 켤 손잡이★★ (주인님 2026-09-01)
+//   「지금 계정하나의 사냥 다끝나고 난뒤에 정보수집하는것도 없어진거같고」
+//   실측 `rot_allow=''` = 카나리아 게이트가 아무도 통과 못 시킨다. ▶시작을 눌러도
+//   「허용 목록이 비어 있음」으로 조용히 거부된다. 그런데 켜는 길이 API 뿐이었다.
+//   ★지금 값을 먼저 보여준다★ — 「내가 뭘 바꾸는지」를 모르고 누르게 하지 않는다.
+async function rotAllowDlg(){
+  let cur = '', armed = 0;
+  try {
+    const r = await fetch('/rotate', {credentials:'same-origin'});
+    const j = await r.json();
+    cur = (j.allow || []).join(',');
+    armed = Object.keys(j.rotating || {}).length;
+  } catch(e) {
+    alert('현재 설정을 못 읽었습니다: ' + e);
+    return;
+  }
+  const NL = String.fromCharCode(10);
+  const now = cur ? cur : '(비어 있음 — 아무도 무장하지 못합니다)';
+  const v = prompt(
+    '🔁 자동순환을 허용할 PC' + NL + NL +
+    '완주하면 자동으로 정보수집 → 다음 계정으로 넘어갑니다.' + NL +
+    '실제로 걸리려면 그 PC 의 ▶시작을 눌러야 합니다(허용은 전제조건입니다).' + NL + NL +
+    '지금 허용: ' + now + NL +
+    '지금 무장된 PC: ' + armed + '대' + NL + NL +
+    '쉼표로 나열하세요. 전부 허용은 *  ·  전부 끄려면 비워두세요.' + NL +
+    '★한 대로 시작해 넓히는 것이 원칙입니다★',
+    cur);
+  if (v === null) return;                    // 취소
+  const pcs = String(v).trim();
+  if (pcs === '*' && !confirm('★전 함대★ 에 자동순환을 허용합니다. 계속할까요?')) return;
+  try {
+    const r = await fetch('/rotate/allow', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pcs: pcs})});
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert('실패: ' + JSON.stringify(j)); return; }
+    alert('자동순환 허용: ' + (j.allow || '(비어 있음)'));
+  } catch(e) {
+    alert('저장 실패: ' + e);
+  }
+}
 async function autoIdleCmd(){
   const r = autoIdleTargets();
   const tg = r.targets, NLx = String.fromCharCode(10);
@@ -10244,7 +10324,9 @@ ROT_HUMAN_WAIT = {
 # ★사유 문구는 사람이 읽는다★ — 그대로 쓰면 텔레그램에 "hunting 중이라 못 했습니다" 가
 #   나간다. 대시보드 STATUS_CFG 와 같은 말로 맞춘다(없는 키는 원문 그대로).
 ROT_ST_KOR = {"hunting": "사냥", "moving": "이동", "selling": "판매",
-              "collecting": "정보수집", "switching": "캐릭 전환", "reconnecting": "재연결",
+              "collecting": "정보수집", "switching": "캐릭 전환",
+              "acct_switching": "계정 전환",   # ★사고 392★
+              "reconnecting": "재연결",
               "captcha": "캡차", "dungeon": "일일던전", "nightmare": "악몽",
               "awakening": "각성전", "corridor": "회랑", "abyss": "어비스",
               "subquest": "서브퀘", "dead": "사망", "paused": "일시정지",
@@ -10706,7 +10788,7 @@ def _rot_active(cards: list) -> dict | None:
         #     idle 같은 ★가만히 있는 게 정상인 상태★ 는 무보고를 이유로 버리지 않는다.
         #   (박제된 idle 카드에 명령이 나가는 경우는 switching 20분 상한이 ⛔ 로 잡는다 —
         #    조용히 죽는 게 아니라 시끄럽게 실패한다.)
-        if st in ("hunting", "moving", "collecting", "switching",
+        if st in ("hunting", "moving", "collecting", "switching", "acct_switching",
                   "selling", "settling") and not _fresh(c.get("last_active"), 300):
             continue
         live.append(c)
