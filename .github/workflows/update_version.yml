@@ -7,6 +7,12 @@ on:
     paths:
       - "exe/**"
       - "images2/**"
+  # ★사고 383 (2026-09-01)★ CI 가 version.json 을 밀려는 순간 내가 또 푸시해서
+  #   `failed to push some refs` 로 죽었다. 그러면 exe 는 올라갔는데 version.json 이
+  #   옛 버전이라 함대가 새 exe 를 못 받는다. 그때 exe 는 이미 커밋돼 있어
+  #   `paths` 트리거로는 다시 못 깨운다 = ★되살릴 손잡이가 없었다.★
+  #   → 손으로 돌릴 수 있게 한다. (근본 대책은 "CI 도는 중에 푸시하지 않기")
+  workflow_dispatch:
 
 jobs:
   update-version:
