@@ -9982,7 +9982,17 @@ def _load_version_json() -> dict:
             pass
     return _version_cache.get("data", {})
 
-_IMG_PROXY_CACHE: dict = {}          # fname -> bytes (프로세스 메모리, 최대 80장)
+_IMG_PROXY_CACHE: dict = {}          # fname -> (bytes, sha256, 담은시각)
+# ★★사고 413 (2026-09-02) — 이 캐시에 ★만료가 없어서★ 함대 업데이트가 통째로 죽었다★★
+#   옛 코드는 {fname: bytes} 였고 80장을 넘길 때만 통째로 비웠다. 그래서 템플릿을
+#   갱신하고 jsDelivr 를 퍼지해도 ★서버가 자기 메모리의 옛 바이트를 계속 줬다.★
+#   업데이터는 version.json 의 sha256 과 안 맞으니 4회 재시도 후 포기하는데,
+#   ★이미지 한 장이라도 실패하면 매크로 exe 까지 안 받는다★ — PC-21 실측:
+#     [다운로드] plrow_PC-22_2.png 실패 (시도 4/4, 해시 불일치)
+#     [업데이트] ★실패★ - 매크로 exe v1.1.852 를 못 받았다 (옛 버전으로 계속한다)
+#   레포도 version.json 도 jsDelivr 도 전부 맞았고 ★서버만 옛것★ 이라 아무도 못 봤다.
+#   → ①TTL 로 스스로 낡게 하고 ②version.json 해시와 대조해 ★다르면 안 쓴다.★
+_IMG_CACHE_TTL = 600.0               # 초 — 이만큼 지나면 상류에서 다시 받는다
 
 
 @app.get("/img/{fname}")
@@ -10004,7 +10014,23 @@ async def serve_image(fname: str):
     import re as _re2
     if not _re2.fullmatch(r"(?i)[^/\\\x00]{1,120}\.png", fname):
         raise HTTPException(status_code=404)
-    data = _IMG_PROXY_CACHE.get(fname)
+    # ★사고 413★ 캐시를 믿기 전에 ①안 낡았나 ②version.json 해시와 같은가 를 본다
+    data = None
+    _hit = _IMG_PROXY_CACHE.get(fname)
+    if _hit:
+        _b, _h, _t = _hit
+        if time.time() - _t <= _IMG_CACHE_TTL:
+            _want = None
+            try:
+                _want = (_load_version_json() or {}).get("images", {}).get(fname)
+            except Exception:
+                _want = None
+            # 기대 해시를 모르면(매니페스트에 없는 파일) TTL 만으로 판단한다
+            if _want is None or _want == _h:
+                data = _b
+            else:
+                print(f"[img] {fname} 캐시가 옛것 — 상류에서 다시 받는다 "
+                      f"(캐시 {_h[:10]} ≠ json {_want[:10]}) (사고 413)", flush=True)
     if data is None:
         # ★★상류를 하나만 쓰지 않는다 (2026-08-19 사용자 지적)★★
         #   사용자: "내부망이 실패하면 외부망으로 해야지 왜 그건 안 하냐"
@@ -10042,7 +10068,7 @@ async def serve_image(fname: str):
             raise HTTPException(status_code=404)
         if len(_IMG_PROXY_CACHE) > 80:
             _IMG_PROXY_CACHE.clear()
-        _IMG_PROXY_CACHE[fname] = data
+        _IMG_PROXY_CACHE[fname] = (data, hashlib.sha256(data).hexdigest(), time.time())
     return Response(content=data, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
