@@ -186,7 +186,7 @@
     "pl2_profile.png": "cfb5cd994e3656fab740d4da9a361427018f858afed51ef986e2fdb6c8414657",
     "pl2_profmenu.png": "54107d772b0ab9f4467ccd9dd602340721c4c928930409bacaf0715cec9a7f80",
     "pl2_relogin_ask.png": "fd581ccc46cd21dd391355469546d8f10bba6ffc83c5c950a917d3849f75266f",
-    "pl2_rungame.png": "f09c2eda4a6398251d6cb17adf000ef768f08a75b81324f30fdbb6ef536665d5",
+    "pl2_rungame.png": "a6be8b988fb785daabe099e3337315fd54fa0ea19c593589ba04a5ebe0fed5b8",
     "pl2_switchask.png": "339fe6f1257fdbd09382302b144db1afe316abe832e26c4cccde28880b17f3b0",
     "pl2_tabs.png": "e52ad51cf5347730aae66b1e7de7e36207dfd8da62791f407310797d468924f4",
     "pl_acct_logout.png": "231167bf5063f1c9fc2704d2952b3d6946a5e795f705870ce8dffc26c61fc117",
@@ -410,8 +410,8 @@
     "sha256": "d0b6f64241d0d39718f84b269a214dc170320d928e4bf557d3f58da27052e1b2",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260901231634",
-  "updated_at": "2026-09-02T02:40:10",
+  "images_version": "20260902032301",
+  "updated_at": "2026-09-02T03:23:01",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
     "version": "1.1.858",
