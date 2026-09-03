@@ -8231,6 +8231,11 @@ async def receive_logs(pc_id: str, request: Request):
                     _rot_note_boot(ns(tenant, pc_id), message)
                 except Exception as _be:
                     print(f"[순환] 부팅 감지 실패(무시): {_be}")
+            if _HOTKEY_ARM_MARK in message:        # ★사고 456-b★
+                try:
+                    await _rot_note_hotkey(tenant, pc_id, message)
+                except Exception as _he:
+                    print(f"[순환] 핫키 감지 실패(무시): {_he}")
     return JSONResponse({"ok": True, "count": len(logs)})
 
 
@@ -8634,6 +8639,12 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                             _rot_note_boot(nspc, _m)
                         except Exception as _be:
                             print(f"[순환] 부팅 감지 실패(무시): {_be}")
+                    if _HOTKEY_ARM_MARK in str(_m):      # ★사고 456-b★
+                        try:
+                            _t456, _p456 = split_ns(nspc)
+                            await _rot_note_hotkey(_t456, _p456, _m)
+                        except Exception as _he:
+                            print(f"[순환] 핫키 감지 실패(무시): {_he}")
             elif msg_type == "ack":
                 cmd_id = msg.get("command_id")
                 if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
@@ -10721,6 +10732,35 @@ def _rot_disarm(tenant: str, pc_id: str, why: str) -> bool:
 _BOOT_RE = re.compile(r"\[BOOT#([0-9a-fA-F]{6,})\]")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★★사고 456-b (2026-09-03, 주인님 지시) — ★핫키(PageUp) 시작도 순환을 건다★★
+#   ★주인님★ 「페이지업눌러서 사냥시작하는것도 순환걸리게해주고」
+#   무장 방아쇠는 지금까지 ★대시보드 ▶시작(args{rotate:true})★ 하나뿐이었다.
+#   PC 앞에서 PageUp 을 누르면 사냥은 도는데 순환이 안 걸린다.
+#   매크로는 `/command` 를 못 쏘므로(세션 전용, §C6) ★로그 한 줄★ 로 신호한다.
+#   ★A7 안전★ 이 신호는 ★그 PC 앞에서 사람이 누를 때만★ 나온다 —
+#   운영 스크립트가 쏘는 start 와 달리 함대 전체를 한 번에 무장시킬 수 없다.
+# ══════════════════════════════════════════════════════════════════════════
+_HOTKEY_ARM_MARK = "계정 순환 무장 요청"
+
+
+async def _rot_note_hotkey(tenant: str, pc_id: str, message: str) -> None:
+    """매크로가 PageUp 으로 사냥을 시작했다고 알리면 순환을 무장한다 (사고 456-b)."""
+    if _HOTKEY_ARM_MARK not in str(message or ""):
+        return
+    base = _base_pc(pc_id)
+    key = ns(tenant, base)
+    if _ROT.get(key):
+        print(f"[순환] {key} 핫키 시작 — 이미 무장돼 있어 그대로 둔다 (사고 456-b)")
+        return
+    try:
+        ok, why = await _rot_arm(tenant, base, full=True)
+        print(f"[순환] {key} ★핫키(PageUp) 시작 → 무장 {'성공' if ok else '거부'}★ "
+              f"{'' if ok else '— ' + str(why)} (사고 456-b)")
+    except Exception as _he:
+        print(f"[순환] 핫키 무장 실패(무시): {_he}")
+
+
 def _rot_note_boot(nspc: str, message: str) -> None:
     """매크로 부팅 감지 — 순환이 일으킨 재시작이 아니면 ★끈다.★
 
@@ -10793,23 +10833,23 @@ def _rot_note_boot(nspc: str, message: str) -> None:
         _stg = st.get("stage")
         print(f"[순환] {key} 재시작 확인 — 순환 유지 (stage={_stg})")
         return
-    _ROT_GONE_WHY[key] = "사람이 껐다 켬(BOOT)"
-    _ROT.pop(key, None)
-    print(f"[순환] {key} ★사람이 껐다 켬★ → 순환 해제")
-    # ★★N2: 여기서 저장하지 않으면 해제가 DB 에 안 남는다★★
-    #   _rot_save 는 엔진 루프의 `if _ROT:` 안에서만 돈다. 마지막 한 대가 해제되면
-    #   _ROT 가 비어 그 블록을 영영 안 타고, Railway 재배포 뒤 _rot_load 가
-    #   ★주인님이 손으로 껐던 무장을 부활★ 시킨다. 부팅지문도 같은 이유로 안 남는다.
-    try:
-        asyncio.create_task(_rot_save(force=True))
-    except Exception:
-        pass
-    # ★해제도 반드시 알린다 [S4]★ — 조용히 죽으면 아침에 왜 안 돌았는지 알 수 없다.
-    try:
-        asyncio.create_task(_rot_say(
-            tenant, base, "매크로가 재시작돼 순환을 해제했습니다 — 이어가려면 ▶시작을 눌러주세요"))
-    except Exception:
-        pass
+    # ══════════════════════════════════════════════════════════════════
+    # ★★사고 456 (2026-09-03, 주인님 지시) — ★부팅으로 순환을 끄지 않는다★★
+    #   ★주인님★ 「순환해제되는거 안됐으면좋겟는디」
+    #   옛 규칙은 2026-08-20 A7 사고("내가 프로그램 업데이트하고 켰을뿐인데 바로
+    #   사냥시작하던데")의 방어였다. 그때는 ★내가 18대에 start 를 쏜 것★ 이 진짜 원인이고
+    #   순환 해제는 그 위에 덧댄 보험이었다. 지금은 주인님이 ★유지★ 를 원하신다.
+    #   ★한 줄 우려★ 매크로를 껐다 켜면 순환이 살아 있어 스스로 다음 계정으로 넘어간다.
+    #     (그래도 ★사냥 시작 자체★ 는 여전히 사람/순환의 방아쇠가 있어야 한다 —
+    #      매크로는 부팅만으로 running=True 가 되지 않는다. CLAUDE.md A7 그대로다.)
+    #   ★되돌리는 법★ 아래 두 줄의 주석을 풀면 옛 동작으로 돌아간다.
+    # ══════════════════════════════════════════════════════════════════
+    #   ★옛 동작(사고 456 전)★ 은 여기서 이렇게 했다 — 되돌리려면 이 네 줄을 살린다:
+    #     _ROT_GONE_WHY[key] = "사람이 껐다 켬(BOOT)" ; _ROT.pop(key, None)
+    #     asyncio.create_task(_rot_save(force=True))
+    #     asyncio.create_task(_rot_say(tenant, base, "매크로가 재시작돼 순환을 해제했습니다…"))
+    print(f"[순환] {key} 부팅 감지 — ★순환은 유지한다★ (주인님 지시, 사고 456)")
+    return
 
 
 # ── 카드 선택 ────────────────────────────────────────────────────────────────
