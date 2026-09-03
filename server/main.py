@@ -5509,6 +5509,12 @@ async function switchAllToFirst() {
     const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
+  // ★★주인님 지시 (2026-09-04) — 「뭐 하고 있는애들은 그냥 전환 안 시켜도돼」★★
+  //   처음엔 사냥 중인 PC 도 대상에 넣고 「끊깁니다」 경고만 했다. 그게 아니라
+  //   ★일하고 있으면 아예 건드리지 않는다.★
+  //   ★놀고 있는 것만 고른다★ — 화이트리스트로 둔다(블랙리스트는 새 상태가 생기면 샌다.
+  //   실제로 sealed_dungeon·wardrobe 가 그렇게 새서 「빨간 오프라인」으로 보였다, 사고 393).
+  const FREE = new Set(['idle', 'paused']);
   const targets = [], already = [], offline = [], busy = [];
   for (const x of Object.values(byBase)) {
     const b = baseId(x.id);
@@ -5518,11 +5524,15 @@ async function switchAllToFirst() {
     const suf = (((t.match(ACCT_SUF_RE)||[])[1]) || 'a');
     if (suf === 'a') { already.push(b); continue; }
     const st = (state[t]||{}).status || '';
-    if (st === 'hunting' || st === 'selling' || st === 'moving') busy.push(b);
+    if (!FREE.has(st)) {                      // ★일하는 중이면 건너뛴다★
+      busy.push(`${b}(${(STATUS_CFG[st]||{}).label || st || '?'})`);
+      continue;
+    }
     targets.push(t);
   }
   if (!targets.length) {
     showToast(`전환할 PC가 없습니다 — 이미 계정1: ${already.length}대`
+              + (busy.length ? ` · 일하는 중 ${busy.length}대` : '')
               + (offline.length ? ` · 오프라인 ${offline.length}대` : ''));
     return;
   }
@@ -5536,7 +5546,7 @@ async function switchAllToFirst() {
 ` : '')
       + (offline.length ? `오프라인 (제외): ${offline.length}대
 ` : '')
-      + (busy.length ? `★사냥/판매 중이라 끊깁니다: ${busy.join(', ')}★
+      + (busy.length ? `일하는 중이라 ★건너뜁니다★: ${busy.join(', ')}
 ` : '')
       + `
 ① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)
