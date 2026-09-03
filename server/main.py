@@ -2524,6 +2524,8 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <span id="sel-label" class="sel-badge shrink-0">0개 선택</span>
     <button onclick="selectAllPcs()" class="chip chip-indigo">전체선택</button>
     <button onclick="clearSelection()" class="chip chip-gray">전체해제</button>
+    <button onclick="switchAllToFirst()" class="chip chip-indigo"
+            title="지금 계정1 이 아닌 PC 만 골라 계정1 로 통짜 전환합니다 (이미 계정1·오프라인은 제외)">↩ 전부 1번으로</button>
   </div>
 
   <!-- 그룹 2: 매크로 제어 -->
@@ -5488,6 +5490,66 @@ async function switchAccountSelected() {
   showToast(`🔁 ${targets.length}대 계정 ${n} 통짜 전환 시작 (결과는 텔레그램)`);
   loadCmdHistory();
   clearSelection();
+}
+
+// ─── ★전부 1번으로★ (2026-09-04 주인님 지시) ────────────────────────────────
+//   원문: 「대시보드에 버튼하나 만들어 전부다 1번으로 라는 버튼만들고
+//          ★계정1 아닌 컴퓨터들만★ 전환하도록하게 하는 기능이야」
+//   ★선택 없이★ 함대 전체를 훑어 ★지금 계정1 이 아닌 물리 PC★ 만 골라 통짜 전환한다.
+//   · 물리 PC당 1건 — 온라인 카드(=수신자)로만 보낸다 (switchAccountSelected 와 같은 규칙)
+//   · 이미 계정1 인 PC 는 뺀다 — 본컴을 괜히 돌리면 게임만 끊긴다
+//   · 오프라인 PC 도 뺀다 — 아무도 안 가져가는 고아 명령이 된다
+//   ★A7★ 이건 ★사람이 누르는 버튼★ 이다(a7guard 는 내가 스크립트로 쏘는 것을 막는 규칙).
+//     그래도 몇 대가 나가는지·사냥 중이 몇 대인지 ★세어서 보여주고★ 확인을 받는다.
+async function switchAllToFirst() {
+  const byBase = {};
+  for (const id of Object.keys(state)) {
+    const b = baseId(id);
+    if (b === 'PC-TEST' || b === 'PC-DEMO') continue;
+    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
+  }
+  const targets = [], already = [], offline = [], busy = [];
+  for (const x of Object.values(byBase)) {
+    const b = baseId(x.id);
+    if (!x.on) { offline.push(b); continue; }
+    const live = liveCardOf(b);
+    const t = live ? live.pc_id : x.id;
+    const suf = (((t.match(ACCT_SUF_RE)||[])[1]) || 'a');
+    if (suf === 'a') { already.push(b); continue; }
+    const st = (state[t]||{}).status || '';
+    if (st === 'hunting' || st === 'selling' || st === 'moving') busy.push(b);
+    targets.push(t);
+  }
+  if (!targets.length) {
+    showToast(`전환할 PC가 없습니다 — 이미 계정1: ${already.length}대`
+              + (offline.length ? ` · 오프라인 ${offline.length}대` : ''));
+    return;
+  }
+  if (!confirm(`★${targets.length}대★ 를 계정1 로 통짜 전환합니다
+
+`
+      + `대상: ${targets.join(', ')}
+
+`
+      + (already.length ? `이미 계정1 (제외): ${already.length}대
+` : '')
+      + (offline.length ? `오프라인 (제외): ${offline.length}대
+` : '')
+      + (busy.length ? `★사냥/판매 중이라 끊깁니다: ${busy.join(', ')}★
+` : '')
+      + `
+① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)
+`
+      + `② 원격컴 크롬 로그인 교체
+③ 매크로 재시작
+
+`
+      + `★대당 2~4분, 게임 세션 끊김★. 진행할까요?`)) return;
+  await withBulk(() => Promise.all(targets.map(id => sendCmd(id, 'switch_launcher',
+        {acct_no: 1, acct_index: 1, acct_label: '계정1', chrome_label: 'a'}))));
+  showToast(`🔁 ${targets.length}대 → 계정1 통짜 전환 시작 (결과는 텔레그램)`);
+  loadCmdHistory();
 }
 
 // ─── 판매(sell_all) — 거래소 지정가를 args.price로 전송 ─────────────────────────
