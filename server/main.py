@@ -6329,6 +6329,7 @@ const AI_T = {
         kinaNone:'Chưa đọc được kina kho của tài khoản có gói nào.',
         kinaSummary:(n,k)=>`${n} tài khoản · tổng ${k}`,
         kinaHPc:'PC', kinaHSrv:'Máy chủ', kinaHKina:'Kina kho',
+        kinaHAcct:'Tài khoản', kinaAcct:(n)=>`TK${n}`,
         kinaSearch:'🔍 Tìm máy chủ…',
         kinaNoHit:(q)=>`Không có máy chủ nào khớp "${q}".`,
         kinaHSold:'Đã bán', kinaReset:'↺ Xoá dấu',
@@ -6357,6 +6358,7 @@ const AI_T = {
         kinaNone:'창고키나를 읽은 구독 계정이 아직 없습니다.',
         kinaSummary:(n,k)=>`구독 계정 ${n}개 · 합계 ${k}`,
         kinaHPc:'PC', kinaHSrv:'서버', kinaHKina:'창고키나',
+        kinaHAcct:'계정', kinaAcct:(n)=>`계정${n}`,
         kinaSearch:'🔍 서버 검색…',
         kinaNoHit:(q)=>`"${q}" 에 맞는 서버가 없습니다. (읽은 게 없는 게 아니라 검색 결과입니다)`,
         kinaHSold:'판매완료', kinaReset:'↺ 체크 리셋',
@@ -6721,7 +6723,16 @@ function aiBuildKina(){
     const n = acctNumOf(pid);
     const srv = (p.acct_servers && p.acct_servers[n]) ||
                 groupAcctMaps(baseId(pid)).servers[n] || '';
-    out.push({pid, base: baseId(pid), srv,
+    // ★★주인님 지시 (2026-09-05)★★
+    //   「그거 컴퓨터랑 계정번호도 출력해야할거같고 그리고 4번컴퓨터에 계정1, 2
+    //     둘다 구독되어잇으면 4번 계정1 서버 얼마, 4번 계정2 서버 얼마 이렇게도
+    //     출력이되야할거같아」
+    //   ★줄은 원래 계정(카드)마다 하나씩 나온다★ — 이 함수가 pc_id(접미사 포함)를
+    //   돌기 때문이다. 문제는 ★화면에 계정 번호가 없어서 구분이 안 됐다★ 는 것이다.
+    //   실측 2026-09-05: 구독 22개가 전부 접미사 없는 카드(계정1)라 한 PC 에 두 줄이
+    //   나올 일이 없었고, 그래서 이 결함이 안 보였다. 부계정 구독이 켜지는 순간
+    //   같은 PC 가 두 줄이 되는데 ★둘이 똑같아 보인다.★
+    out.push({pid, base: baseId(pid), srv, no: n,
               kina: Number(p._total_kina) || 0,
               seen: p._total_kina != null});
   });
@@ -6739,8 +6750,14 @@ let aiKinaQ = '';
 function kinaSorted(){
   const q = (aiKinaQ || '').trim().toLowerCase();
   let rows = aiBuildKina();
-  // ★서버로 검색★ (주인님 지시). 못 읽은 서버('')는 검색어가 있으면 빠진다.
-  if (q) rows = rows.filter(r => String(r.srv || '').toLowerCase().includes(q));
+  // ★서버로 검색★ (주인님 지시). ★PC·계정번호로도 걸리게 넓혔다★ —
+  //   'pc-04' 나 '계정2' 로도 찾을 수 있다. 서버만 되던 때는 못 읽은 서버가
+  //   검색어만 넣으면 통째로 사라져 「없다」로 보였다.
+  if (q) rows = rows.filter(r =>
+      String(r.srv || '').toLowerCase().includes(q) ||
+      String(r.pid || '').toLowerCase().includes(q) ||
+      String(r.base || '').toLowerCase().includes(q) ||
+      ('계정' + r.no).includes(q) || ('tk' + r.no).includes(q));
   const k = aiKinaSort.key, sgn = (aiKinaSort.dir === 'desc') ? -1 : 1;
   rows.sort((x, y) => {
     let d;
@@ -6750,6 +6767,9 @@ function kinaSorted(){
       d = x.kina - y.kina;
     } else if (k === 'srv') {
       d = String(x.srv).localeCompare(String(y.srv), 'ko');
+    } else if (k === 'acct') {
+      // ★계정 번호로 정렬해도 같은 PC 는 붙어 있게★ — 번호 먼저, 그다음 PC
+      d = (x.no - y.no) || String(x.base).localeCompare(String(y.base));
     } else {
       d = String(x.base).localeCompare(String(y.base)) ||
           String(x.pid).localeCompare(String(y.pid));
@@ -6788,7 +6808,7 @@ function kinaPaint(){
   const sum = document.getElementById('ai-summary');
   if (sum) sum.textContent = T.kinaSummary(rows.length, fmtKinaShort(tot))
                              + (aiKinaQ ? `  ·  🔍 ${aiKinaQ}` : '');
-  ['pid', 'srv', 'kina'].forEach(k => {
+  ['pid', 'acct', 'srv', 'kina'].forEach(k => {
     const el = document.getElementById('ai-kina-h-' + k);
     if (el) el.innerHTML = el.dataset.label + ' ' + kinaArrow(k);
   });
@@ -6797,7 +6817,7 @@ function kinaPaint(){
     //   검색 중인데 "창고키나를 읽은 구독 계정이 아직 없습니다" 라고 적으면
     //   사람이 정보수집을 의심하러 간다 — 오늘 하루 내내 잡은 그 부류다.
     const msg = aiKinaQ ? T.kinaNoHit(aiKinaQ) : T.kinaNone;
-    tb.innerHTML = `<tr><td colspan="4" class="px-3 py-8 text-center text-gray-400">${esc(msg)}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="5" class="px-3 py-8 text-center text-gray-400">${esc(msg)}</td></tr>`;
     return;
   }
   let h = '';
@@ -6811,7 +6831,10 @@ function kinaPaint(){
     // ★체크해도 자리는 그대로★ — 흐리게만 한다(정렬 키에 done 을 안 넣는다)
     const sold = aiKinaSold.keys.includes(r.pid);
     h += `<tr class="border-b border-gray-800/60 hover:bg-gray-800/50" style="${sold?'opacity:.45':''}">
-      <td class="px-3 py-2 font-extrabold text-white text-base">${esc(r.pid)}</td>
+      <td class="px-3 py-2 font-extrabold text-white text-base">${esc(r.base)}</td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 rounded bg-indigo-900/70 text-indigo-200
+            font-bold text-sm whitespace-nowrap"
+            title="${esc(r.pid)}">${esc(T.kinaAcct(r.no))}</span></td>
       <td class="px-3 py-2"><span class="text-sky-300 font-bold text-base">${esc(r.srv || '–')}</span></td>
       <td class="px-3 py-2 text-right">${kv}</td>
       <td class="px-3 py-2 text-center">
@@ -6847,6 +6870,7 @@ function renderAiKina(){
     <table class="w-full text-base">
       <thead><tr class="text-left border-b border-gray-700">
         <th id="ai-kina-h-pid"  data-label="${esc(T.kinaHPc)}"   onclick="kinaSortBy('pid')"  class="${th}"></th>
+        <th id="ai-kina-h-acct" data-label="${esc(T.kinaHAcct)}" onclick="kinaSortBy('acct')" class="${th}"></th>
         <th id="ai-kina-h-srv"  data-label="${esc(T.kinaHSrv)}"  onclick="kinaSortBy('srv')"  class="${th}"></th>
         <th id="ai-kina-h-kina" data-label="${esc(T.kinaHKina)}" onclick="kinaSortBy('kina')" class="${th} text-right"></th>
         <th class="px-3 py-2 text-center text-gray-300 font-bold whitespace-nowrap">${esc(T.kinaHSold)}</th>
