@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.10"
+UPDATER_VERSION  = "3.1.11"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -469,22 +469,79 @@ def _download_once(url: str, tmp_path: str, dest_path: str, expected_sha256):
     return True, written
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★★사고 481 (2026-09-05) — ★느린 시드를 30분 동안 붙들고 있었다★★
+#
+# ★주인님★ 「내부망 시드 또 죽여놧냐?」 — 네, 제가 껐습니다. 왜 껐냐면:
+#   2026-09-04 실측: 시드를 켜 둔 채로 PC-12·15 가 ★30분 넘게 업데이트를 못 받았다.★
+#   시드를 끄니 ★45초에 둘 다 받았다.★
+#   ★그때 진짜 원인은 시드가 아니라 관제컴이 2.4GHz(11Mbps)에 붙어 있던 것이다★
+#   (2026-09-05 에 5GHz 866Mbps 로 옮겼다 — 사고 480).
+#
+# ★그런데 이 함수는 느린 시드를 ★180초 읽기 타임아웃★ 으로만 막았다.★
+#   느리되 끊기지는 않으면 타임아웃이 안 나고, 73MB 를 1.4MB/s 로 받으면 52초…
+#   그것도 매 청크마다 타임아웃이 새로 시작되므로 ★사실상 무한히 버틴다.★
+#   = 「시드가 살아 있으면 아무리 느려도 GitHub 를 안 본다」 였다.
+#
+# ★고침★ ★속도를 직접 재서 하한 미달이면 즉시 포기한다.★
+#   GitHub 는 보통 5~20MB/s 다. 시드가 그보다 느리면 시드를 쓸 이유가 없다.
+#   · 처음 SEED_GRACE_S 초는 봐준다(연결·버퍼·디스크 예열)
+#   · 그 뒤 누적 속도가 SEED_MIN_MBPS 미만이면 ★버리고 GitHub★
+#   · 전체가 SEED_MAX_S 를 넘어도 버린다 — 느린 게 아니라 멈춘 것일 수 있다
+#   ★잰 속도를 로그에 남긴다★ — 다음 사람이 「시드가 느리다」를 숫자로 말할 수 있게.
+# ══════════════════════════════════════════════════════════════════════════
+SEED_MIN_MBPS = 1.0      # MB/s. 2.4GHz 무선(11Mbps=1.4MB/s)이 겨우 걸리는 자리
+SEED_GRACE_S = 8.0       # 이 시간까지는 속도를 안 따진다
+SEED_MAX_S = 150.0       # 아무리 느려도 여기서 끊는다(73MB 를 0.5MB/s 로 받는 시간)
+
+
+def seed_slow_reason(written: int, elapsed: float) -> str:
+    """시드를 버려야 하나 — 버릴 이유(사람이 읽는 문장), 아니면 빈 문자열 (사고 481).
+
+    ★판정을 한 곳에 모은다★ — 하네스가 이 함수를 직접 시험한다.
+    ★유예 안에서는 아무리 느려도 안 버린다★ — 연결·버퍼·디스크 예열 때문이다.
+    """
+    _el = float(elapsed or 0.0)
+    if _el > SEED_MAX_S:
+        return (f"{_el:.0f}초를 넘겼다 ({written / 1048576:.1f}MB, "
+                f"{written / 1048576 / max(_el, 0.001):.2f}MB/s)")
+    if _el > SEED_GRACE_S:
+        _mbps = written / 1048576 / max(_el, 0.001)
+        if _mbps < SEED_MIN_MBPS:
+            return (f"너무 느리다 {_mbps:.2f}MB/s < {SEED_MIN_MBPS}MB/s "
+                    f"({written // 1024}KB / {_el:.0f}초)")
+    return ""
+
+
 def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
     """★내부망 시드 1회 시도(v3.0.8)★ — 실패하면 빨리 GitHub로 폴백하는 게 목적이라 재시도 없음.
-    SHA256은 서버 /check가 준 값으로 검증하므로 시드가 엉뚱한/변조된 파일을 줘도 여기서 기각된다."""
+    SHA256은 서버 /check가 준 값으로 검증하므로 시드가 엉뚱한/변조된 파일을 줘도 여기서 기각된다.
+    ★사고 481★ 느린 시드는 ★속도로★ 버린다 — 끊기기를 기다리지 않는다."""
     tmp_path = dest_path + ".seed.tmp"
     try:
-        r = requests.get(url, stream=True, timeout=(3, 180))
+        r = requests.get(url, stream=True, timeout=(3, 30))
         r.raise_for_status()
         _d = os.path.dirname(dest_path)
         if _d:                       # 상대 경로면 dirname='' — makedirs('')는 WinError 3
             os.makedirs(_d, exist_ok=True)
         written = 0
+        _t0 = time.time()
+        _slow = ""
         with open(tmp_path, 'wb') as f:
             for chunk in r.iter_content(chunk_size=65536):
                 if chunk:
                     f.write(chunk)
                     written += len(chunk)
+                    _slow = seed_slow_reason(written, time.time() - _t0)
+                    if _slow:
+                        break
+        if _slow:
+            log(f"[다운로드] ★내부망 시드를 버린다 — {_slow} → GitHub 로 간다★ (사고 481)")
+            _safe_remove(tmp_path)
+            return False
+        _el = max(time.time() - _t0, 0.001)
+        log(f"[다운로드] 시드 속도 {written / 1048576 / _el:.1f}MB/s "
+            f"({written // 1024}KB / {_el:.0f}초)")
         if expected_sha256 and sha256_file(tmp_path) != expected_sha256:
             err("[다운로드] 시드 해시 불일치 → 폐기, GitHub 폴백")
             _safe_remove(tmp_path)
@@ -1331,6 +1388,9 @@ def _status_thread():
                     "macro_pid": pid,
                     "updater_version": UPDATER_VERSION,
                     "setup_complete": _setup_ok,
+                    # ★사고 384★ 매크로가 죽어도 보이는 화면 주소.
+                    #   대시보드는 매크로 lan_url 이 안 되면 이걸로 폴백한다.
+                    "view_url": view_url(),
                 },
                 timeout=(TIMEOUT_CONNECT, 5),
             )
@@ -1888,6 +1948,157 @@ def ensure_info_txt():
         err(f"[업데이터] info.txt 처리 실패(원본 유지): {e}")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★★사고 384 (주인님 지시) — ★매크로가 죽으면 화면을 못 본다★★
+#   주인님: 「우리 대시보드에 카드에 화면 볼수잇능거 그거 업데이터로 옮겨
+#            ★오프라인되면 볼수가없네★」
+#
+#   ★왜 지금 구조로는 안 되나★
+#     화면서버(`lc/live.py`, 포트 8765)가 ★매크로 안★ 에 있다. 매크로가 죽으면
+#     같이 죽는다 — 그런데 ★화면이 가장 필요한 순간이 바로 그때★ 다.
+#     실측 2026-09-01 12:00: PC-24 를 업데이트하느라 stop_macro 가 매크로를
+#     taskkill 하자 8765 가 함께 죽어, 업데이트가 어디까지 갔는지 볼 방법이 없었다.
+#     오늘만 이런 상황이 여러 번 있었다.
+#
+#   ★왜 live.py 를 통째로 안 옮기나★
+#     1304줄에 `config.` 가 62곳이고, 그중 `request_pause`/`release_pause` 는
+#     ★매크로에만 있는 것★ 이다(조작 중 매크로를 세우는 기능). 통째로 옮기면
+#     매크로↔업데이터 IPC 를 새로 만들어야 하고, 24대가 도는 날 회귀가 날 자리가 많다.
+#     → ★업데이터에는 「보기 전용」만 둔다.★ 조작은 8765(매크로)가 계속 맡는다.
+#       매크로가 죽었을 땐 멈출 매크로도 없으니 조작이 필요 없다.
+#
+#   ★규칙★
+#     · 포트 8767 (매크로 8765 · 시드 8766 과 안 겹친다)
+#     · ★토큰 필수★ — 보기만 해도 화면 유출이다. 부팅마다 새로 만들어 서버로 보낸다
+#     · ★매크로가 살아 있으면 스스로 비켜준다★ — 8765 가 응답하면 프레임을 안 준다
+#       (같은 화면을 둘이 캡처하면 CPU 만 먹는다)
+# ══════════════════════════════════════════════════════════════════════════
+VIEW_PORT = 8767
+_view_token = ""
+_view_srv = None
+_view_ip = ""
+
+
+def _macro_view_alive() -> bool:
+    """매크로 화면서버(8765)가 살아 있나 — 살아 있으면 업데이터는 비켜준다."""
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", 8765), timeout=0.6):
+            return True
+    except Exception:
+        return False
+
+
+def _view_grab_jpeg(quality: int = 55, scale: float = 1.0):
+    """지금 화면 한 장을 JPEG 바이트로. 실패하면 None.
+
+    ★ImageGrab 은 업데이터가 이미 쓰고 있다★(take_bug_screenshot) — 새 의존성이 없다.
+    """
+    try:
+        from io import BytesIO
+        img = ImageGrab.grab()
+        if scale and scale != 1.0:
+            img = img.resize((max(1, int(img.width * scale)),
+                              max(1, int(img.height * scale))))
+        buf = BytesIO()
+        img.convert("RGB").save(buf, "JPEG", quality=int(quality))
+        return buf.getvalue()
+    except Exception as e:
+        err(f"[보기] 캡처 실패: {e}")
+        return None
+
+
+def _view_local_ip() -> str:
+    """내부망 IP — live.py 와 같은 규칙(외부로 가는 소켓의 로컬 주소)."""
+    try:
+        import socket
+        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sk.connect(("8.8.8.8", 80))
+            return sk.getsockname()[0]
+        finally:
+            sk.close()
+    except Exception:
+        return ""
+
+
+def _view_handler_cls():
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def _deny(self, code=403):
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_GET(self):
+            import urllib.parse as _up
+            u = _up.urlparse(self.path)
+            q = _up.parse_qs(u.query or "")
+            if (q.get("k") or [""])[0] != _view_token or not _view_token:
+                return self._deny()
+            if u.path not in ("/frame.jpg", "/"):
+                return self._deny(404)
+            # ★매크로가 살아 있으면 비켜준다★ — 같은 화면을 둘이 캡처하지 않는다
+            if _macro_view_alive():
+                body = b'{"ok":false,"why":"macro_view_alive","port":8765}'
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            jpg = _view_grab_jpeg()
+            if not jpg:
+                return self._deny(500)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(jpg)))
+            self.end_headers()
+            self.wfile.write(jpg)
+
+    return H
+
+
+def view_url() -> str:
+    """서버로 보낼 보기 전용 주소. 안 열렸으면 ""."""
+    if not (_view_srv and _view_ip and _view_token):
+        return ""
+    return f"http://{_view_ip}:{VIEW_PORT}/frame.jpg?k={_view_token}"
+
+
+def start_view_server():
+    """부팅 시 1회 — 보기 전용 화면서버(사고 384)."""
+    global _view_srv, _view_ip, _view_token
+    try:
+        import http.server
+        import socketserver
+        import secrets
+        _view_ip = _view_local_ip()
+        if not _view_ip:
+            log("[보기] 내부망 IP 를 못 정해 보기 서버를 안 연다 (사고 384)")
+            return
+        _view_token = secrets.token_urlsafe(16)
+
+        class _S(socketserver.ThreadingTCPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        _view_srv = _S(("0.0.0.0", VIEW_PORT), _view_handler_cls())
+        threading.Thread(target=_view_srv.serve_forever, daemon=True,
+                         name="viewsrv").start()
+        log(f"[보기] ★매크로가 죽어도 보이는 화면 서버★ 열림 → "
+            f"http://{_view_ip}:{VIEW_PORT}/frame.jpg (사고 384)")
+    except Exception as e:
+        err(f"[보기] 화면 서버 열기 실패(무시): {e}")
+
+
 def main():
     log("=" * 60)
     log(f"[업데이터] 상주형 데몬 시작 v{UPDATER_VERSION}")
@@ -1976,6 +2187,11 @@ def main():
     for t in threads:
         t.start()
     log(f"[업데이터] {len(threads)}개 스레드 시작 완료")
+    # ★사고 384 (주인님 지시)★ 매크로가 죽어도 화면을 볼 수 있게 — 보기 전용 서버
+    try:
+        start_view_server()
+    except Exception as _ve384:
+        err(f"[보기] 서버 시작 실패(무시): {_ve384}")
 
     while True:
         time.sleep(1)
