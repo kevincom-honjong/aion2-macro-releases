@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.918",
+    "version": "1.1.919",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "0ffde8da53914f59865ee62ef343085e48e936db11c0b7a579ea51942bcdd1d7",
+    "sha256": "2dfbc81a0102fd8193d5de5147681a934682a52f886ef882dbcbf13b60a14d97",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -278,19 +278,19 @@
     "plrow_PC-24_3.png": "c2dd62487536cf417e950a2a1af111acdfc1eabb8f9b825108db515ac2ecdc42",
     "plrow_PC-24_4.png": "3f91f7dd7140dbb960bddf52c70002b22acea061ad3a81ff9b5499df717661db",
     "plrow_PC-24_5.png": "0ab7927b40c177941acb83c3b151718bf75b4bc20cab59fd726b195b3be2b19f",
-    "plrowp_PC-01_2.png": "57f51e064bd310d5f435d726c99ff321eb81514e449466ec5eff54dd016c123c",
-    "plrowp_PC-02_2.png": "282762a0f0e015aef9c6c6d41270e43374a618be80148debda10830b7904fcad",
-    "plrowp_PC-03_1.png": "acccf77038c78e733cbb1f6688c2b3acb0822a9f184d3d99336eff043963f529",
-    "plrowp_PC-04_2.png": "825c41d6f40dda6bc71a6c94da6284e4f0ce3a7646256bd9e6fd64390276309b",
-    "plrowp_PC-05_1.png": "2f88c3e3cde7b398f0b5518aa6c17d5214aaa2f67a921be061a4d819cf82a0f9",
-    "plrowp_PC-07_2.png": "02ecabd0546e40255e5849e61e28077cd8d2ba68549002c39826defec9da4166",
-    "plrowp_PC-09_1.png": "866812c7facb7992bec27f95ce88dceaff1d22516714df2fc51a87ec34e70be1",
-    "plrowp_PC-09_3.png": "ee8ae0e638f4654e99b2e79800863cbfe42a3c98fae67eb0081505d80203ad47",
-    "plrowp_PC-10_1.png": "90a5ded5c6d16b3a5754e4a8c0d3c0469f98724a6bf367d3252b59f4f711d2e0",
-    "plrowp_PC-12_3.png": "6729902fe566e81170e483c32b41bfc913a2256487569df13ad17b5d7dd4e6c8",
-    "plrowp_PC-13_1.png": "eeae30ccdeb8aced54e77b240d8d3b45f7c85c4ee4d7b8da3ba1b7a09989a389",
-    "plrowp_PC-15_2.png": "10c08162461603101d0f40a507d70d68b8a0e71c8ee60cb1b78b329196485b10",
-    "plrowp_PC-17_2.png": "e24a2814fe3715e6d51f8f2168764f13a89e4bec6086dd3e8b917fa8e6cd5244",
+    "plrowp_PC-01_2.png": "d0e37948819fae8dd2c05935c6924747707d554687f9f1cac04ca4f6436f7611",
+    "plrowp_PC-02_2.png": "9c52ad365d0570fd4407b20fc4a94f9e52062d18591762f1633e24cf2c3a6972",
+    "plrowp_PC-03_1.png": "b8c725ca7432772d3a6869dc70e0e31419a3196e855ea8117d27faab7a44c7a4",
+    "plrowp_PC-04_2.png": "64191c2b918efd2365e7550f6eca11070b33dc9332a19ebac69cdbdb54ee306e",
+    "plrowp_PC-05_1.png": "3f610d712fe778c33c66608fa21dc01bab34cc051c64bf0a1e08a30fe1533157",
+    "plrowp_PC-07_2.png": "eb2ffc2e8f70c67e57287b6f591874476e9bf36d8c28dadca6c59e4bd8bb8591",
+    "plrowp_PC-09_1.png": "25bf5c40bd53eb0167aa4792a4b99776a4832740d61780bee0ae4c253aec678a",
+    "plrowp_PC-09_3.png": "1e6a2da7527be69404452da0fe3620588bfc55a8c94700a23b433b78a9e04f0f",
+    "plrowp_PC-10_1.png": "3c47bbd89d709528cc7f3136b4807a2f2dd5d384958adbdc2a51c12672c70965",
+    "plrowp_PC-12_3.png": "04148f2b34a288e34f902b81b3b51bb8f8646544fbc54b34d08585bb1505699a",
+    "plrowp_PC-13_1.png": "43d3308de0a288c396fdb7a70ea54a3bd1aa00897999f2ab6aa6faf499b5b7a8",
+    "plrowp_PC-15_2.png": "a5dd11eae6e6c3cb8e9a29683a8b38c0c89deac9ab0fc8e01d758386d9077f93",
+    "plrowp_PC-17_2.png": "1693410a5a93690717d8c0b7bf724002663506400f60834d3494caaedb03a4db",
     "power_icon.png": "3d175c5dd3a429235808b942548747adefa2463d978a80fdb5873b0b469825ab",
     "power_meter.png": "67262bb4792ab828f38747997098d48e7eb962ef85c09c04c7ab3b77222b1947",
     "ps_computers.png": "ccf4eff16753aba0727f6a6b24b99fd3b5f9e54e12c48c6d02a20b699463cb87",
@@ -428,11 +428,11 @@
     "sha256": "7da084df9553bf6dd41d892b243383b8bf2ce131dd483751535ea0e8e378a7c6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260905172903",
-  "updated_at": "2026-09-05T18:28:12",
+  "images_version": "20260905184129",
+  "updated_at": "2026-09-05T18:41:29",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.918",
+    "version": "1.1.919",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
