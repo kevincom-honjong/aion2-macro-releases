@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.11"
+UPDATER_VERSION  = "3.1.12"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -490,26 +490,32 @@ def _download_once(url: str, tmp_path: str, dest_path: str, expected_sha256):
 #   · 전체가 SEED_MAX_S 를 넘어도 버린다 — 느린 게 아니라 멈춘 것일 수 있다
 #   ★잰 속도를 로그에 남긴다★ — 다음 사람이 「시드가 느리다」를 숫자로 말할 수 있게.
 # ══════════════════════════════════════════════════════════════════════════
-SEED_MIN_MBPS = 1.0      # MB/s. 2.4GHz 무선(11Mbps=1.4MB/s)이 겨우 걸리는 자리
-SEED_GRACE_S = 8.0       # 이 시간까지는 속도를 안 따진다
-SEED_MAX_S = 150.0       # 아무리 느려도 여기서 끊는다(73MB 를 0.5MB/s 로 받는 시간)
+SEED_MIN_MBPS = 1.0      # (참고값, 판정에 안 쓴다 — 사고 495 로 속도 판정 폐기)
+SEED_GRACE_S = 8.0       # 이 시간까지는 아무것도 안 따진다
+SEED_MAX_S = 300.0       # 아무리 느려도 여기서 끊는다
+SEED_STALL_S = 20.0      # ★이 시간 동안 1바이트도 안 오면★ 버린다 — 느린 게 아니라 멈춘 것
 
 
-def seed_slow_reason(written: int, elapsed: float) -> str:
-    """시드를 버려야 하나 — 버릴 이유(사람이 읽는 문장), 아니면 빈 문자열 (사고 481).
+def seed_slow_reason(written: int, elapsed: float, since_progress: float = 0.0) -> str:
+    """시드를 버려야 하나 — 버릴 이유(사람이 읽는 문장), 아니면 빈 문자열.
 
-    ★판정을 한 곳에 모은다★ — 하네스가 이 함수를 직접 시험한다.
-    ★유예 안에서는 아무리 느려도 안 버린다★ — 연결·버퍼·디스크 예열 때문이다.
+    ★사고 495 (2026-09-05, 주인님: 「내부망시드 속도 느리다고 그냥 자꾸 버리네」)★
+      3.1.11(사고 481)은 「8초 뒤 누적 1MB/s 미만이면 버린다」였다. 그런데 24대가 같이 받으면
+      한 대당 속도가 잠깐 그 밑으로 떨어진다 — 실측 23:19~23:21: PC-04 는 ★24MB 를 받아놓고
+      0.99MB/s★ 로 버렸고, PC-14·16·18·23 은 대기열에서 9초 만에 192~448KB 로 버렸다.
+      GitHub 로 가면 외부 회선을 24대가 나눠 쓴다 — 시드의 존재 이유가 사라진다.
+    ★새 규칙: 속도로는 절대 안 버린다. 「멈춤」으로만 버린다.★
+      · SEED_STALL_S 동안 진행 0바이트 → 멈춘 것(시드 죽음·소켓 멈춤) → GitHub
+      · 전체 SEED_MAX_S 초과 → 버림(무한 대기 방지, 사고 481 의 원래 문제)
+      · 유예 SEED_GRACE_S 안에서는 멈춤도 안 따진다(연결·예열)
+    since_progress: 마지막으로 바이트가 온 뒤 흐른 시간. 호출부가 잰다.
     """
     _el = float(elapsed or 0.0)
     if _el > SEED_MAX_S:
         return (f"{_el:.0f}초를 넘겼다 ({written / 1048576:.1f}MB, "
                 f"{written / 1048576 / max(_el, 0.001):.2f}MB/s)")
-    if _el > SEED_GRACE_S:
-        _mbps = written / 1048576 / max(_el, 0.001)
-        if _mbps < SEED_MIN_MBPS:
-            return (f"너무 느리다 {_mbps:.2f}MB/s < {SEED_MIN_MBPS}MB/s "
-                    f"({written // 1024}KB / {_el:.0f}초)")
+    if _el > SEED_GRACE_S and float(since_progress or 0.0) >= SEED_STALL_S:
+        return (f"{since_progress:.0f}초째 진행 없음 (멈춤, {written // 1024}KB 받은 채)")
     return ""
 
 
@@ -519,22 +525,25 @@ def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
     ★사고 481★ 느린 시드는 ★속도로★ 버린다 — 끊기기를 기다리지 않는다."""
     tmp_path = dest_path + ".seed.tmp"
     try:
-        r = requests.get(url, stream=True, timeout=(3, 30))
+        r = requests.get(url, stream=True, timeout=(3, SEED_STALL_S))   # 읽기 타임아웃 = 멈춤 판정과 같은 값
         r.raise_for_status()
         _d = os.path.dirname(dest_path)
         if _d:                       # 상대 경로면 dirname='' — makedirs('')는 WinError 3
             os.makedirs(_d, exist_ok=True)
         written = 0
         _t0 = time.time()
+        _last_prog = _t0            # ★사고 495★ 마지막으로 바이트가 온 시각
         _slow = ""
         with open(tmp_path, 'wb') as f:
             for chunk in r.iter_content(chunk_size=65536):
+                _now = time.time()
                 if chunk:
                     f.write(chunk)
                     written += len(chunk)
-                    _slow = seed_slow_reason(written, time.time() - _t0)
-                    if _slow:
-                        break
+                    _last_prog = _now
+                _slow = seed_slow_reason(written, _now - _t0, _now - _last_prog)
+                if _slow:
+                    break
         if _slow:
             log(f"[다운로드] ★내부망 시드를 버린다 — {_slow} → GitHub 로 간다★ (사고 481)")
             _safe_remove(tmp_path)
