@@ -3422,6 +3422,7 @@ const STATUS_CFG = {
   //   ★위 `switching` 은 캐릭(슬롯) 전환이다★ — 계정전환은 본컴 런처까지 갈아끼우는
   //   3~5분짜리 다른 일이라 라벨을 가른다. 옆에 switchStepChip 이 몇 단계인지 붙는다.
   acct_switching:{label:'계정 전환', vi:'Đổi tài khoản', bg:'bg-purple-500/20', border:'border-purple-700', badge:'bg-purple-400', text:'text-purple-300', online:true},
+  connecting:   {label:'접속 중', vi:'Đang kết nối',   bg:'bg-orange-500/20', border:'border-orange-700', badge:'bg-orange-400', text:'text-orange-300', online:true},   // ★사고 489★ 스트림 붙이는 1~2분 — 「가만히 있네」가 아니라 하는 중
   reconnecting: {label:'재연결 중', vi:'Đang kết nối lại', bg:'bg-orange-500/20', border:'border-orange-700', badge:'bg-orange-400', text:'text-orange-400', online:true},
   captcha:      {label:'캡차', vi:'Captcha',      bg:'bg-pink-500/20',   border:'border-pink-700',   badge:'bg-pink-500',   text:'text-pink-400',   online:true},
   dead:         {label:'사망', vi:'Đã chết',      bg:'bg-red-500/20',    border:'border-red-700',    badge:'bg-red-500',    text:'text-red-400',    online:true},
