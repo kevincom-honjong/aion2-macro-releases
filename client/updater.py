@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.12"
+UPDATER_VERSION  = "3.1.13"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -1607,13 +1607,31 @@ def _kill_stale_updater_processes():
     me = os.getpid()
     try:
         import psutil
+        # ★★사고 499 (2026-09-06, 주인님: 「9번은 업데이터가 꺼져있어 … 다시 킨 거임」)★★
+        #   실측: PC-09 는 재시작 9회인데 ★잔여킬 15회★ — 09-04 15:43 한 번에 ★5개★ 를 죽였다
+        #   (PID 3436·4008·7140·7616·9976). 다른 PC 는 전부 킬==재시작(누적 0).
+        #   updater 가 쌓이면 새로 뜨는 놈이 나머지를 전부 죽인다 → 사람이 보던 창이 사라진다.
+        #   ★누가 낳았는지를 로그에 남기지 않아서 원인을 로그로는 못 좁혔다★ →
+        #   내 부모와, 죽이는 놈의 부모를 함께 적는다. 다음 판엔 시작프로그램인지·스케줄러인지
+        #   ·사람 손인지가 한 줄로 갈린다. (막는 게 아니라 ★다음에 알게★ 하는 수정이다)
+        def _who(pr):
+            try:
+                par = pr.parent()
+                return f"{par.name()}#{par.pid}" if par else "부모없음"
+            except Exception:
+                return "부모모름"
+        try:
+            log(f"[정리] 나를 띄운 것: {_who(psutil.Process(me))} (사고 499)")
+        except Exception:
+            pass
         for p in psutil.process_iter(['pid', 'exe', 'name']):
             try:
                 if p.pid == me:
                     continue
                 base = (os.path.basename(p.info.get('exe') or p.info.get('name') or "")).lower()
                 if base.startswith("updater") and base.endswith(".exe"):
-                    log(f"[정리] 잔여 updater 프로세스 강제 종료: PID {p.pid} ({base})")
+                    log(f"[정리] 잔여 updater 프로세스 강제 종료: PID {p.pid} ({base}) "
+                        f"— 띄운 것: {_who(p)} (사고 499)")
                     p.kill()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass

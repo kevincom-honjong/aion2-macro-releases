@@ -35,6 +35,7 @@ chk("상한 문장에 MB/s 가 적힌다", "MB/s" in r(50, U.SEED_MAX_S + 1, 0.1
 chk("STALL < MAX", U.SEED_STALL_S < U.SEED_MAX_S)
 chk("GRACE < STALL", U.SEED_GRACE_S < U.SEED_STALL_S)
 chk("읽기 타임아웃이 멈춤 판정과 같은 값이다(소스 확인)", f"timeout=(3, SEED_STALL_S)" in open(U.__file__, encoding="utf-8").read())
-chk("버전 3.1.12", U.UPDATER_VERSION == "3.1.12")
+# ★버전 숫자를 시험에 박지 않는다★ — 박으면 범프마다 시험이 깨지고, 깨진 시험은 꺼진다.
+chk("멈춤 기준 규칙이 살아 있다(속도 판정 폐기 뒤)", U.SEED_MIN_MBPS >= 0 and U.SEED_STALL_S > 0)
 print(f"\n{OK}/{OK + FAIL}")
 sys.exit(1 if FAIL else 0)
