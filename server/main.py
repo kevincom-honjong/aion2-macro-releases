@@ -3290,13 +3290,28 @@ function pendRegister(pcId, command, args){
 function pendStep(e){
   if (!e) return false;
   const age = Date.now() - e.at;
-  if (e.phase === 'warn') {                                    // ⑤ ⚠/⛔ 는 잠깐 남기고 치운다
-    if (age > e.ttl + PEND_WARN_KEEP || age > PEND_HARD_MAX) { delete pendingCmds[e.base]; return true; }
-    return false;
-  }
+  // ══════════════════════════════════════════════════════════════════
+  // ★★2026-09-08 주인님 — 「사냥시작 4분 52초째 응답없음, 이미 사냥은 하고있어」★★
+  //   ★효과 관측(①)을 warn 이어도 계속 본다.★
+  //   옛 코드는 warn 분기가 ★맨 앞에서 return★ 이라, 한 번 ⚠ 가 되면 그 뒤에
+  //   실제로 사냥이 시작돼도 ★다시 안 봤다.★ 그런데 start 의 ttl 이 ★정확히 180초★
+  //   인데 확인창 문구조차 「사냥 중으로 바뀌는 데 ★최대 3분★ 걸립니다」 라고 적어놨다 —
+  //   ★3분을 넘기는 판은 정상인데도 반드시 ⚠ 로 남는다.★ 그리고 warn 은
+  //   PEND_WARN_KEEP(5분) 을 더 버틴다 = ★도는 PC 에 「응답없음」이 최대 8분.★
+  //   사람이 새로고침으로 지우는 수밖에 없었다(pendingCmds 는 브라우저 안에만 있다).
+  //   ★효과가 왔으면 warn 이든 아니든 지운다★ — 그게 이 표시의 원래 뜻이다.
+  // ══════════════════════════════════════════════════════════════════
   if (e.acct) {                                                // ①-a 계정번호가 실제로 바뀜
     const cur = currentAcctNum(e.base);
     if (cur && e.acct0 && cur !== e.acct0) { delete pendingCmds[e.base]; return true; }
+  }
+  if (e.phase === 'warn') {                                    // ⑤ ⚠/⛔ 는 잠깐 남기고 치운다
+    if (e.exp) {                                               // ★warn 이어도 ①-b 를 본다★
+      const stW = pendStatusOf(e);
+      if (stW !== e.st0 && e.exp.indexOf(stW) >= 0) { delete pendingCmds[e.base]; return true; }
+    }
+    if (age > e.ttl + PEND_WARN_KEEP || age > PEND_HARD_MAX) { delete pendingCmds[e.base]; return true; }
+    return false;
   }
   if (e.exp) {                                                 // ①-b status 가 실제로 바뀜
     // ★★적대검증 높음4 — 명령과 ★무관한★ 상태 전이가 표시를 지웠다★★
