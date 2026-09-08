@@ -602,6 +602,44 @@ async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+# ── FarmView 연동: 시각 이후 로그를 ★한 방에★ (2026-09-08 신설, 스키마 불변) ──────
+#   get_logs 는 PC 하나씩이라 72대를 훑으면 쿼리가 72번이다. FarmView 는 주기적으로
+#   "이 시각 이후 전부" 를 묻기 때문에 그 모양이 필요하다. ★읽기 전용 · 새 표 없음.★
+#   ns_prefix: "" 면 main 테넌트(접두사 없음)를 뜻하지 않는다 — 전부를 준다.
+#   호출부가 split_ns 로 걸러 쓴다(main 은 접두사가 없어 LIKE 로 못 좁힌다).
+
+async def get_logs_since(since: str, limit: int = 500,
+                         pc_id: "str | None" = None) -> list[dict]:
+    """created_at > since 인 로그를 오래된 순으로. pc_id 를 주면 그 PC 만."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if pc_id:
+            sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
+                   "WHERE created_at > ? AND pc_id = ? ORDER BY id ASC LIMIT ?")
+            params = (since, pc_id, limit)
+        else:
+            sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
+                   "WHERE created_at > ? ORDER BY id ASC LIMIT ?")
+            params = (since, limit)
+        async with db.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_commands_since(since: str, limit: int = 500) -> list[dict]:
+    """created_at 또는 updated_at 이 since 이후인 매크로 명령을 오래된 순으로."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, pc_id, command, args, status, created_at, updated_at "
+            "FROM commands WHERE created_at > ? OR (updated_at IS NOT NULL AND updated_at > ?) "
+            "ORDER BY id ASC LIMIT ?",
+            (since, since, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── 캐릭터 세부정보 ───────────────────────────────────────────────────────────
 
 async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool = False,

@@ -1134,6 +1134,10 @@ async def push_alert(tenant: str, pc_id: str, kind: str, message: str,
     await manager.broadcast({"type": "alert", "pc_id": pc_id, "kind": kind,
                              "message": message, "speak": bool(speak),
                              "say": say}, tenant)
+    # ★FarmView 도 보게 링버퍼에 남긴다 (2026-09-08)★ — 화면 배너는 휘발이라
+    #   폴링으로 오는 FarmView 는 알림을 영영 못 본다. 브로드캐스트는 그대로다.
+    if tenant == FV_TENANT:
+        _fv_note_alert(pc_id, kind, message, say)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8544,27 +8548,20 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
 _BROADCAST_IDS = {"all", "ALL", "All", "*"}
 
 
-@app.post("/command/{pc_id}")
-async def send_command(pc_id: str, request: Request):
-    # ★명령 '주입'은 대시보드 세션 전용(2026-07-27 보안감사 critical).
-    #   기존엔 API 키로도 주입이 가능했는데, API 키는 배포되는 exe·공개 소스에 각인될 수밖에
-    #   없어(구조적) 유출을 전제해야 한다. 실제로 공개 저장소에 평문 노출돼 있었고,
-    #   그 키 하나로 로그인 없이 함대 전체에 시작/정지/판매 명령을 넣을 수 있었다.
-    #   매크로·업데이터는 명령을 '폴링(GET)'하고 'ack'만 하므로 이 변경에 기능 손실이 없다.★
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
-    # ★브로드캐스트 차단 [A7]★ — 위 _BROADCAST_IDS 주석 참조.
-    #   막다가 잃는 기능이 0 이라(대시보드에 호출부 없음) 그냥 거부한다.
-    if str(pc_id).strip() in _BROADCAST_IDS:
-        raise HTTPException(
-            status_code=400,
-            detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
-    body = await request.json()
-    command = body.get("command")
-    if not command:
-        raise HTTPException(status_code=400, detail="command 필드 필요")
-    args = body.get("args", {})
+
+# ══════════════════════════════════════════════════════════════════════════
+# ★★명령 주입의 ★몸통 하나★ (2026-09-08 추출)★★
+#   순환 무장/해제 · 비밀 마스킹 · enrich · WS 즉시전달 · 이력 브로드캐스트가
+#   전부 여기 있다. 예전엔 `POST /command/{pc_id}` 라우트 ★안에★ 있었는데,
+#   FarmView 연동 API(`POST /api/fv/command`)가 같은 일을 해야 해서 ★옮겼다.★
+#   ★복붙하지 않는다★ — 규칙이 둘로 갈리면 한쪽만 고쳐지고 다른 쪽으로 샌다(§A12·§A8-5).
+#   ★옮기기만 했다★ — 경로·인증·A7 브로드캐스트 가드·응답 모양은 그대로다.
+#   호출부는 ★인증과 A7 가드를 먼저★ 통과시킨 뒤 이 함수를 부른다.
+# ══════════════════════════════════════════════════════════════════════════
+async def _dispatch_macro_command(tenant: str, pc_id: str,
+                                  command: str, args: dict) -> dict:
+    """명령을 큐에 넣고 매크로에 전달한다. 응답 dict(ok/id/ws/무장결과)를 돌려준다."""
+    args = dict(args or {})
     nspc = ns(tenant, pc_id)
     _rot_result: dict = {}          # ▶시작이면 무장 결과를 응답에 실어 화면에 알린다
 
@@ -8664,7 +8661,33 @@ async def send_command(pc_id: str, request: Request):
     ws_sent = await send_command_to_macro(nspc, command, send_args, cmd_id)
     # 브로드캐스트 (명령 내역 갱신용)
     await _push_cmd_history(tenant)
-    return JSONResponse({"ok": True, "id": cmd_id, "ws": ws_sent, **_rot_result})
+    return {"ok": True, "id": cmd_id, "ws": ws_sent, **_rot_result}
+
+
+@app.post("/command/{pc_id}")
+async def send_command(pc_id: str, request: Request):
+    # ★명령 '주입'은 대시보드 세션 전용(2026-07-27 보안감사 critical).
+    #   기존엔 API 키로도 주입이 가능했는데, API 키는 배포되는 exe·공개 소스에 각인될 수밖에
+    #   없어(구조적) 유출을 전제해야 한다. 실제로 공개 저장소에 평문 노출돼 있었고,
+    #   그 키 하나로 로그인 없이 함대 전체에 시작/정지/판매 명령을 넣을 수 있었다.
+    #   매크로·업데이터는 명령을 '폴링(GET)'하고 'ack'만 하므로 이 변경에 기능 손실이 없다.★
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    # ★브로드캐스트 차단 [A7]★ — 위 _BROADCAST_IDS 주석 참조.
+    #   막다가 잃는 기능이 0 이라(대시보드에 호출부 없음) 그냥 거부한다.
+    if str(pc_id).strip() in _BROADCAST_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
+    body = await request.json()
+    command = body.get("command")
+    if not command:
+        raise HTTPException(status_code=400, detail="command 필드 필요")
+    # ★몸통은 _dispatch_macro_command 로 옮겼다 (2026-09-08)★ — FarmView API 와
+    #   ★같은 코드★ 를 쓰게 하려는 것. 여기서 하는 일은 인증·A7 가드·본문 파싱뿐이다.
+    return JSONResponse(await _dispatch_macro_command(tenant, pc_id, command,
+                                                      body.get('args', {})))
 
 
 @app.delete("/status/{pc_id}")
@@ -12121,3 +12144,498 @@ async def rotate_set(pc_id: str, request: Request):
     return JSONResponse({"ok": True, "on": False, "pc": _base_pc(pc_id)})
 
 # redeploy trigger 2026-08-21 00:55 (Railway 502 — 새 배포 시도)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★★FarmView 연동 API (2026-09-08 신설) — /api/fv/*★★
+#
+#   주인님 지시: 로컬 관제 프로그램 FarmView(aiohttp)가 이 대시보드 데이터를 가져다 쓴다.
+#     · 인증은 ★헤더 X-FV-Token 하나★ — 세션/쿠키/429 락아웃을 전부 우회한다.
+#       (FarmView 는 주기적으로 폴링하므로 락아웃에 걸리면 안 된다)
+#     · ★FV_TOKEN 이 없으면 이 API 전체가 404★ 로 숨는다.
+#     · 에러는 {"error": "...", "code": ...} 로 통일.
+#
+#   ★기존 것을 안 건드린다★ — 라우트도 화면도 DB 스키마도 그대로다.
+#   데이터는 ★대시보드가 쓰는 바로 그 함수★ 로 뽑는다:
+#     _build_full_state()  = /status 와 WS state 가 쓰는 것 (= 화면에 뜨는 전부)
+#     _list_bug_files()    = 버그 스샷 목록
+#     get_logs/get_logs_since/get_commands_since = 로그·명령 이력
+#     _dispatch_macro_command() = ★명령 주입의 몸통 하나★ (대시보드와 같은 코드)
+#   ★복붙하지 않는다★ — 규칙이 둘로 갈리면 한쪽만 고쳐지고 다른 쪽으로 샌다(§A12·§A8-5).
+#
+#   ★이 API 는 A7 브로드캐스트 키를 안 쓴다★ — pc:"all" 은 서버가 ★실제 PC 목록으로
+#   펼쳐서★ 한 대씩 보낸다. 그래서 `_BROADCAST_IDS` 가드는 그대로 살아 있다.
+#   다만 ★"all" 은 함대 전체를 움직인다★ — FarmView 쪽에서 확인 절차를 두는 게 좋다.
+# ═════════════════════════════════════════════════════════════════════════════
+import gzip as _fv_gzip
+from collections import deque as _fv_deque
+
+from database import get_logs_since as _fv_logs_since
+from database import get_commands_since as _fv_cmds_since
+
+FV_TOKEN    = (os.getenv("FV_TOKEN", "") or "").strip()
+FV_TENANT   = (os.getenv("FV_TENANT", "main") or "main").strip()
+FV_SNAP_TTL = 3.0                      # 스냅샷 서버 캐시(초) — 주인님 지시
+FV_ALERT_KEEP = 200                    # global.alerts 링버퍼 길이
+
+_fv_snap: dict = {"ts": 0.0, "body": None}
+_FV_ALERTS = _fv_deque(maxlen=FV_ALERT_KEEP)
+_FV_TS_FMT = "%Y-%m-%dT%H:%M:%S"       # DB 가 쓰는 형식(UTC naive) — 문자열 비교가 곧 시간 비교
+
+
+def _fv_err(code: int, msg: str) -> JSONResponse:
+    """에러 모양을 하나로 — {"error": "...", "code": ...}"""
+    return JSONResponse({"error": msg, "code": code}, status_code=code)
+
+
+def _fv_guard(request: Request):
+    """통과하면 None, 아니면 JSONResponse. ★세션·쿠키·429 를 일절 안 본다.★"""
+    if not FV_TOKEN:
+        return _fv_err(404, "Not Found")          # 토큰 미설정 = API 전체를 숨긴다
+    supplied = (request.headers.get("X-FV-Token") or "").encode("utf-8", "replace")
+    if not hmac.compare_digest(supplied, FV_TOKEN.encode("utf-8", "replace")):
+        return _fv_err(401, "X-FV-Token 이 올바르지 않습니다")
+    return None
+
+
+def _fv_json(request: Request, payload, status: int = 200) -> Response:
+    """gzip 허용(Accept-Encoding 이 있고 1KB 초과일 때만). ★FV 경로에서만★ 쓴다."""
+    raw = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    if len(raw) > 1024 and "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        return Response(_fv_gzip.compress(raw, 6), status_code=status,
+                        media_type="application/json",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(raw, status_code=status, media_type="application/json")
+
+
+def _fv_now() -> str:
+    return datetime.now(timezone.utc).strftime(_FV_TS_FMT)
+
+
+def _fv_iso(s: str, default: str = "") -> str:
+    """들어온 ISO8601 을 DB 형식으로 정규화. 'Z'·오프셋·마이크로초를 받아준다."""
+    s = (s or "").strip()
+    if not s:
+        return default
+    t = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(t)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt.strftime(_FV_TS_FMT)
+    except Exception:
+        return default
+
+
+def _fv_note_alert(pc_id: str, kind: str, message: str, say: str = "") -> None:
+    """push_alert 가 부른다 — 화면 상단 배너로 나간 알림을 FarmView 도 보게 링버퍼에 남긴다."""
+    try:
+        _FV_ALERTS.append({"at": _fv_now(), "pc": pc_id, "kind": kind,
+                           "message": message, "say": say})
+    except Exception:
+        pass
+
+
+# ── 지원 명령 목록 — ★대시보드의 CMD_TRACK 을 그대로 읽는다★ (표를 두 벌 두지 않는다) ──
+def _fv_parse_cmd_table() -> dict:
+    """HTML_DASHBOARD 안의 CMD_TRACK/CMD_SILENT 를 파싱해 {cmd: {label, ttl_ms, expect}}.
+    ★정본은 화면 코드 한 곳★ — 여기서 목록을 새로 적으면 둘이 어긋난다."""
+    out: dict = {}
+    try:
+        blk = re.search(r"const CMD_TRACK = \{(.*?)\n\};", HTML_DASHBOARD, re.S)
+        if blk:
+            for m in re.finditer(
+                    r"^\s*([a-z_][a-z0-9_]*)\s*:\s*\{(.*?)\},\s*$", blk.group(1), re.M):
+                name, rest = m.group(1), m.group(2)
+                lab = re.search(r"t\s*:\s*'([^']*)'", rest)
+                ttl = re.search(r"ttl\s*:\s*(\d+)", rest)
+                exp = re.search(r"exp\s*:\s*\[([^\]]*)\]", rest)
+                out[name] = {
+                    "label": (lab.group(1) if lab else name),
+                    "ttl_ms": int(ttl.group(1)) if ttl else None,
+                    "expect_status": ([x.strip().strip("'\"") for x in exp.group(1).split(",")]
+                                      if exp else []),
+                    "rotatable": name in ROT_TASKS,
+                    "silent": False,
+                }
+        sil = re.search(r"const CMD_SILENT = \[(.*?)\];", HTML_DASHBOARD, re.S)
+        if sil:
+            for name in re.findall(r"'([a-z_][a-z0-9_]*)'", sil.group(1)):
+                out.setdefault(name, {"label": name, "ttl_ms": None,
+                                      "expect_status": [], "rotatable": False})
+                out[name]["silent"] = True
+    except Exception as e:
+        print(f"[FV] 명령표 파싱 실패(무시): {e}")
+    return out
+
+
+_FV_CMDS: dict = {}
+
+
+def _fv_cmds() -> dict:
+    global _FV_CMDS
+    if not _FV_CMDS:
+        _FV_CMDS = _fv_parse_cmd_table()
+    return _FV_CMDS
+
+
+# ── 스냅샷 조립 ──────────────────────────────────────────────────────────────
+def _fv_pc_view(row: dict) -> dict:
+    """_build_full_state 한 줄 → FarmView 가 쓰기 좋은 모양.
+    ★raw 에 원본을 통째로 실어 둔다★ — 화면에 뜨는데 여기 안 담긴 필드가 있어도
+    FarmView 가 못 보는 일이 없게."""
+    st = str(row.get("status") or "offline")
+    dp = row.get("daily_progress") or []
+    done = sum(1 for d in dp if d.get("completed"))
+    return {
+        "pc_id":       row.get("pc_id"),
+        "online":      st != "offline",
+        "status":      st,
+        "last_report": row.get("_updated_at"),
+        "silent_s":    row.get("_macro_silent_s"),
+        "ws_live":     row.get("_ws_live"),
+        "macro_version": row.get("macro_version"),
+        "doing": {
+            "status":       st,
+            "switch_step":  row.get("switch_step"),
+            "switch_mark":  row.get("switch_mark"),
+            "map":          row.get("map"),
+            "map_name":     row.get("map_name"),
+            "slot":         row.get("slot"),
+            "wait_slot":    row.get("wait_slot"),
+            "stopped_by":   row.get("stopped_by"),
+            "stopped_why":  row.get("stopped_why"),
+        },
+        "account": {
+            "num":       row.get("acct_num"),
+            "id":        row.get("acct_id"),
+            "total":     row.get("acct_total"),
+            "server":    row.get("acct_server"),
+            "ids":       row.get("acct_ids"),
+            "platforms": row.get("acct_platforms"),
+            "servers":   row.get("acct_servers"),
+            "names":     row.get("acct_names"),
+        },
+        "character": {
+            "name":  row.get("character"),
+            "class": row.get("class"),
+            "chars": row.get("chars"),
+        },
+        "progress": {
+            "hunt_progress": row.get("hunt_progress"),
+            "efficiency":    row.get("efficiency"),
+            "kina":          row.get("kina"),
+            "kina_rate":     row.get("kina_rate"),
+            "total_kina":    row.get("_total_kina"),
+            "uptime_hours":  row.get("uptime_hours"),
+            "deaths_30m":    row.get("deaths_30m"),
+            "abyss_kina":    row.get("abyss_kina"),
+        },
+        "today": {
+            "slots_done":  done,
+            "slots_total": len(dp),
+            "slots_left":  max(0, len(dp) - done),
+            "daily_progress": dp,
+            "dungeon_done_at": row.get("dungeon_done_at"),
+        },
+        "errors": row.get("errors") or [],
+        "bugs":   row.get("_bug_count"),
+        "updater": {
+            "state":     row.get("_updater_state"),
+            "version":   row.get("_updater_version"),
+            "age_s":     row.get("_updater_age_s"),
+            "view_url":  row.get("_view_url"),
+        },
+        "links": {"lan_url": row.get("lan_url"), "view_url": row.get("_view_url")},
+        "cdp":   {"ok": row.get("cdp"), "at": row.get("cdp_at"), "tabs": row.get("cdp_tabs")},
+        "wifi":  row.get("wifi"),
+        "raw":   row,
+    }
+
+
+async def _fv_build_snapshot() -> dict:
+    """★대시보드가 쓰는 그 함수들★ 로만 만든다."""
+    rows = await _build_full_state(FV_TENANT)
+    pcs = {}
+    by_status: dict = {}
+    vers: dict = {}
+    total_kina = 0
+    total_bugs = 0
+    online = 0
+    for r in rows:
+        pid = str(r.get("pc_id") or "")
+        if not pid:
+            continue
+        v = _fv_pc_view(r)
+        pcs[pid] = v
+        by_status[v["status"]] = by_status.get(v["status"], 0) + 1
+        if v["online"]:
+            online += 1
+        ver = r.get("macro_version") or "?"
+        vers[ver] = vers.get(ver, 0) + 1
+        try:
+            total_kina += int(r.get("_total_kina") or 0)
+        except Exception:
+            pass
+        try:
+            total_bugs += int(r.get("_bug_count") or 0)
+        except Exception:
+            pass
+
+    # 순환 무장 — 대시보드 /rotate 와 같은 저장소를 본다
+    armed = []
+    try:
+        for key in list(_ROT.keys()):
+            t, pid = split_ns(key)
+            if t == FV_TENANT:
+                armed.append(pid)
+    except Exception:
+        pass
+
+    # 회랑 — 대시보드 전광판이 쓰는 그 스냅샷
+    corridor = {}
+    try:
+        for key, val in CORRIDOR_PROG.items():
+            t, pid = split_ns(key)
+            if t == FV_TENANT:
+                corridor[pid] = val
+    except Exception:
+        pass
+
+    notice = None
+    try:
+        notice = await get_setting(ns(FV_TENANT, "notice"))
+    except Exception:
+        pass
+
+    return {
+        "ts": _fv_now(),
+        "pcs": pcs,
+        "global": {
+            "tenant": FV_TENANT,
+            "counts": {"total": len(pcs), "online": online,
+                       "offline": len(pcs) - online, "by_status": by_status},
+            "totals": {"total_kina": total_kina, "bugs": total_bugs,
+                       "corridor_remaining": sum(int(c.get("remaining") or 0)
+                                                 for c in corridor.values())},
+            "versions": vers,
+            "rotate_armed": sorted(armed),
+            "corridor": corridor,
+            "alerts": list(_FV_ALERTS)[-30:],
+            "notice": notice,
+            "server": {
+                "boot": SERVER_BOOT_ID[:8],
+                "code": SERVER_CODE_ID,
+                "uptime_s": int(time.time() - SERVER_BOOT_TS),
+                "disk_persisted": VOLUME_PERSISTED,
+                "serving_exe": (((_version_cache.get("data") or {}).get("exe") or {}).get("version")
+                                if isinstance(_version_cache.get("data"), dict) else None),
+            },
+        },
+    }
+
+
+@app.get("/api/fv/snapshot")
+async def fv_snapshot(request: Request):
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    now = time.time()
+    if _fv_snap["body"] is not None and (now - _fv_snap["ts"]) < FV_SNAP_TTL:
+        body = _fv_snap["body"]
+        body = {**body, "cached": True,
+                "cache_age_s": round(now - _fv_snap["ts"], 2)}
+        return _fv_json(request, body)
+    try:
+        body = await _fv_build_snapshot()
+    except Exception as e:
+        return _fv_err(500, f"스냅샷 조립 실패: {e}")
+    _fv_snap["ts"], _fv_snap["body"] = now, body
+    return _fv_json(request, {**body, "cached": False, "cache_age_s": 0})
+
+
+@app.get("/api/fv/events")
+async def fv_events(request: Request, since: str = "", limit: int = 500):
+    """since 이후의 로그·명령·버그를 ★시간순 한 배열★ 로. next_since 를 같이 준다."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    try:
+        limit = max(1, min(int(limit or 500), 2000))
+    except Exception:
+        return _fv_err(400, "limit 이 숫자가 아닙니다")
+    default_since = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(_FV_TS_FMT)
+    s_since = _fv_iso(since, default_since)
+    if since and s_since == default_since and _fv_iso(since) == "":
+        return _fv_err(400, "since 가 ISO8601 이 아닙니다 (예: 2026-09-08T05:00:00Z)")
+
+    events: list = []
+    try:
+        for r in await _fv_logs_since(s_since, limit):
+            t, pid = split_ns(str(r.get("pc_id") or ""))
+            if t != FV_TENANT:
+                continue
+            kind = "updater_log" if pid.endswith(".upd") else "log"
+            events.append({"type": kind, "at": r.get("created_at"),
+                           "pc": pid[:-4] if pid.endswith(".upd") else pid,
+                           "level": r.get("level"), "message": r.get("message"),
+                           "id": r.get("id")})
+    except Exception as e:
+        return _fv_err(500, f"로그 조회 실패: {e}")
+
+    try:
+        for c in await _fv_cmds_since(s_since, limit):
+            t, pid = split_ns(str(c.get("pc_id") or ""))
+            if t != FV_TENANT:
+                continue
+            events.append({"type": "command", "at": (c.get("updated_at") or c.get("created_at")),
+                           "pc": pid, "command": c.get("command"),
+                           "status": c.get("status"), "id": c.get("id"),
+                           "args": c.get("args")})
+    except Exception as e:
+        return _fv_err(500, f"명령 이력 조회 실패: {e}")
+
+    try:
+        # ★시각은 ★파일명★ 에서 읽는다★ — _list_bug_files 는 {filename,size} 만 준다.
+        #   이름이 `{pc}_{YYYYMMDD}_{HHMMSS}_...` 라 ★이름 정렬 = 시간 정렬★ 이고,
+        #   mtime 은 볼륨 이전·파일 복사 때 전부 같은 시각이 되어 순서가 무너진다
+        #   (_prune_bugs 가 같은 이유로 이름을 쓴다 — ★그 규칙을 그대로 따른다★).
+        for b in _list_bug_files(FV_TENANT):
+            fn = str(b.get("filename") or "")
+            m = re.match(r"^(.+?)_(\d{8})_(\d{6})_", fn)
+            if not m:
+                continue
+            at = f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T"                  f"{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}"
+            if at > s_since:
+                events.append({"type": "bug", "at": at, "pc": m.group(1),
+                               "filename": fn, "size": b.get("size"),
+                               "url": f"/bugs/image/{fn}"})
+    except Exception as e:
+        print(f"[FV] 버그 목록 실패(무시): {e}")
+
+    events.sort(key=lambda e: (str(e.get("at") or ""), str(e.get("type"))))
+    truncated = len(events) > limit
+    events = events[:limit]
+    next_since = events[-1]["at"] if events else s_since
+    return _fv_json(request, {"since": s_since, "next_since": next_since,
+                              "count": len(events), "truncated": truncated,
+                              "events": events})
+
+
+@app.get("/api/fv/pc/{pc_id}")
+async def fv_pc_detail(pc_id: str, request: Request, logs: int = 300):
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    pc_id = clean_pc_id(pc_id)
+    try:
+        logs = max(1, min(int(logs or 300), 2000))
+    except Exception:
+        logs = 300
+    rows = await _build_full_state(FV_TENANT)
+    row = next((r for r in rows if str(r.get("pc_id")) == pc_id), None)
+    if row is None:
+        return _fv_err(404, f"카드 '{pc_id}' 가 없습니다")
+    nspc = ns(FV_TENANT, pc_id)
+    out = _fv_pc_view(row)
+    out["ts"] = _fv_now()
+    try:
+        out["logs"] = await get_logs(nspc, limit=logs)
+    except Exception as e:
+        out["logs"], out["logs_error"] = [], str(e)
+    try:
+        out["updater_logs"] = await get_logs(nspc + ".upd", limit=min(logs, 300))
+    except Exception:
+        out["updater_logs"] = []
+    try:
+        raw = await get_recent_commands(120, ns_prefix=("" if FV_TENANT == "main" else FV_TENANT))
+        out["commands"] = [{**c, "pc_id": split_ns(c.get("pc_id") or "")[1]}
+                           for c in raw if split_ns(c.get("pc_id") or "") == (FV_TENANT, pc_id)]
+    except Exception:
+        out["commands"] = []
+    try:
+        out["bugs"] = _list_bug_files(FV_TENANT, pc_id)
+    except Exception:
+        out["bugs"] = []
+    try:
+        out["char_info"] = await get_char_info(nspc)
+    except Exception:
+        out["char_info"] = None
+    try:
+        out["nightmare"] = await get_nightmare_progress(nspc)
+    except Exception:
+        out["nightmare"] = None
+    try:
+        out["corridor"] = CORRIDOR_PROG.get(nspc)
+    except Exception:
+        out["corridor"] = None
+    return _fv_json(request, out)
+
+
+@app.get("/api/fv/command")
+async def fv_command_list(request: Request):
+    """지원 명령 목록 — ★대시보드 CMD_TRACK 을 그대로 읽어서★ 돌려준다."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    cmds = _fv_cmds()
+    return _fv_json(request, {
+        "count": len(cmds),
+        "source": "대시보드 CMD_TRACK/CMD_SILENT (server/main.py 내 HTML_DASHBOARD)",
+        "rotatable": list(ROT_TASKS),
+        "commands": cmds,
+        "note": ("pc 는 'PC-01' · ['PC-01','PC-02'] · 'all' 셋 중 하나. "
+                 "'all' 은 서버가 실제 카드 목록으로 펼쳐 한 대씩 보낸다."),
+    })
+
+
+@app.post("/api/fv/command")
+async def fv_command_send(request: Request):
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return _fv_err(400, "JSON 본문이 필요합니다")
+    if not isinstance(body, dict):
+        return _fv_err(400, "본문은 객체여야 합니다")
+    cmd = str(body.get("cmd") or "").strip()
+    if not cmd:
+        return _fv_err(400, "cmd 필드가 필요합니다")
+    known = _fv_cmds()
+    if known and cmd not in known:
+        return _fv_err(400, f"모르는 cmd '{cmd}' — GET /api/fv/command 로 목록을 보십시오")
+    args = body.get("args") or {}
+    if not isinstance(args, dict):
+        return _fv_err(400, "args 는 객체여야 합니다")
+
+    target = body.get("pc")
+    rows = await _build_full_state(FV_TENANT)
+    known_pcs = [str(r.get("pc_id")) for r in rows if r.get("pc_id")]
+    if isinstance(target, str) and target.strip().lower() == "all":
+        # ★브로드캐스트 키를 쓰지 않는다★ — 실제 목록으로 펼쳐 한 대씩(A7 가드 유지)
+        targets = list(known_pcs)
+    elif isinstance(target, str):
+        targets = [clean_pc_id(target)]
+    elif isinstance(target, list):
+        targets = [clean_pc_id(str(x)) for x in target if str(x).strip()]
+    else:
+        return _fv_err(400, "pc 는 문자열·배열·'all' 중 하나여야 합니다")
+    if not targets:
+        return _fv_err(400, "대상 PC 가 없습니다")
+
+    results = []
+    for pid in targets:
+        if pid not in known_pcs:
+            results.append({"pc": pid, "ok": False, "error": "그런 카드가 없습니다"})
+            continue
+        try:
+            r = await _dispatch_macro_command(FV_TENANT, pid, cmd, args)
+            results.append({"pc": pid, **r})
+        except Exception as e:
+            results.append({"pc": pid, "ok": False, "error": str(e)})
+    sent = sum(1 for r in results if r.get("ok"))
+    return _fv_json(request, {"ok": sent > 0, "cmd": cmd,
+                              "targets": len(targets), "sent": sent,
+                              "results": results})
