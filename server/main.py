@@ -9978,6 +9978,25 @@ async def synth_tts(request: Request, text: str = "", rate: str = "", pitch: str
     같은 (문구·톤) 조합은 디스크에 캐시 → 두 번째부터 즉시 재생."""
     if not check_session(request):
         raise HTTPException(status_code=403)
+    return await _tts_file(text, rate, pitch)
+
+
+@app.get("/api/fv/tts")
+async def fv_tts(request: Request, text: str = "", rate: str = "", pitch: str = ""):
+    """★팜뷰 전용 목소리 길★ (2026-09-10) — 인증이 세션 쿠키가 아니라 `X-FV-Token` 이다.
+
+    왜 따로 여나: 팜뷰(관제컴 별도 프로그램)는 대시보드 로그인 쿠키가 없다. 화면이 `/tts` 를
+      직접 부르면 403 이라 브라우저 내장 음성(Heami)으로 떨어졌다 — 주인님이 «할머니 목소리»
+      라고 하신 그것이다. 팜뷰는 FV 토큰을 이미 들고 있으니 그걸로 같은 소리를 받아 간다.
+    합성·캐시는 세션판과 ★같은 함수★ 를 쓴다 — 목소리가 갈리면 그게 더 나쁘다."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    return await _tts_file(text, rate, pitch)
+
+
+async def _tts_file(text: str, rate: str = "", pitch: str = ""):
+    """문구를 신경망 음성 MP3 로 만들어 파일로 돌려준다(같은 문구·톤은 디스크 캐시)."""
     text = (text or "").strip()[:200]
     if not text:
         raise HTTPException(status_code=400, detail="text 없음")
