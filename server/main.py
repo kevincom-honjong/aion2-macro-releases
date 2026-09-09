@@ -20,7 +20,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 from database import (
     init_db, upsert_status, get_all_statuses, get_status, delete_status,
     delete_pc_all_data, get_death_counts_since, get_all_death_events,
-    insert_command, get_pending_command, ack_command, cancel_command, get_logs,
+    insert_command, get_pending_command, get_pending_commands,
+    ack_command, cancel_command, get_logs,
     insert_log, get_recent_commands, get_command_pc, get_updater_command_pc,
     set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
@@ -193,6 +194,79 @@ try:
         SERVER_CODE_ID = hashlib.sha256(_cf.read()).hexdigest()[:8]
 except Exception:
     SERVER_CODE_ID = "unknown"
+
+# ==============================================================================
+# ★★계측 - 서버가 굳는 것을 잰다 (2026-09-10 주인님 지시)★★
+#
+#   ★주인님★ 「대시보드에서 명령보내면 프로그램한테 닿는게 너무느린데?」
+#
+#   ★실측된 모양 (2026-09-10 02:39~02:47)★ - 경로가 느린 게 아니다.
+#     · 명령 배달은 평소 ★0~2초★ 다(최근 20건 중 14건).
+#     · 그런데 서버가 ★주기적으로 통째로 굳는다★ - 아무 일도 안 하는 `/ping` 이
+#       7.7초, 같은 구간 `/status` 가 130초 걸렸다.
+#     · 굳는 동안 ★전 함대 WS 가 한꺼번에 끊긴다★ (PC-10·19·16b 가 같은 10초 안에).
+#       매크로 ping 응답 한도가 10초라, 루프가 그보다 오래 굳으면 전부 동시에 떨어진다.
+#     · 살아있는 매크로 24대 중 WS 보유가 ★정상 18대 → 굳는 동안 1대★.
+#
+#   ★원인을 짐작하지 않고 잰다★ - 굳은 시각·길이를 남기고, 무거운 함수의 호출수와
+#   누적 시간을 센다. 다음에 굳을 때 ★무엇이 그 자리에 있었는지★ 를 본다.
+#   ★이 블록은 아무것도 안 고친다. 재기만 한다.★  보는 곳: GET /diag/perf (세션)
+# ==============================================================================
+STALL_MIN_S = 1.0      # 이만큼 늦게 깨어나면 '굳었다'로 적는다
+STALL_KEEP = 300       # 굳음 기록 보관 개수(링)
+_STALLS: list[dict] = []
+_PERF: dict[str, dict] = {}
+
+
+def _perf_slot(name: str) -> dict:
+    d = _PERF.get(name)
+    if d is None:
+        d = _PERF[name] = {"n": 0, "ms_total": 0.0, "ms_max": 0.0, "ms_last": 0.0}
+    return d
+
+
+def _perf_note(name: str, ms: float) -> None:
+    d = _perf_slot(name)
+    d["n"] += 1
+    d["ms_total"] += ms
+    d["ms_last"] = ms
+    if ms > d["ms_max"]:
+        d["ms_max"] = ms
+
+
+def _perf_count(name: str) -> None:
+    _perf_slot(name)["n"] += 1
+
+
+async def _loop_watchdog() -> None:
+    """0.5초마다 깨어나 ★얼마나 늦게 깨어났는지★ 를 잰다 = 이벤트 루프가 굳은 시간.
+
+    ★왜 이 방식인가★ 굳는 동안에는 요청이 아예 안 들어오므로 요청 로그로는 안 잡힌다.
+    루프 자신이 늦잠을 잤는지 보는 것이 ★밖에서 세는★ 유일한 방법이다(§A8).
+    ★이 재기 자체는 루프를 안 막는다★ - sleep 만 하고 깨어나서 뺄셈 한 번을 한다.
+    """
+    period = 0.5
+    while True:
+        t0 = time.monotonic()
+        try:
+            await asyncio.sleep(period)
+        except asyncio.CancelledError:
+            return
+        late = time.monotonic() - t0 - period
+        if late >= STALL_MIN_S:
+            try:
+                _STALLS.append({
+                    "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "stall_s": round(late, 2),
+                    "macro_ws": len(macro_ws_connections),
+                    "dash_ws": len(manager.active),
+                })
+                if len(_STALLS) > STALL_KEEP:
+                    del _STALLS[:-STALL_KEEP]
+                print("[멈춤] 이벤트 루프가 %.1f초 굳었다 (매크로WS %d · 대시보드WS %d)"
+                      % (late, len(macro_ws_connections), len(manager.active)))
+            except Exception:
+                pass
 # 세션 서명키.
 #   Railway env SESSION_SECRET(랜덤 문자열)을 설정하면 재배포 후에도 쿠키 유효 → 재로그인 불필요.
 #   미설정 시 부팅마다 랜덤 → 자동 새로고침은 동작하되 재시작 후 1회 재로그인.
@@ -681,10 +755,12 @@ async def lifespan(app: FastAPI):
     rot_task = asyncio.create_task(_rot_engine())
     # ★효율 저하 감시 (2026-08-24 주인님 지시)★ — 순환 무장과 무관하게 항상 돈다.
     eff_task = asyncio.create_task(_eff_watch())
+    # ★루프 굳음 감시 (2026-09-10 주인님 지시)★ - 재기만 한다, 아무것도 안 고친다.
+    wd_task = asyncio.create_task(_loop_watchdog())
     try:
         yield
     finally:
-        for _t in (tg_task, rot_task, eff_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task):
             if _t:
                 _t.cancel()
                 try:
@@ -760,9 +836,60 @@ def tenant_bugs_dir(tenant: str) -> str:
     return BUGS_DIR if tenant == "main" else os.path.join(BUGS_DIR, tenant)
 
 
+# ==============================================================================
+# ★★버그스샷 개수는 캐시한다 (2026-09-10 주인님 지시)★★
+#   _build_full_state 는 ★매크로 상태 보고가 올 때마다★ 불린다(24대 = 초당 약 1회).
+#   그때마다 버그스샷 폴더를 통째로 훑고 있었다 - 2026-09-10 실측 ★481장★.
+#   os.listdir 은 ★동기★ 라 그 동안 이벤트 루프가 멈춘다(다른 요청·WS 핑이 다 밀린다).
+#
+#   ★목록은 업로드·삭제 때만 바뀐다★ - 그 자리에서 캐시를 버린다(_bug_cache_bust).
+#   TTL 은 밖에서 파일이 사라지는 판(수동 정리·prune)을 위한 뒷받침일 뿐이다.
+#   ★개수의 뜻은 안 바꿨다★ - 세는 규칙(PC 단위)은 아래 그대로 옮겨왔다.
+# ==============================================================================
+BUG_COUNT_TTL = 30.0
+_BUG_COUNT_CACHE: dict[str, tuple] = {}      # tenant -> (잰 시각, {pc_id: 개수})
+
+
+def _bug_cache_bust(tenant: str) -> None:
+    """버그스샷을 올리거나 지운 직후에 부른다 - 다음 조회가 다시 센다."""
+    _BUG_COUNT_CACHE.pop(tenant, None)
+
+
+def _bug_counts(tenant: str) -> dict:
+    hit = _BUG_COUNT_CACHE.get(tenant)
+    if hit and (time.monotonic() - hit[0]) < BUG_COUNT_TTL:
+        _perf_count("bug_counts_cached")
+        return hit[1]
+    _t = time.monotonic()
+    counts: dict[str, int] = {}
+    try:
+        bdir = tenant_bugs_dir(tenant)
+        if os.path.isdir(bdir):
+            for fname in os.listdir(bdir):
+                if fname.endswith(".png"):
+                    m = re.match(r"^(.+?)_\d{8}_\d{6}_", fname)
+                    if m:
+                        # ★★버그 스샷은 ★PC 단위★ 다 (2026-08-23 주인님 지적)★★
+                        #   주인님: "대시보드에 스크린샷 아직도 컴퓨터 단위아닌거같은데"
+                        #   매크로는 파일을 ★베이스 pc_id★ 로 올린다(PC-24_...). 그런데
+                        #   그대로 세면 그 수가 ★계정1 카드에만★ 붙는다. 스샷은 그 물리
+                        #   PC 의 화면이지 계정의 것이 아니다 - 계정2 카드를 보고 있을
+                        #   때도 같은 수가 보여야 한다.
+                        #   → 베이스로 세고, 호출부가 모든 계정 카드에 같은 값을 준다.
+                        _pid = _base_pc(m.group(1))
+                        counts[_pid] = counts.get(_pid, 0) + 1
+    except Exception:
+        pass
+    _perf_note("bug_counts_scan", (time.monotonic() - _t) * 1000)
+    _BUG_COUNT_CACHE[tenant] = (time.monotonic(), counts)
+    return counts
+
+
 async def _build_full_state(tenant: str = "main") -> list[dict]:
     """해당 테넌트의 pc_status + updater_status + bug_count + char_info + slot_filters 병합 목록.
     저장 키는 네임스페이스("t::PC-01")지만 반환 pc_id는 원래 이름으로 벗겨서 냄."""
+    _bfs_t0 = time.monotonic()      # ★계측 (2026-09-10)★ - 굳는 자리를 찾는 재료
+
     def _mine(rows: list) -> list:
         out = []
         for r in rows:
@@ -789,25 +916,8 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
         if pid:
             updater_map[pid] = u
 
-    bug_counts: dict[str, int] = {}
-    try:
-        bdir = tenant_bugs_dir(tenant)
-        if os.path.isdir(bdir):
-            for fname in os.listdir(bdir):
-                if fname.endswith(".png"):
-                    m = re.match(r"^(.+?)_\d{8}_\d{6}_", fname)
-                    if m:
-                        # ★★버그 스샷은 ★PC 단위★ 다 (2026-08-23 주인님 지적)★★
-                        #   주인님: "대시보드에 스크린샷 아직도 컴퓨터 단위아닌거같은데"
-                        #   매크로는 파일을 ★베이스 pc_id★ 로 올린다(PC-24_...). 그런데
-                        #   여기서 그대로 세면 그 수가 ★계정1 카드에만★ 붙는다.
-                        #   스샷은 그 물리 PC 의 화면이지 계정의 것이 아니다 —
-                        #   계정2 카드를 보고 있을 때도 같은 수가 보여야 한다.
-                        #   → 베이스로 세고, 아래에서 모든 계정 카드에 같은 값을 준다.
-                        pid = _base_pc(m.group(1))
-                        bug_counts[pid] = bug_counts.get(pid, 0) + 1
-    except Exception:
-        pass
+    # ★세는 규칙은 그대로, 훑기만 캐시로 (2026-09-10 - 위 _bug_counts 주석)★
+    bug_counts: dict[str, int] = _bug_counts(tenant)
 
     seen: set[str] = set()
     for pc in statuses:
@@ -1049,6 +1159,7 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                     pc["_rot_target"] = acct_no_of_label(_tg)
     except Exception:
         pass
+    _perf_note("build_full_state", (time.monotonic() - _bfs_t0) * 1000)
     return statuses
 
 
@@ -1115,6 +1226,23 @@ async def get_parsec_map(request: Request):
 
 
 async def push_state(tenant: str = "main"):
+    # ======================================================================
+    # ★★보는 사람이 없으면 만들지 않는다 (2026-09-10 주인님 지시)★★
+    #   이 함수는 ★매크로 상태 보고가 올 때마다★ 불린다(24대 x 30초 = 초당 약 1회).
+    #   그때마다 카드 72장을 통째로 만들고 155KB JSON 을 직렬화했는데,
+    #   ★대시보드를 아무도 안 보고 있어도 그 비용을 다 냈다★ - broadcast 는 보낼
+    #   곳이 없으면 조용히 끝나지만, 만드는 값은 그 앞에서 이미 다 치른 뒤다.
+    #
+    #   ★낡을 걱정은 없다★ (이게 이 가드가 안전한 이유다)
+    #     · 대시보드가 새로 붙으면 /ws 가 _build_full_state 로 최신을 직접 보낸다.
+    #     · FarmView 는 /api/fv/* 에서 따로 만든다(브로드캐스트를 안 본다).
+    #     · /status 도 직접 만든다.
+    #   즉 ★이 브로드캐스트를 기다리는 것은 '지금 열려 있는 대시보드' 뿐★ 이다.
+    # ======================================================================
+    if not any(_t == tenant for _w, _t in manager.active):
+        _perf_count("push_state_skipped")
+        return
+    _t0 = time.monotonic()
     statuses = await _build_full_state(tenant)
     ver = _load_version_json()
     latest = {
@@ -1122,6 +1250,7 @@ async def push_state(tenant: str = "main"):
         "updater": ver.get("updater", {}).get("version", ""),
     }
     await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest}, tenant)
+    _perf_note("push_state", (time.monotonic() - _t0) * 1000)
 
 
 async def push_log(tenant: str, pc_id: str, message: str, level: str = "info"):
@@ -1564,6 +1693,44 @@ async def license_check(request: Request):
     base = f"{payload['valid']}|{payload['reason']}|{payload['expires']}|{payload['now']}|{nonce}"
     payload["sig"] = hmac.new(LICENSE_SECRET.encode(), base.encode(), hashlib.sha256).hexdigest()
     return JSONResponse(payload)
+
+
+@app.get("/diag/perf")
+async def diag_perf(request: Request):
+    """[진단] ★서버가 굳는가★ 를 보는 창구 (2026-09-10 주인님 지시).
+
+    ★읽는 법★
+      · stalls        : 이벤트 루프가 1초 이상 늦게 깨어난 기록(최근 300건).
+                        ★여기 줄이 있으면 그 시각에 서버가 통째로 굳은 것★ 이고,
+                        같은 시각에 함대 WS 가 한꺼번에 떨어졌을 것이다(macro_ws 를 같이 적는다).
+      · perf          : 무거운 함수의 호출수·누적/최대 시간(ms).
+                        build_full_state 의 ms_max 가 크면 그것이 굳음의 자리다.
+                        push_state_skipped 는 ★보는 사람이 없어 안 만든 횟수★ (= 아낀 일).
+                        bug_counts_cached 는 ★폴더를 안 훑고 넘어간 횟수★.
+      · ws            : 지금 붙어 있는 매크로/대시보드 수.
+    ★이 창구는 아무것도 안 고친다.★ 세션 인증이 필요하다(공개 /health 와 다르다).
+    """
+    if not check_session(request):
+        raise HTTPException(status_code=401)
+    perf = {}
+    for k, v in sorted(_PERF.items()):
+        d = dict(v)
+        d["ms_avg"] = round(v["ms_total"] / v["n"], 1) if v["n"] else 0.0
+        d["ms_total"] = round(v["ms_total"], 1)
+        d["ms_max"] = round(v["ms_max"], 1)
+        d["ms_last"] = round(v["ms_last"], 1)
+        perf[k] = d
+    return JSONResponse({
+        "code": SERVER_CODE_ID,
+        "uptime_s": int(time.time() - SERVER_BOOT_TS),
+        "stall_min_s": STALL_MIN_S,
+        "stalls_n": len(_STALLS),
+        "stalls": _STALLS[-60:],
+        "stall_worst": max([x["stall_s"] for x in _STALLS], default=0.0),
+        "perf": perf,
+        "ws": {"macro": len(macro_ws_connections), "dashboard": len(manager.active)},
+        "bugs_cached_tenants": sorted(_BUG_COUNT_CACHE.keys()),
+    })
 
 
 @app.get("/health")
@@ -8304,6 +8471,11 @@ def _strip_cmds(cmds: list, tenant: str) -> list:
 
 
 async def _push_cmd_history(tenant: str):
+    # ★보는 사람이 없으면 만들지 않는다 (2026-09-10)★ - push_state 와 같은 이유.
+    #   대시보드는 붙을 때 loadCmdHistory() 로 /commands/recent 를 직접 읽는다.
+    if not any(_t == tenant for _w, _t in manager.active):
+        _perf_count("push_cmd_history_skipped")
+        return
     cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
     await manager.broadcast({"type": "cmd_history", "commands": cmds}, tenant)
 
@@ -8745,19 +8917,36 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     await websocket.accept()
     macro_ws_connections[nspc] = websocket
     try:
-        # 대기 중인 명령 즉시 전달 (브로드캐스트 'all'도 테넌트 스코프)
-        pending = await get_pending_command(nspc, all_key=ns(tenant, "all"))
-        if pending:
-            # ★★WS 재접속 경로도 언마스킹을 거쳐야 한다 (2026-08-20 감사)★★
-            #   여기만 DB 행을 ★그대로★ 보내고 있었다. 폴링 경로(GET /command/{pc})는
-            #   enrich_cmd_args 를 거치는데 이 경로는 안 거쳤다 = PC-21 peer_id 사고가
-            #   ★절반만★ 막혀 있었다. WS 가 끊겼다 붙는 건 흔한 일이라 실전 경로다.
+        # ==================================================================
+        # ★★재접속하면 밀린 것을 ★전부★ 준다 (2026-09-10 주인님 지시)★★
+        #   ★예전★ 한 건만 보냈다. 나머지는 매크로 폴링을 기다렸는데 그 간격이
+        #   15초(WS 끊긴 걸 아는 동안) ~ ★60초★(자기는 붙어 있다고 믿는 동안)다.
+        #   서버가 굳었다 풀리는 구간마다 그 지연이 사람 눈에 「느리다」로 보였다.
+        #   재접속은 ★큐를 비우고 시작하는★ 자리라 여기가 제일 싸게 푸는 자리다.
+        #
+        #   ★상한 8건★ - 매크로 HTTP drain 과 ★같은 수★ 다(report_module 폴링 루프).
+        #     한 주기에 쏟아붓지 않기 위한 수이고, 양쪽이 같아야 뜻이 하나가 된다.
+        #   ★밀리초 간격으로 이어 보낸다★ - 매크로의 ENQUEUE_BATCH_GAP(2초)이 이걸
+        #     ★같은 배달 묶음★ 으로 보고 앞 명령을 안 덮는다(사고 0-P). 사이를 벌리면
+        #     서로 덮어서 ★사람이 먼저 누른 것이 죽는다★ - 그래서 이 루프의 await
+        #     사이에 일부러 아무 대기도 두지 않는다.
+        #
+        # ★★언마스킹을 거쳐야 한다 (2026-08-20 감사)★★
+        #   여기만 DB 행을 ★그대로★ 보내고 있었다. 폴링 경로(GET /command/{pc})는
+        #   enrich_cmd_args 를 거치는데 이 경로는 안 거쳤다 = PC-21 peer_id 사고가
+        #   ★절반만★ 막혀 있었다. WS 가 끊겼다 붙는 건 흔한 일이라 실전 경로다.
+        # ==================================================================
+        _pending = await get_pending_commands(nspc, all_key=ns(tenant, "all"), limit=8)
+        for _p in _pending:
             _pargs = await enrich_cmd_args(tenant, pc_id,
-                                           pending["command"], pending.get("args") or {})
+                                           _p["command"], _p.get("args") or {})
             await websocket.send_text(json.dumps({
-                "type": "command", "id": pending["id"],
-                "command": pending["command"], "args": _pargs
+                "type": "command", "id": _p["id"],
+                "command": _p["command"], "args": _pargs
             }))
+        if len(_pending) > 1:
+            print("[WS] %s 재접속 - 밀린 명령 %d건을 한 묶음으로 보냈다"
+                  % (nspc, len(_pending)))
         while True:
             raw = await websocket.receive_text()
             # ★차단 재검사(2026-08-06 감사 major)★ — 핸드셰이크 때 한 번만 보면, 이미 붙어 있던
@@ -9364,6 +9553,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     with open(dest, 'wb') as f:
         f.write(content)
     _prune_bugs(bdir, pc_id)
+    _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
     return JSONResponse({"ok": True, "filename": filename})
 
@@ -9402,6 +9592,7 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
         except Exception:
             pass
     # 상태 브로드캐스트 (뱃지 갱신)
+    _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
     zip_name = f"bugs_{pc_id or 'all'}_{int(time.time())}.zip"
     return StreamingResponse(
@@ -9684,6 +9875,7 @@ async def delete_bugs_bulk(request: Request, pc_id: Optional[str] = None):
             removed += 1
         except Exception:
             pass
+    _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
     return JSONResponse({"ok": True, "removed": removed})
 
@@ -9698,6 +9890,7 @@ async def delete_bug_image(filename: str, request: Request):
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     os.remove(path)
+    _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
     return JSONResponse({"ok": True})
 

@@ -275,7 +275,22 @@ COMMAND_NO_EXPIRE = ("set_slot_filter",)
 
 
 async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
-    """pc_id 또는 브로드캐스트(all_key) 명령 중 가장 오래된 pending 항목 반환.
+    """가장 오래된 pending 한 건. (몸통은 아래 get_pending_commands)"""
+    rows = await get_pending_commands(pc_id, all_key, limit=1)
+    return rows[0] if rows else None
+
+
+async def get_pending_commands(pc_id: str, all_key: str = "all",
+                               limit: int = 1) -> list[dict]:
+    """pc_id 또는 브로드캐스트(all_key) 명령 중 오래된 순으로 최대 limit 건.
+
+    ★★여러 건을 주는 이유 (2026-09-10 주인님 지시)★★
+      WS 가 끊겼다 붙을 때 서버가 밀린 명령을 ★한 건만★ 보내고 나머지는 매크로
+      폴링을 기다리게 했다. 그 폴링 간격은 15초(WS 끊긴 걸 아는 동안)에서
+      60초(자기는 붙어 있다고 믿는 동안)다. 서버가 굳었다 풀리는 구간마다
+      그 지연이 그대로 사람 눈에 「대시보드가 느리다」로 보였다.
+      → 재접속은 밀린 것을 다 준다. 상한은 호출부가 정한다(한 주기에 쏟아붓지 않기).
+
     all_key: 테넌트 스코프된 'all' 키(예: 't::all') — 리터럴 'all' 고정은 테넌트 우회라 제거(2026-07-26).
 
     ★유효기간 15분(2026-08-07)★ — 예전엔 나이 제한이 없어서, 꺼져 있던 PC가 몇 시간 뒤 다시
@@ -299,23 +314,24 @@ async def get_pending_command(pc_id: str, all_key: str = "all") -> dict | None:
             SELECT id, pc_id, command, args, created_at
             FROM commands
             WHERE (pc_id=? OR pc_id=?) AND status='pending'
-            ORDER BY id ASC LIMIT 1
+            ORDER BY id ASC LIMIT ?
             """,
-            (pc_id, all_key),
+            (pc_id, all_key, max(1, int(limit))),
         ) as cur:
-            row = await cur.fetchone()
-    if not row:
-        return None
-    try:
-        args = json.loads(row["args"])
-    except Exception:
-        args = {}
-    return {
-        "id": row["id"],
-        "command": row["command"],
-        "args": args,
-        "created_at": row["created_at"],
-    }
+            rows = await cur.fetchall()
+    out = []
+    for row in rows:
+        try:
+            args = json.loads(row["args"])
+        except Exception:
+            args = {}
+        out.append({
+            "id": row["id"],
+            "command": row["command"],
+            "args": args,
+            "created_at": row["created_at"],
+        })
+    return out
 
 
 async def ack_command(cmd_id: int) -> bool:
