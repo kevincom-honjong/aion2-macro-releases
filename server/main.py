@@ -12639,7 +12639,10 @@ def _fv_cmds() -> dict:
 
 # ── 스냅샷 조립 ──────────────────────────────────────────────────────────────
 _FV_ODD_RE = re.compile(r"^\s*([\d,]+)(?:\(\+?([\d,]+)\))?")
-_FV_ODD_DEN_RE = re.compile(r"/\s*([\d,]+)")   # "…/840" 의 분모 — ★구독 판정★
+# ★구독 판정은 화면의 subState 와 ★같은 규칙★ 이어야 한다 — 탭마다 다른 답이 나오면 안 된다(main.js subState/aiParseOdd).
+#   aiParseOdd 와 같은 앵커·같은 자리(3번째 무리 = 분모), 같은 문턱 SUB_DEN_MIN=700, 그 계정 캐릭터들의 최대값.
+_FV_ODD_FULL_RE = re.compile(r"^\s*([\d,]+)\s*(?:\(\+?([\d,]+)\))?\s*/\s*([\d,]+)")
+_FV_SUB_DEN_MIN = 700
 
 def _fv_odd_num(s) -> int:
     """대시보드 parseOddEnergy 와 같은 규칙 — "300(+1,195)/840" → 300+1195. 못 읽으면 0."""
@@ -12677,18 +12680,18 @@ async def _fv_char_agg(tenant: str) -> dict:
                 pass
             agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
             # ★구독 판정용 분모★ — 840(·800)=구독 / 560=해제. 계정 단위 속성이라 그 계정 캐릭터 중 최대값을 쓴다.
-            m = _FV_ODD_DEN_RE.search(str(ch.get("odd_energy") or ""))
+            m = _FV_ODD_FULL_RE.match(str(ch.get("odd_energy") or ""))
             if m:
                 try:
-                    agg["odd_den"] = max(agg["odd_den"], int(m.group(1).replace(",", "")))
+                    agg["odd_den"] = max(agg["odd_den"], int(m.group(3).replace(",", "")))
                 except Exception:
                     pass
             agg["chars_n"] += 1
     # ★모름을 «미구독» 으로 읽지 않는다★ (사고 219) — 분모를 못 읽었으면 None 으로 둔다.
-    #   문턱 700 은 lc/info_collector._subscribed 와 같은 값(분모 840·800 = 구독).
+    #   문턱 700 은 화면 subState 의 SUB_DEN_MIN·lc/info_collector._subscribed 와 같은 값(분모 840·800 = 구독).
     for a in out.values():
         d = a.pop("odd_den", 0)
-        a["subscribed"] = True if d >= 700 else (False if d else None)
+        a["subscribed"] = True if d >= _FV_SUB_DEN_MIN else (False if d else None)
     return out
 
 
