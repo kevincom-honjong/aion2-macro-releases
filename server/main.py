@@ -12304,7 +12304,48 @@ def _fv_cmds() -> dict:
 
 
 # ── 스냅샷 조립 ──────────────────────────────────────────────────────────────
-def _fv_pc_view(row: dict) -> dict:
+_FV_ODD_RE = re.compile(r"^\s*([\d,]+)(?:\(\+?([\d,]+)\))?")
+
+def _fv_odd_num(s) -> int:
+    """대시보드 parseOddEnergy 와 같은 규칙 — "300(+1,195)/840" → 300+1195. 못 읽으면 0."""
+    m = _FV_ODD_RE.match(str(s or ""))
+    if not m:
+        return 0
+    a = int(m.group(1).replace(",", "") or 0)
+    b = int((m.group(2) or "0").replace(",", "") or 0)
+    return a + b
+
+
+async def _fv_char_agg(tenant: str) -> dict:
+    """char_info(캐릭터 단위) → pc_id(계정 카드) 단위 합.  FarmView 전광판이 못 받던 4개
+    (거래키나·각인키나·오드에너지·각성전, docs/거래키나_프롬프트.txt 2026-09-09).
+    ★캐릭터 합★ 이다 — total_kina(창고)는 계정 값이 캐릭마다 중복 저장돼 있어 여기서 다루지 않는다.
+    한 번에 전부 읽어 파이썬에서 묶는다(카드마다 쿼리 금지). 없으면 그 pc 는 표에 안 올라 0 이 된다."""
+    out: dict = {}
+    try:
+        infos = await get_all_char_info()
+    except Exception:
+        return out
+    for info in infos:
+        pid_full = str(info.get("pc_id") or "")
+        if not pid_full or ns_of(pid_full) != tenant:
+            continue
+        pid = split_ns(pid_full)[1]
+        agg = out.setdefault(pid, {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0,
+                                   "awakening_ticket": 0, "chars_n": 0})
+        for ch in info.get("chars") or []:
+            try:
+                agg["trade_kina"] += int(ch.get("trade_kina") or 0)
+                agg["gakin_kina"] += int(ch.get("gakin_kina") or 0)
+                agg["awakening_ticket"] += int(ch.get("awakening_ticket") or 0)
+            except Exception:
+                pass
+            agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
+            agg["chars_n"] += 1
+    return out
+
+
+def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     """_build_full_state 한 줄 → FarmView 가 쓰기 좋은 모양.
     ★raw 에 원본을 통째로 실어 둔다★ — 화면에 뜨는데 여기 안 담긴 필드가 있어도
     FarmView 가 못 보는 일이 없게."""
@@ -12354,6 +12395,11 @@ def _fv_pc_view(row: dict) -> dict:
             "uptime_hours":  row.get("uptime_hours"),
             "deaths_30m":    row.get("deaths_30m"),
             "abyss_kina":    row.get("abyss_kina"),
+            # 캐릭터 합(char_info) — 없으면 0. 이름은 FarmView fvdash._pick 이 아는 그대로(문서 규격)
+            "trade_kina":       int((agg or {}).get("trade_kina") or 0),
+            "gakin_kina":       int((agg or {}).get("gakin_kina") or 0),
+            "odd_energy":       int((agg or {}).get("odd_energy") or 0),
+            "awakening_ticket": int((agg or {}).get("awakening_ticket") or 0),
         },
         "today": {
             "slots_done":  done,
@@ -12380,17 +12426,21 @@ def _fv_pc_view(row: dict) -> dict:
 async def _fv_build_snapshot() -> dict:
     """★대시보드가 쓰는 그 함수들★ 로만 만든다."""
     rows = await _build_full_state(FV_TENANT)
+    char_agg = await _fv_char_agg(FV_TENANT)      # 캐릭터 합 4종 — 스냅샷마다 한 번
     pcs = {}
     by_status: dict = {}
     vers: dict = {}
     total_kina = 0
     total_bugs = 0
     online = 0
+    tot4 = {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0, "awakening_ticket": 0}
     for r in rows:
         pid = str(r.get("pc_id") or "")
         if not pid:
             continue
-        v = _fv_pc_view(r)
+        v = _fv_pc_view(r, char_agg.get(split_ns(pid)[1]))
+        for k4 in tot4:
+            tot4[k4] += int(v["progress"].get(k4) or 0)
         pcs[pid] = v
         by_status[v["status"]] = by_status.get(v["status"], 0) + 1
         if v["online"]:
@@ -12441,7 +12491,9 @@ async def _fv_build_snapshot() -> dict:
                        "offline": len(pcs) - online, "by_status": by_status},
             "totals": {"total_kina": total_kina, "bugs": total_bugs,
                        "corridor_remaining": sum(int(c.get("remaining") or 0)
-                                                 for c in corridor.values())},
+                                                 for c in corridor.values()),
+                       # 캐릭터 합 4종 (2026-09-09) — total_kina 는 위 그대로(계정 창고값)
+                       **tot4},
             "versions": vers,
             "rotate_armed": sorted(armed),
             "corridor": corridor,
@@ -12561,7 +12613,7 @@ async def fv_pc_detail(pc_id: str, request: Request, logs: int = 300):
     if row is None:
         return _fv_err(404, f"카드 '{pc_id}' 가 없습니다")
     nspc = ns(FV_TENANT, pc_id)
-    out = _fv_pc_view(row)
+    out = _fv_pc_view(row, (await _fv_char_agg(FV_TENANT)).get(split_ns(pc_id)[1]))   # 4종 합도 같이
     out["ts"] = _fv_now()
     try:
         out["logs"] = await get_logs(nspc, limit=logs)
