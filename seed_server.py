@@ -388,6 +388,27 @@ def _auto_register_loop():
         time.sleep(CHECK_EVERY)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ★★사고 530 (2026-09-09 23:36) — ★동시 5대가 오면 다섯 다 죽었다★★
+#   ★주인님★ 「[다운로드] 시드 실패(… connect timeout=3) → GitHub 폴백  이문제좀 안생기게 해주면안돼?」
+#   업데이터 로그 전수(오늘): 혼자 온 14대는 전부 ★수신 성공★(PC-16 14:32:40→14:34:23 = 1분43초 ≈ 0.75MB/s).
+#   그런데 14:36:02~07 UTC 에 ★5대(01·04·05·06·13)가 5초 안에★ 왔고 → 13 은 connect 3초 초과,
+#   나머지 넷은 Read timed out(20초 안에 첫 바이트 못 받음). ★다섯 다 GitHub 로 갔다.★
+#   이 시드는 개발컴 ★Wi-Fi★(172.30.1.15) 위에 있어 상행이 0.3~0.8MB/s 다. 다섯이 나눠 쓰면
+#   한 대당 0.1MB/s 미만 → 첫 64KB 가 20초를 넘긴다. ThreadingHTTPServer 라 막지는 않지만 ★나눠서 다 굶는다.★
+#
+#   → ★동시 전송 2대로 제한★(세마포어). 나머지는 ★헤더를 먼저 보내고★ 대기실에서 최대 15초 기다린다
+#     (업데이터 읽기 타임아웃 20초 안). 자리가 나면 이어서 전송, 안 나면 끊어서 GitHub 로 보낸다
+#     (= 지금과 같은 결말이지만 ★앞의 둘은 살린다★). 실측 없이 못 정하는 값: 2 와 15 는 위 수치에서 나왔다
+#     (0.75MB/s ÷ 2 ≈ 0.37MB/s → 64KB 첫 청크 0.2초 · 15 < 20).
+#   ★못 막는 것★ 상행 대역폭 자체 — 개발컴이 함대 대역 유선에 붙어야 근본 해결(주인님 몫).
+# ══════════════════════════════════════════════════════════════════════════════
+SEED_MAX_CONCURRENT = 2
+SEED_WAIT_S = 15.0
+_seed_slots = threading.BoundedSemaphore(SEED_MAX_CONCURRENT)
+_seed_busy = [0]            # 지금 전송 중인 수 (표시용)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/seedstat':
@@ -455,22 +476,44 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, 'version mismatch')
             return
         size = os.path.getsize(path)
+        # ★사고 530★ 헤더는 바로 보낸다(연결은 됐다는 신호) → 전송 자리를 기다린다
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(size))
         self.end_headers()
+        _t_wait = time.time()
+        if not _seed_slots.acquire(timeout=SEED_WAIT_S):
+            print(f"[시드] {self.client_address[0]} 대기 {SEED_WAIT_S:.0f}s 초과 (전송중 {_seed_busy[0]}대) "
+                  f"- 끊어서 GitHub 로 보냄 {time.strftime('%H:%M:%S')}", flush=True)
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+            return
+        _seed_busy[0] += 1
+        _waited = time.time() - _t_wait
         sent = 0
-        with open(path, "rb") as f:
-            while True:
-                b = f.read(65536)
-                if not b:
-                    break
-                self.wfile.write(b)
-                sent += len(b)
+        _t0 = time.time()
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    b = f.read(65536)
+                    if not b:
+                        break
+                    self.wfile.write(b)
+                    sent += len(b)
+        except Exception as e:
+            print(f"[시드] {self.client_address[0]} 전송 중 끊김 {sent // (1024*1024)}MB ({type(e).__name__}) "
+                  f"{time.strftime('%H:%M:%S')}", flush=True)
+            return
+        finally:
+            _seed_busy[0] -= 1
+            _seed_slots.release()
         # ★출력은 cp949 안전 문자만★ — em-dash/화살표 등 유니코드는 윈도 콘솔에서
         #   UnicodeEncodeError로 프로세스를 죽인다(첫 기동 실사고)
+        _el = max(0.001, time.time() - _t0)
         print(f"[시드] {self.client_address[0]} <- {self.path} ({sent // (1024*1024)}MB) "
-              f"{time.strftime('%H:%M:%S')}", flush=True)
+              f"{sent / 1048576 / _el:.2f}MB/s 대기 {_waited:.1f}s {time.strftime('%H:%M:%S')}", flush=True)
 
     def log_message(self, fmt, *args):
         pass  # 성공 서빙은 위에서 직접 출력, 404류는 조용히
