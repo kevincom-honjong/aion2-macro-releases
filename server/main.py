@@ -184,7 +184,10 @@ SERVER_BOOT_TS     = time.time()   # /health 업타임 계산용 (자발 재시�
 #   ★서빙되는 HTML 에서 함수 이름을 grep★ 해서야 옛 빌드인 걸 알았다.
 #   → 자기 소스의 sha256 앞 8자리를 내보낸다. 로컬에서 같은 값을 계산해 대조하면
 #     "내 코드가 떠 있나?" 가 curl 한 방으로 끝난다. 수동 관리가 필요 없다(자동 계산).
-#   로컬 대조:  python -c "import hashlib;print(hashlib.sha256(open(r'server/main.py','rb').read()).hexdigest()[:8])"
+#   로컬 대조:  ★`web/.claude/ops/servercode.py`★ 한 줄 (2026-09-09 정정).
+#     작업트리 파일을 sha256 하면 ★윈도우에서 틀린 답★ 이 날 수 있다 — 작업트리가 CRLF 로 체크아웃돼
+#     있으면 서버(리눅스)는 LF 바이트라 같은 커밋인데 지문이 다르다(2e02daf7 vs fed5846f 실측, 사고 522 때).
+#     servercode.py 는 `git show HEAD:server/main.py` 의 ★커밋된 바이트★ 로 잰다.
 try:
     with open(os.path.abspath(__file__), "rb") as _cf:
         SERVER_CODE_ID = hashlib.sha256(_cf.read()).hexdigest()[:8]
@@ -2963,11 +2966,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
       <div class="flex items-center gap-2 flex-wrap">
         <h2 class="font-extrabold text-lg text-fuchsia-300" id="ai-title">🤖 Hầm ngục hôm nay</h2>
-        <!-- ★상위/하위 던전 필터 (2026-08-23 주인님 지시)★ 기준 파워 280,000 -->
-        <button onclick="setAiFilter('hi')" id="ai-f-hi"
+        <!-- ★던전 탭 — 상위/하위 통합 (2026-09-09 주인님 지시)★
+             원문: "ai 버튼에 상위던전 하위던전 나눠서 나열했잖아 이젠 이름 던전 으로 해서
+                    통합시켜서 리스팅해"
+             2026-08-23 의 상위(≥280k)/하위(<280k) 두 버튼을 하나('dg')로 합쳤다. 파워 기준선은 안 쓴다. -->
+        <button onclick="setAiFilter('dg')" id="ai-f-dg"
                 class="text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white"></button>
-        <button onclick="setAiFilter('lo')" id="ai-f-lo"
-                class="text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300"></button>
         <!-- ★★사냥 탭 (2026-08-28 주인님 지시)★★
              원문: "AI 버튼 안에 사냥 이라는 탭도 하나 만들고 거기다가 실시간으로
                     아직 사냥 안끝난애들 표시하게끔해놓고 만약 그컴퓨터의 다른계정이
@@ -6327,15 +6331,15 @@ function aiStLabel(st) {
   if (!c) return st || '';
   return (aiLang === 'vi' && c.vi) ? c.vi : (c.label || st || '');
 }
-// ★★상위/하위 던전 (2026-08-23 주인님 지시)★★
-//   원문: "오늘의던전 옆에 상위던전 이라고 버튼 만들어서 그걸 눌렀을때 280k 이상 되는
-//          출력하면되고 그옆에 하위던전 버튼하나만들어서 그걸 눌렀을때는 280k 미만인
-//          애들 출력하게끔하면돼. 구독이나 오드에너지 말해준건 똑같이하고"
-//   → 파워 기준선 하나(280,000)로 목록을 둘로 가른다. 정렬·구독배지·에너지 표시·
-//     완료 체크는 ★손대지 않는다★ (완료 키가 'pc:slot' 이라 필터를 바꿔도 유지된다).
-//   기본은 '상위' — 기존 화면(30만 이상)과 가장 가깝다.
-const AI_PW_CUT = 280000;
-let aiFilter = localStorage.getItem('aiFilter') || 'hi';   // 'hi' = 280k 이상 / 'lo' = 미만
+// ★★던전 탭 — 상위/하위 통합 (2026-09-09 주인님 지시)★★
+//   원문: "ai 버튼에 상위던전 하위던전 나눠서 나열했잖아 이젠 이름 던전 으로 해서
+//          통합시켜서 리스팅해"
+//   2026-08-23 에 파워 280,000 기준선으로 '상위'/'하위' 두 목록으로 갈랐던 것을
+//   한 목록('dg')으로 합쳤다. ★파워로 거르지 않는다★ — 오드에너지를 읽은 캐릭은 전부 나온다.
+//   정렬·구독배지·에너지 표시·완료 체크(키 'pc:slot')는 ★그대로★.
+//   옛 저장값 'hi'/'lo' 는 'dg' 로 읽는다(통합 전에 열어 둔 브라우저).
+let aiFilter = localStorage.getItem('aiFilter') || 'dg';   // 'dg' 던전 / 'hunt' 사냥 / 'kina' 키나
+if (aiFilter === 'hi' || aiFilter === 'lo') aiFilter = 'dg';
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
@@ -6343,7 +6347,7 @@ const AI_T = {
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
-        fHi:'Cấp cao ≥280k', fLo:'Cấp thấp <280k', fHunt:'🏹 Đang săn', fKina:'💰 Kina',
+        fDg:'🏰 Hầm ngục', fHunt:'🏹 Đang săn', fKina:'💰 Kina',
         kinaTitle:'💰 Kina kho (chỉ tài khoản có gói)',
         kinaFoot:'Chỉ hiện tài khoản đang có gói (mẫu số Odd ≥700). Kina kho dùng chung theo tài khoản.',
         kinaNone:'Chưa đọc được kina kho của tài khoản có gói nào.',
@@ -6365,14 +6369,13 @@ const AI_T = {
         huntStale:(d)=>`im lặng ${d} ngày`, huntStaleNote:'thẻ cũ — không tính vào số còn lại',
         huntFoot:'Tài khoản chưa xong hôm nay (theo ô). Nếu máy đó đang săn bằng tài khoản khác thì có nhãn ĐANG SĂN. Tài khoản im lặng nhiều ngày được tách riêng và KHÔNG tính vào số còn lại. Tự cập nhật theo thời gian thực.',
         huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
-        foot:'Lực ≥ 280,000 · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
-        footLo:'Lực < 280,000 (hầm ngục cấp thấp) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu, tự reset lúc 5 giờ sáng.',
+        foot:'Tất cả nhân vật (không lọc theo lực) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
   ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스',
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
-        fHi:'상위 던전 28만↑', fLo:'하위 던전 28만↓', fHunt:'🏹 사냥', fKina:'💰 키나',
+        fDg:'🏰 던전', fHunt:'🏹 사냥', fKina:'💰 키나',
         kinaTitle:'💰 창고키나 (구독한 계정만)',
         kinaFoot:'구독한 계정만 보입니다(오드에너지 분모 ≥700). 창고키나는 계정 단위 공유값입니다.',
         kinaNone:'창고키나를 읽은 구독 계정이 아직 없습니다.',
@@ -6394,8 +6397,7 @@ const AI_T = {
         huntStale:(d)=>`${d}일째 소식 없음`, huntStaleNote:'옛 카드 — 남은 수에 안 셉니다',
         huntFoot:'오늘 슬롯을 다 못 끝낸 계정만 (슬롯 기준). 그 컴퓨터가 다른 계정으로 사냥 중이면 사냥중 배지가 붙습니다. 며칠째 안 뜬 계정은 따로 갈라 놓고 남은 수에 안 셉니다(옛 카드가 박제된 것이라 오늘 안 한 게 아닙니다). 실시간으로 갱신됩니다.',
         huntSummary:(pc,ac,sl)=>`${pc}대 · 계정 ${ac}개 · 남은 슬롯 ${sl}`,
-        foot:'파워 28만 이상 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
-        footLo:'파워 28만 미만(하위 던전) · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며 새벽 5시에 리셋됩니다.',
+        foot:'파워 구분 없이 전부 · 구독 계정이 위 · 매일 차는 에너지 많은 순. 완료 체크는 저장되며(자리는 안 움직임) 새벽 5시에 리셋됩니다.',
         summary:(a,c,d)=>`계정 ${a}개 · 캐릭 ${c}명 · 완료 ${d}` },
 };
 
@@ -6572,10 +6574,8 @@ function aiBuildPlan(){
     //   dkSubCount·subBadge 는 SUB_DEN_MIN(700) 인데 여기만 840 이라, 분모 800 계정을
     //   ★던전 탭만 「구독 X」★ 로 봤다. 같은 모달 안에서 탭마다 답이 다르면 안 된다.
     const sub = a.max >= SUB_DEN_MIN;
-    // ★파워 기준선 하나로 상/하위를 가른다 (2026-08-23)★ 나머지 규칙은 그대로.
-    const elig = a.chars
-      .filter(c => aiFilter === 'lo' ? c.pw < AI_PW_CUT : c.pw >= AI_PW_CUT)
-      .sort((x,y) => y.daily - x.daily);
+    // ★파워로 거르지 않는다 (2026-09-09 통합)★ — 정렬 규칙은 그대로.
+    const elig = a.chars.slice().sort((x,y) => y.daily - x.daily);
     if (!elig.length) return;
     elig.forEach(c => { c.key = a.pc + ':' + c.slot; });
     // ★★정렬은 완료 체크와 ★무관★ 해야 한다 (2026-08-22 주인님 지시)★★
@@ -6592,9 +6592,9 @@ function aiBuildPlan(){
   return out;
 }
 
-// ★상/하위/사냥 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
+// ★던전/사냥/키나 전환 — 완료 체크는 건드리지 않는다(키가 pc:slot 이라 그대로 살아 있다)★
 function setAiFilter(f){
-  aiFilter = (f === 'lo' || f === 'hunt' || f === 'kina') ? f : 'hi';
+  aiFilter = (f === 'hunt' || f === 'kina') ? f : 'dg';
   try{ localStorage.setItem('aiFilter', aiFilter); }catch(e){}
   renderAiPlan();
 }
@@ -6972,19 +6972,17 @@ function renderAiHunt(){
 function renderAiPlan(){
   const T = AI_T[aiLang] || AI_T.vi;
   document.getElementById('ai-title').textContent = T.title;
-  document.getElementById('ai-foot').textContent =
-    (aiFilter === 'lo' && T.footLo) ? T.footLo : T.foot;
-  // 필터 버튼 라벨 + 활성 표시 (2026-08-28: 사냥 탭 추가로 셋이 됐다)
-  const bHi = document.getElementById('ai-f-hi'), bLo = document.getElementById('ai-f-lo');
+  document.getElementById('ai-foot').textContent = T.foot;
+  // 탭 버튼 라벨 + 활성 표시 (2026-09-09: 던전 하나 · 사냥 · 키나 = 셋)
+  const bDg = document.getElementById('ai-f-dg');
   const bHt = document.getElementById('ai-f-hunt');
-  if (bHi && bLo) {
-    bHi.textContent = T.fHi; bLo.textContent = T.fLo;
+  if (bDg) {
+    bDg.textContent = T.fDg;
     const on = 'text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white';
     const off = 'text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300 hover:bg-gray-600';
     // ★사냥 탭은 초록 계열★ — 던전(자홍)과 데이터도 목적도 달라서 색으로 갈라 둔다
     const onHunt = 'text-xs px-2.5 py-1 rounded font-bold bg-emerald-700 text-white';
-    bHi.className = (aiFilter === 'hi') ? on : off;
-    bLo.className = (aiFilter === 'lo') ? on : off;
+    bDg.className = (aiFilter === 'dg') ? on : off;
     if (bHt) { bHt.textContent = T.fHunt || '🏹'; bHt.className = (aiFilter === 'hunt') ? onHunt : off; }
     // ★키나 탭은 호박색★ — 던전(자홍)·사냥(초록)과 목적이 또 다르다
     const bKi = document.getElementById('ai-f-kina');
