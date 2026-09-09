@@ -238,6 +238,49 @@ def _perf_count(name: str) -> None:
     _perf_slot(name)["n"] += 1
 
 
+# ==============================================================================
+# ★★매크로 WS 가 왜 끊기는지 잰다 (2026-09-10) — ★굳음 가설이 반증된 뒤★★★
+#
+#   ★내가 세운 가설★ 「이벤트 루프가 10초 넘게 굳어서 매크로 ping 이 시간초과 →
+#   전 함대가 동시에 떨어진다」. 그럴듯했고 정황도 맞았다(/ping 7.7초와 같은 구간).
+#
+#   ★그런데 계측이 그 가설을 깼다 (03:46 실측)★
+#     굳음 ★0건★ 인데 WS 가 24 → 6 → 14 → 2 → 0 → 4 로 계속 무너진다.
+#     ★루프는 안 굳는데 연결만 죽는다.★ 즉 원인은 루프 blocking 이 아니다.
+#     (내가 만든 계측이 내 가설을 깼다 — 이게 계측을 먼저 넣은 이유다, §A8)
+#
+#   ★그래서 다음 재료를 잰다 — 또 짐작하지 않는다★
+#     · 끊긴 ★이유★ (WebSocketDisconnect 인가 서버 예외인가 — 지금은 둘 다 삼킨다)
+#     · 연결이 ★얼마나 살았나★ (수명이 한 값에 몰리면 그건 프록시 타임아웃이다)
+#     · ★몇 개가 같은 초에★ 끊겼나 (동시성이 진짜인지 수로 확인)
+# ==============================================================================
+WS_EVENT_KEEP = 400
+_WS_CLOSES: list[dict] = []          # 최근 끊김 기록
+_WS_ACCEPTS = [0]                    # 누적 접속 수
+
+
+def _ws_life_bucket(sec: float) -> str:
+    for lim, name in ((10, "<10s"), (30, "10-30s"), (60, "30-60s"),
+                      (120, "60-120s"), (300, "120-300s")):
+        if sec < lim:
+            return name
+    return ">300s"
+
+
+def _ws_note_close(nspc: str, secs: float, why: str) -> None:
+    try:
+        _WS_CLOSES.append({
+            "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "pc": nspc, "secs": round(secs, 1),
+            "bucket": _ws_life_bucket(secs), "why": why,
+            "left": len(macro_ws_connections),      # 이 끊김 직후 남은 수
+        })
+        if len(_WS_CLOSES) > WS_EVENT_KEEP:
+            del _WS_CLOSES[:-WS_EVENT_KEEP]
+    except Exception:
+        pass
+
+
 async def _loop_watchdog() -> None:
     """0.5초마다 깨어나 ★얼마나 늦게 깨어났는지★ 를 잰다 = 이벤트 루프가 굳은 시간.
 
@@ -1710,6 +1753,16 @@ async def license_check(request: Request):
     return JSONResponse(payload)
 
 
+def _bucket_count(items, top: int = 0) -> dict:
+    """[진단] 값별 개수. top>0 이면 많은 순 top 개만 (2026-09-10)."""
+    d: dict[str, int] = {}
+    for x in items:
+        d[str(x)] = d.get(str(x), 0) + 1
+    if top:
+        return dict(sorted(d.items(), key=lambda kv: -kv[1])[:top])
+    return dict(sorted(d.items()))
+
+
 @app.get("/diag/perf")
 async def diag_perf(request: Request):
     """[진단] ★서버가 굳는가★ 를 보는 창구 (2026-09-10 주인님 지시).
@@ -1750,7 +1803,15 @@ async def diag_perf(request: Request):
         "stalls": _STALLS[-60:],
         "stall_worst": max([x["stall_s"] for x in _STALLS], default=0.0),
         "perf": perf,
-        "ws": {"macro": len(macro_ws_connections), "dashboard": len(manager.active)},
+        "ws": {"macro": len(macro_ws_connections), "dashboard": len(manager.active),
+               "accepts_total": _WS_ACCEPTS[0]},
+        # ★끊김의 모양 (2026-09-10)★ — 수명이 한 통에 몰리면 프록시 타임아웃,
+        #   why 가 예외 이름이면 서버 쪽, 같은 초에 여럿이면 진짜 동시 사건이다.
+        "ws_closes_n": len(_WS_CLOSES),
+        "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
+        "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
+        "ws_per_second": _bucket_count([x["at"] for x in _WS_CLOSES], top=8),
+        "ws_closes": _WS_CLOSES[-40:],
         "bugs_cached_tenants": sorted(_BUG_COUNT_CACHE.keys()),
     })
 
@@ -8943,6 +9004,9 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     nspc = ns(tenant, pc_id)
     await websocket.accept()
     macro_ws_connections[nspc] = websocket
+    _ws_t0 = time.monotonic()        # ★수명 계측 (2026-09-10)★
+    _ws_why = "루프 이탈"            # 아래에서 덮어쓴다
+    _WS_ACCEPTS[0] += 1
     try:
         # ==================================================================
         # ★★재접속하면 밀린 것을 ★전부★ 준다 (2026-09-10 주인님 지시)★★
@@ -9032,12 +9096,15 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                     await ack_command(cmd_id)
             elif msg_type == "pong":
                 pass
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+    except WebSocketDisconnect as _wde:
+        # ★상대(또는 중간 프록시)가 끊은 것★ — code 가 이유를 말해준다
+        _ws_why = "disconnect(code=%s)" % getattr(_wde, "code", "?")
+    except Exception as _wse:
+        # ★서버 쪽에서 터진 것★ — 예전엔 이걸 통째로 삼켜서 영영 안 보였다
+        _ws_why = "%s: %s" % (_wse.__class__.__name__, str(_wse)[:120])
     finally:
         macro_ws_connections.pop(nspc, None)
+        _ws_note_close(nspc, time.monotonic() - _ws_t0, _ws_why)
 
 
 @app.websocket("/ws")
