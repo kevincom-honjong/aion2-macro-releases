@@ -257,6 +257,9 @@ def _perf_count(name: str) -> None:
 WS_EVENT_KEEP = 400
 _WS_CLOSES: list[dict] = []          # 최근 끊김 기록
 _WS_ACCEPTS = [0]                    # 누적 접속 수
+_WS_EVICTED = [0]                    # 새 연결이 밀어낸 옛 연결 수
+_WS_KEPT = [0]                       # ★옛 핸들러가 새 연결을 안 지우고 넘어간 횟수★
+                                     #   (이 수가 곧 예전 회귀가 일어났을 횟수다)
 
 
 def _ws_life_bucket(sec: float) -> str:
@@ -1804,7 +1807,9 @@ async def diag_perf(request: Request):
         "stall_worst": max([x["stall_s"] for x in _STALLS], default=0.0),
         "perf": perf,
         "ws": {"macro": len(macro_ws_connections), "dashboard": len(manager.active),
-               "accepts_total": _WS_ACCEPTS[0]},
+               "accepts_total": _WS_ACCEPTS[0],
+               "evicted_old": _WS_EVICTED[0],    # 새 연결이 밀어낸 옛 연결
+               "kept_new": _WS_KEPT[0]},         # ★옛 핸들러가 새 자리를 안 지운 횟수★
         # ★끊김의 모양 (2026-09-10)★ — 수명이 한 통에 몰리면 프록시 타임아웃,
         #   why 가 예외 이름이면 서버 쪽, 같은 초에 여럿이면 진짜 동시 사건이다.
         "ws_closes_n": len(_WS_CLOSES),
@@ -9003,6 +9008,19 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     pc_id = clean_pc_id(pc_id)   # 에코 일관성(저장 키 소독과 동일)
     nspc = ns(tenant, pc_id)
     await websocket.accept()
+    # ══════════════════════════════════════════════════════════════════════
+    # ★★한 PC = 한 매크로 = 한 연결 (2026-09-10)★★
+    #   같은 pc_id 로 새 연결이 오면 앞의 것은 ★이미 죽었거나 곧 죽을 것★ 이다
+    #   (매크로는 프로세스당 WS 하나 — report_module._ws_thread).
+    #   ★명시적으로 닫아준다★ — 안 닫으면 옛 핸들러가 언제 깨어날지 모른 채
+    #   남아 있다가 아래 finally 로 ★새 연결의 자리를 지운다.★
+    _old = macro_ws_connections.get(nspc)
+    if _old is not None and _old is not websocket:
+        _WS_EVICTED[0] += 1
+        try:
+            await _old.close(code=1012)      # 1012 = Service Restart(자리 넘김)
+        except Exception:
+            pass
     macro_ws_connections[nspc] = websocket
     _ws_t0 = time.monotonic()        # ★수명 계측 (2026-09-10)★
     _ws_why = "루프 이탈"            # 아래에서 덮어쓴다
@@ -9103,7 +9121,25 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         # ★서버 쪽에서 터진 것★ — 예전엔 이걸 통째로 삼켜서 영영 안 보였다
         _ws_why = "%s: %s" % (_wse.__class__.__name__, str(_wse)[:120])
     finally:
-        macro_ws_connections.pop(nspc, None)
+        # ══════════════════════════════════════════════════════════════════
+        # ★★★내 것일 때만 지운다 — 안 그러면 살아있는 새 연결을 죽인다★★★
+        #
+        #   ★실사고 (2026-09-10 실측으로 잡음)★ 예전엔 무조건 `pop(nspc)` 였다.
+        #   그런데 같은 PC 가 재접속하면 새 핸들러가 먼저 자리에 들어앉고,
+        #   ★그 뒤에 옛 핸들러의 이 finally 가 돌면서 새 연결을 목록에서 지웠다.★
+        #   소켓은 멀쩡히 살아 있는데 ★서버만 「이 PC 는 WS 가 없다」고 믿는다★
+        #   → 명령을 못 밀어주고 매크로 폴링(15~60초)을 기다린다 = 「느리다」.
+        #
+        #   ★수로 드러났다★ 10분간 accept 80건 · close 56건 → 남아 있어야 할
+        #   연결이 24개인데 목록엔 ★2개★ 뿐이었다. 22개가 이 자리에서 지워졌다.
+        #   (계측을 넣기 전에는 이걸 볼 방법이 아예 없었다)
+        #
+        #   ★is 로 본다★ — 같은 pc_id 라도 ★객체가 다르면 남의 것★ 이다.
+        # ══════════════════════════════════════════════════════════════════
+        if macro_ws_connections.get(nspc) is websocket:
+            macro_ws_connections.pop(nspc, None)
+        else:
+            _WS_KEPT[0] += 1        # ★새 연결을 안 지우고 살려둔 횟수★
         _ws_note_close(nspc, time.monotonic() - _ws_t0, _ws_why)
 
 
@@ -12603,6 +12639,7 @@ def _fv_cmds() -> dict:
 
 # ── 스냅샷 조립 ──────────────────────────────────────────────────────────────
 _FV_ODD_RE = re.compile(r"^\s*([\d,]+)(?:\(\+?([\d,]+)\))?")
+_FV_ODD_DEN_RE = re.compile(r"/\s*([\d,]+)")   # "…/840" 의 분모 — ★구독 판정★
 
 def _fv_odd_num(s) -> int:
     """대시보드 parseOddEnergy 와 같은 규칙 — "300(+1,195)/840" → 300+1195. 못 읽으면 0."""
@@ -12630,7 +12667,7 @@ async def _fv_char_agg(tenant: str) -> dict:
             continue
         pid = split_ns(pid_full)[1]
         agg = out.setdefault(pid, {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0,
-                                   "awakening_ticket": 0, "chars_n": 0})
+                                   "awakening_ticket": 0, "chars_n": 0, "odd_den": 0})
         for ch in info.get("chars") or []:
             try:
                 agg["trade_kina"] += int(ch.get("trade_kina") or 0)
@@ -12639,7 +12676,19 @@ async def _fv_char_agg(tenant: str) -> dict:
             except Exception:
                 pass
             agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
+            # ★구독 판정용 분모★ — 840(·800)=구독 / 560=해제. 계정 단위 속성이라 그 계정 캐릭터 중 최대값을 쓴다.
+            m = _FV_ODD_DEN_RE.search(str(ch.get("odd_energy") or ""))
+            if m:
+                try:
+                    agg["odd_den"] = max(agg["odd_den"], int(m.group(1).replace(",", "")))
+                except Exception:
+                    pass
             agg["chars_n"] += 1
+    # ★모름을 «미구독» 으로 읽지 않는다★ (사고 219) — 분모를 못 읽었으면 None 으로 둔다.
+    #   문턱 700 은 lc/info_collector._subscribed 와 같은 값(분모 840·800 = 구독).
+    for a in out.values():
+        d = a.pop("odd_den", 0)
+        a["subscribed"] = True if d >= 700 else (False if d else None)
     return out
 
 
@@ -12698,6 +12747,8 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
             "gakin_kina":       int((agg or {}).get("gakin_kina") or 0),
             "odd_energy":       int((agg or {}).get("odd_energy") or 0),
             "awakening_ticket": int((agg or {}).get("awakening_ticket") or 0),
+            # 구독 여부(계정 단위) — True 구독 / False 해제 / null 모름. 오드에너지 분모로 판정
+            "subscribed":       (agg or {}).get("subscribed"),
         },
         "today": {
             "slots_done":  done,
