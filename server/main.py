@@ -12672,12 +12672,13 @@ async def _fv_char_agg(tenant: str) -> dict:
         agg = out.setdefault(pid, {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0,
                                    "awakening_ticket": 0, "chars_n": 0, "odd_den": 0})
         for ch in info.get("chars") or []:
-            try:
-                agg["trade_kina"] += int(ch.get("trade_kina") or 0)
-                agg["gakin_kina"] += int(ch.get("gakin_kina") or 0)
-                agg["awakening_ticket"] += int(ch.get("awakening_ticket") or 0)
-            except Exception:
-                pass
+            # ★칸마다 따로 감싼다★ — 한 try 로 묶으면 trade_kina 하나가 이상할 때
+            #   그 캐릭의 각성전 티켓까지 통째로 빠진다(값이 조용히 낮아진다).
+            for _k in ("trade_kina", "gakin_kina", "awakening_ticket"):
+                try:
+                    agg[_k] += int(ch.get(_k) or 0)
+                except Exception:
+                    pass
             agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
             # ★구독 판정용 분모★ — 840(·800)=구독 / 560=해제. 계정 단위 속성이라 그 계정 캐릭터 중 최대값을 쓴다.
             m = _FV_ODD_FULL_RE.match(str(ch.get("odd_energy") or ""))
@@ -12818,15 +12819,30 @@ async def _fv_build_snapshot() -> dict:
     except Exception:
         pass
 
-    # 회랑 — 대시보드 전광판이 쓰는 그 스냅샷
+    # 회랑 — 대시보드 전광판이 쓰는 그 스냅샷.
+    # ★낡은 판(리셋 전 스냅샷)은 remaining 을 믿으면 안 된다★ — 화면 updateCorridorTile 은
+    #   stale 이면 total 을 센다(2026-08-05 사고: 리셋이 지났는데 «완료» 로 남아 29 vs 참값 102).
+    #   FV 는 그 표시를 안 붙여 보내서 팜뷰가 같은 사고를 되풀이했다(2026-09-10 주인님이 잡음).
     corridor = {}
+    _cor_cut = _corridor_cutoff()
     try:
         for key, val in CORRIDOR_PROG.items():
             t, pid = split_ns(key)
             if t == FV_TENANT:
-                corridor[pid] = val
+                v = dict(val)
+                v["stale"] = bool((v.get("ts") or 0) < _cor_cut)
+                corridor[pid] = v
     except Exception:
         pass
+
+    def _cor_left(c: dict) -> int:
+        """화면 타일과 같은 규칙 — 낡았으면 total(아직 한 판도 안 돈 것), 신선하면 remaining."""
+        try:
+            if c.get("stale"):
+                return int(c.get("total") or 0)
+            return int(c.get("remaining") or 0)
+        except Exception:
+            return 0
 
     notice = None
     try:
@@ -12842,8 +12858,7 @@ async def _fv_build_snapshot() -> dict:
             "counts": {"total": len(pcs), "online": online,
                        "offline": len(pcs) - online, "by_status": by_status},
             "totals": {"total_kina": total_kina, "bugs": total_bugs,
-                       "corridor_remaining": sum(int(c.get("remaining") or 0)
-                                                 for c in corridor.values()),
+                       "corridor_remaining": sum(_cor_left(c) for c in corridor.values()),
                        # 캐릭터 합 4종 (2026-09-09) — total_kina 는 위 그대로(계정 창고값)
                        **tot4},
             "versions": vers,
