@@ -255,11 +255,15 @@ async def _loop_watchdog() -> None:
         late = time.monotonic() - t0 - period
         if late >= STALL_MIN_S:
             try:
+                # ★★이 WS 수는 「굳는 동안」이 아니라 ★굳음이 풀린 직후★ 다 (2026-09-10)★★
+                #   굳는 동안에는 이 코루틴도 안 돈다. 끊긴 소켓의 정리는 그 뒤에
+                #   처리되므로 ★여기 적힌 수는 아직 안 떨어진 것을 포함한다.★
+                #   「그때 18대였다」로 읽으면 틀린다 — 시점을 이렇게 적어둔다(§A2 ④).
                 _STALLS.append({
                     "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                     "stall_s": round(late, 2),
-                    "macro_ws": len(macro_ws_connections),
-                    "dash_ws": len(manager.active),
+                    "macro_ws_after": len(macro_ws_connections),
+                    "dash_ws_after": len(manager.active),
                 })
                 if len(_STALLS) > STALL_KEEP:
                     del _STALLS[:-STALL_KEEP]
@@ -859,7 +863,8 @@ def _bug_counts(tenant: str) -> dict:
     hit = _BUG_COUNT_CACHE.get(tenant)
     if hit and (time.monotonic() - hit[0]) < BUG_COUNT_TTL:
         _perf_count("bug_counts_cached")
-        return hit[1]
+        return dict(hit[1])      # ★사본을 준다 (2026-09-10)★ 호출부가 캐시를 못 더럽히게
+
     _t = time.monotonic()
     counts: dict[str, int] = {}
     try:
@@ -882,14 +887,25 @@ def _bug_counts(tenant: str) -> dict:
         pass
     _perf_note("bug_counts_scan", (time.monotonic() - _t) * 1000)
     _BUG_COUNT_CACHE[tenant] = (time.monotonic(), counts)
-    return counts
+    return dict(counts)
 
 
 async def _build_full_state(tenant: str = "main") -> list[dict]:
+    """계측 껍데기 (2026-09-10 적대검증) — 몸통은 _build_full_state_inner.
+
+    ★초판은 함수 끝에서만 쟀다★ — 중간에 예외로 죽은 판은 통계에서 통째로 빠진다.
+    ★제일 느린 판이 안 세어지면 계측이 「빠르다」고 거짓말한다★(§A2). finally 로 잰다.
+    """
+    _t0 = time.monotonic()
+    try:
+        return await _build_full_state_inner(tenant)
+    finally:
+        _perf_note("build_full_state", (time.monotonic() - _t0) * 1000)
+
+
+async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
     """해당 테넌트의 pc_status + updater_status + bug_count + char_info + slot_filters 병합 목록.
     저장 키는 네임스페이스("t::PC-01")지만 반환 pc_id는 원래 이름으로 벗겨서 냄."""
-    _bfs_t0 = time.monotonic()      # ★계측 (2026-09-10)★ - 굳는 자리를 찾는 재료
-
     def _mine(rows: list) -> list:
         out = []
         for r in rows:
@@ -1159,7 +1175,6 @@ async def _build_full_state(tenant: str = "main") -> list[dict]:
                     pc["_rot_target"] = acct_no_of_label(_tg)
     except Exception:
         pass
-    _perf_note("build_full_state", (time.monotonic() - _bfs_t0) * 1000)
     return statuses
 
 
@@ -1710,7 +1725,14 @@ async def diag_perf(request: Request):
       · ws            : 지금 붙어 있는 매크로/대시보드 수.
     ★이 창구는 아무것도 안 고친다.★ 세션 인증이 필요하다(공개 /health 와 다르다).
     """
-    if not check_session(request):
+    # ★★테넌트 격리 (2026-09-10 적대검증이 잡음)★★
+    #   초판은 `check_session` 이 truthy 이기만 하면 다 줬다 — 그런데 그 안에
+    #   ★다른 지인 테넌트 이름 목록★(bugs_cached_tenants)과 ★전 테넌트 합계 함대 규모★
+    #   (ws.macro)가 들어 있었다. 바로 옆 `/health` 가 정확히 이 이유로
+    #   `check_session(request) == "main"` 으로 갈라놨는데(2026-08-06 감사 minor)
+    #   내가 새 창구를 내면서 그 결정을 되돌린 것이다.
+    #   → ★main 세션만★ 준다. 다른 테넌트는 401(그들에게 쓸 일이 없는 창구다).
+    if check_session(request) != "main":
         raise HTTPException(status_code=401)
     perf = {}
     for k, v in sorted(_PERF.items()):
@@ -1756,11 +1778,16 @@ async def health(request: Request):
         _dbp = _DBP
     except Exception:
         pass
+    # ★무인증 호출은 훑지 않는다 (2026-09-10 적대검증이 빠뜨린 곳을 잡음)★
+    #   이 값은 _detail(main 세션)일 때만 응답에 실리는데 ★계산은 무조건★ 하고 있었다.
+    #   레일웨이 헬스체크와 감시 탐침이 그때마다 481장짜리 폴더를 동기 listdir 했다.
+    #   ★세는 규칙은 안 바꿨다★ — .png 전부 (파일명 규칙과 무관하게).
     _bugs = 0
-    try:
-        _bugs = len([f for f in os.listdir(BUGS_DIR) if f.endswith(".png")])
-    except Exception:
-        pass
+    if _detail:
+        try:
+            _bugs = len([f for f in os.listdir(BUGS_DIR) if f.endswith(".png")])
+        except Exception:
+            pass
     out = {
         "boot": SERVER_BOOT_ID[:8],
         # ★떠 있는 코드의 지문★ — 로컬 server/main.py 의 sha256[:8] 과 같으면 내 빌드다.
@@ -8924,8 +8951,21 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         #   서버가 굳었다 풀리는 구간마다 그 지연이 사람 눈에 「느리다」로 보였다.
         #   재접속은 ★큐를 비우고 시작하는★ 자리라 여기가 제일 싸게 푸는 자리다.
         #
-        #   ★상한 8건★ - 매크로 HTTP drain 과 ★같은 수★ 다(report_module 폴링 루프).
-        #     한 주기에 쏟아붓지 않기 위한 수이고, 양쪽이 같아야 뜻이 하나가 된다.
+        #   ★상한 8건★ - 매크로가 HTTP 폴링에서 한 주기에 가져가는 수와 맞췄다
+        #     (report_module 폴링 루프의 `for _drain in range(8)`).
+        #     ★대칭은 아니다 (2026-09-10 적대검증 정정)★ - 서버의 HTTP 경로는 여전히
+        #     ★요청당 1건★ 이고(GET /command/{pc} → get_pending_command), 매크로가
+        #     8번 요청하는 것이다. 그래서 「같은 수라서 안전하다」는 근거가 아니라
+        #     ★큐 깊이가 예전(HTTP 폴링)과 같아진다★ 는 것이 이 수의 뜻이다.
+        #
+        #   ★★이렇게 보내면 매크로 큐에 최대 8건이 앉는다 - 그 뒤가 위험하다★★
+        #     매크로는 ★실행 전에 즉시 ack★ 하고(report_module on_message), 소비자는
+        #     ★한 바퀴에 1건★ 씩 3.3~6초 간격으로 꺼낸다(loot.py loot_routine).
+        #     그 사이 새 명령이 2초(ENQUEUE_BATCH_GAP) 넘게 벌어져 들어오면
+        #     `drop_pending_commands` 가 ★남은 것을 통째로 버린다★ - 그건 주인님
+        #     오버라이드 지시(2026-09-07·09-08)대로라 ★버그가 아니라 설계★ 지만,
+        #     서버는 이미 acked 로 적어 ★다시 안 보내고 대시보드에도 안 보인다.★
+        #     ★이 창구(거부·유실을 대시보드에 보이기)는 아직 없다 - HANDOFF ③.★
         #   ★밀리초 간격으로 이어 보낸다★ - 매크로의 ENQUEUE_BATCH_GAP(2초)이 이걸
         #     ★같은 배달 묶음★ 으로 보고 앞 명령을 안 덮는다(사고 0-P). 사이를 벌리면
         #     서로 덮어서 ★사람이 먼저 누른 것이 죽는다★ - 그래서 이 루프의 await
