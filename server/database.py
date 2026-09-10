@@ -109,6 +109,13 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_death_pc_time ON death_events(pc_id, created_at)"
         )
+        # ★logs(created_at) 인덱스 (2026-09-11 전수조사)★ — FarmView 이벤트 폴링이
+        #   `WHERE created_at > ? ORDER BY id ASC LIMIT ?` 인데 인덱스가 없어
+        #   EXPLAIN QUERY PLAN 실측 ★SCAN logs★ 였다(144,000행에서 28.8ms/호출).
+        #   맞는 행이 표의 맨 끝(최신 id)이라 LIMIT 조기종료도 거의 안 걸렸다.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at, id)"
+        )
         # ★텔레그램 단일봇 중계(2026-07-28): 서버가 보낸 메시지 id → 어느 PC의 요청인지.
         #   사용자가 그 메시지에 '답장'하면 이 표로 PC를 특정해 명령 큐에 코드를 꽂는다.
         #   ※메모리 dict로 두면 Railway 재배포 때 통째로 날아가 답장이 미아가 된다 → DB.★
@@ -302,13 +309,26 @@ async def get_pending_commands(pc_id: str, all_key: str = "all",
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         _keep = ",".join("?" for _ in COMMAND_NO_EXPIRE)
-        await db.execute(
-            "UPDATE commands SET status='expired', updated_at=? "
+        # ★만료시킬 게 있을 때만 쓴다 (2026-09-11 전수조사)★
+        #   초판은 조회 때마다 무조건 UPDATE+commit 이라 ★순수 조회인데 쓰기 락★ 을
+        #   잡았다. 매크로가 명령을 확인할 때마다(24대 × 15~60초 + 재접속마다) 그랬다.
+        #   SQLite 쓰기는 직렬화되므로 로그 쓰기와 같은 큐에서 다툰다.
+        #   ★만료 규칙 자체는 그대로다★ — 먼저 세어 보고 있을 때만 UPDATE 한다.
+        async with db.execute(
+            "SELECT 1 FROM commands "
             f"WHERE (pc_id=? OR pc_id=?) AND status='pending' AND created_at < ? "
-            f"AND command NOT IN ({_keep})",
-            (_now(), pc_id, all_key, cutoff, *COMMAND_NO_EXPIRE),
-        )
-        await db.commit()
+            f"AND command NOT IN ({_keep}) LIMIT 1",
+            (pc_id, all_key, cutoff, *COMMAND_NO_EXPIRE),
+        ) as _cur:
+            _has_old = await _cur.fetchone() is not None
+        if _has_old:
+            await db.execute(
+                "UPDATE commands SET status='expired', updated_at=? "
+                f"WHERE (pc_id=? OR pc_id=?) AND status='pending' AND created_at < ? "
+                f"AND command NOT IN ({_keep})",
+                (_now(), pc_id, all_key, cutoff, *COMMAND_NO_EXPIRE),
+            )
+            await db.commit()
         async with db.execute(
             """
             SELECT id, pc_id, command, args, created_at
@@ -337,7 +357,12 @@ async def get_pending_commands(pc_id: str, all_key: str = "all",
 async def ack_command(cmd_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "UPDATE commands SET status='acked', updated_at=? WHERE id=?",
+            # ★되돌리지 않는다 (2026-09-11 전수조사)★ — 초판은 `WHERE id=?` 뿐이라
+            #   사람이 ✕ 로 취소한 명령이나 만료된 명령이 뒤늦은 ack 하나로
+            #   ★acked 로 뒤집혀 취소한 흔적이 이력에서 사라졌다.★
+            #   pending 일 때만 ack 으로 올린다(cancel_command 와 같은 규칙, §A12).
+            "UPDATE commands SET status='acked', updated_at=? "
+            "WHERE id=? AND status='pending'",
             (_now(), cmd_id),
         )
         await db.commit()
@@ -355,6 +380,11 @@ async def cancel_command(cmd_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def _like_prefix(s: str) -> str:
+    """LIKE 패턴에서 리터럴로 쓸 접두사 — `\\`·`%`·`_` 를 막는다 (2026-09-11)."""
+    return (s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+
+
 async def get_recent_commands(limit: int = 20, ns_prefix: "str | None" = None) -> list[dict]:
     """ns_prefix: None=전체(호환), ""=main(네임스페이스 없는 행만), "t"=해당 테넌트("t::%") 행만.
     테넌트별 최근 N건을 정확히 주기 위함 — 전역 창에서 필터하면 타 테넌트 폭주 시 내역이 비어 보임(2026-07-26)."""
@@ -362,8 +392,12 @@ async def get_recent_commands(limit: int = 20, ns_prefix: "str | None" = None) -
     if ns_prefix == "":
         where = "WHERE pc_id NOT LIKE '%::%'"
     elif ns_prefix:
-        where = "WHERE pc_id LIKE ?"
-        params.append(ns_prefix + "::%")
+        # ★ESCAPE 를 붙인다 (2026-09-11)★ — 테넌트 이름에 `_`(임의 1글자)나 `%` 가
+        #   들어 있으면 남의 테넌트 행까지 잡아 ★LIMIT 20 창을 먹는다.★
+        #   내용은 하류 필터가 걸러 새지 않지만, 그 테넌트 이력이 비어 보인다 —
+        #   이 함수를 만든 이유(2026-07-26)가 정확히 그 증상이었다.
+        where = "WHERE pc_id LIKE ? ESCAPE '\\'"
+        params.append(_like_prefix(ns_prefix) + "::%")
     params.append(limit)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -461,6 +495,12 @@ async def get_updater_command_pc(cmd_id: int) -> "str | None":
 
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 
+# ★로그 정리 빈도 (2026-09-11)★ — 키(pc_id)마다 이만큼 쌓일 때마다 한 번 훑는다.
+#   초판은 ★매 삽입마다★ 훑어서 지울 게 없어도 쓰기 트랜잭션+fsync 를 냈다.
+LOG_PRUNE_EVERY = 200
+_LOG_SINCE_PRUNE: dict = {}
+
+
 async def insert_log(pc_id: str, level: str, message: str,
                      created_at: str | None = None) -> None:
     """created_at: 클라이언트가 그 줄을 ★실제로 찍은 시각★(UTC ISO). None이면 수신 시각.
@@ -471,23 +511,35 @@ async def insert_log(pc_id: str, level: str, message: str,
       뭉쳐 보여서 ★사고 순서를 못 읽는다★. 클라가 준 시각을 그대로 쓴다.
       기본값 None 이라 기존 호출부(매크로 /log/, 서버 내부 기록)는 전부 무영향.
     """
+    # ══════════════════════════════════════════════════════════════════════
+    # ★★연결 하나·커밋 하나 (2026-09-11 전수조사)★★
+    #   초판은 ①INSERT 용 연결 ②정리용 연결을 ★따로★ 열고 커밋도 두 번 했다.
+    #   실측 ★4.52ms/줄★ 이고 업데이터 배치 50줄이면 연결 100·커밋 100 이 직렬이다.
+    #   Railway 볼륨은 네트워크 디스크이고 synchronous=FULL 이라 ★커밋 횟수가 곧 비용★.
+    #
+    #   ★정리 빈도만 낮춘다 — 3000줄 상한의 뜻은 그대로다★
+    #   초판은 지울 게 0건이어도 매번 DELETE 트랜잭션을 열었다(=fsync). 이제
+    #   LOG_PRUNE_EVERY 줄마다 한 번만 훑고, 그때 3000을 넘은 만큼 자른다.
+    #   즉 최대 3000+LOG_PRUNE_EVERY-1 줄까지 잠깐 넘칠 수 있다 — 보존은 늘고
+    #   줄어들지 않으므로 「몇 시간~며칠치」라는 원래 약속은 유지된다.
+    # ══════════════════════════════════════════════════════════════════════
+    _n = _LOG_SINCE_PRUNE.get(pc_id, 0) + 1
+    _prune = _n >= LOG_PRUNE_EVERY
+    _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
             (pc_id, level, message, created_at or _now()),
         )
-        await db.commit()
-    # 오래된 로그 자동 정리 (PC당 최대 3000개 — 스팸 로그는 클라에서 서버 전송 제외하므로
-    # 중요 이벤트만 3000개면 몇 시간~며칠치 보존됨)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """
-            DELETE FROM logs WHERE pc_id=? AND id NOT IN (
-                SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT 3000
+        if _prune:
+            await db.execute(
+                """
+                DELETE FROM logs WHERE pc_id=? AND id NOT IN (
+                    SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT 3000
+                )
+                """,
+                (pc_id, pc_id),
             )
-            """,
-            (pc_id, pc_id),
-        )
         await db.commit()
 
 
@@ -626,16 +678,32 @@ async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
 
 async def get_logs_since(since: str, limit: int = 500,
                          pc_id: "str | None" = None) -> list[dict]:
-    """created_at > since 인 로그를 오래된 순으로. pc_id 를 주면 그 PC 만."""
+    """created_at > since 인 로그를 오래된 순으로. pc_id 를 주면 그 PC 만.
+
+    ★★정렬을 커서와 맞췄다 (2026-09-11 전수조사 · 실측으로 정정)★★
+      초판은 ★커서는 `created_at`, 정렬은 `id`★ 라 둘이 어긋나 있었다. 그러면
+      ① SQLite 가 인덱스를 못 쓰고 표를 처음부터 훑는다 ② 잘림 경계에서 행이 샌다.
+
+      ★실측 (144,000행, 개발컴)★ — FarmView 가 20초마다 부르는 그 쿼리다.
+        인덱스 없음  · ORDER BY id          →  SCAN logs      ★8.96ms★
+        인덱스 있음  · ORDER BY id          →  SCAN logs      ★9.31ms★ (인덱스가 무용)
+        인덱스 있음  · ORDER BY created_at  →  SEARCH INDEX   ★0.05ms★  (약 180배)
+      ★즉 인덱스만 달면 아무 소용이 없었다★ — 정렬까지 커서와 같은 칼럼으로 맞춰야
+      비로소 인덱스를 탄다. (`idx_logs_created(created_at, id)`)
+
+      ★무엇이 달라지나★ 잘림(LIMIT)이 걸릴 때 「다음 200줄」의 기준이
+      삽입순(id)에서 ★시각순(created_at)★ 으로 바뀐다. 커서가 원래 `created_at`
+      이므로 이쪽이 앞뒤가 맞는다 — 같은 시각 안에서는 id 로 다시 정렬해 안정적이다.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         if pc_id:
             sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
-                   "WHERE created_at > ? AND pc_id = ? ORDER BY id ASC LIMIT ?")
+                   "WHERE created_at > ? AND pc_id = ? ORDER BY created_at ASC, id ASC LIMIT ?")
             params = (since, pc_id, limit)
         else:
             sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
-                   "WHERE created_at > ? ORDER BY id ASC LIMIT ?")
+                   "WHERE created_at > ? ORDER BY created_at ASC, id ASC LIMIT ?")
             params = (since, limit)
         async with db.execute(sql, params) as cur:
             rows = await cur.fetchall()
@@ -669,7 +737,11 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         row = None
-        if merge or not collected_at:
+    # ★키나 보존은 merge 여부와 무관하다 (2026-09-11 전수조사)★
+    #   초판은 이 조건이 False 면 기존 행을 아예 안 읽어서, 정상 전체수집에서
+    #   키나만 못 읽은 판이 ★기존 창고키나를 0 으로 덮었다.★ 독스트링은
+    #   「total_kina=0이면 기존값 유지」라고 약속하는데 그 갈래에서만 안 지켜졌다.
+        if merge or not collected_at or not total_kina:
             async with db.execute(
                 "SELECT total_kina, chars, collected_at FROM char_info WHERE pc_id=?", (pc_id,)
             ) as cur:
@@ -690,6 +762,13 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
             chars = [by_slot[k] for k in sorted(by_slot, key=lambda x: (x is None, x))]
             if not total_kina:
                 total_kina = existing_kina
+        # ★merge 가 아니어도 0 이면 기존값을 지킨다 (2026-09-11)★
+        #   (merge 갈래는 위에서 이미 채웠으므로 여기서는 그대로 통과한다)
+        if not total_kina and row is not None:
+            try:
+                total_kina = row["total_kina"] or 0
+            except Exception:
+                pass
         if not collected_at:
             collected_at = (row["collected_at"] if row else None) or _now()
         await db.execute(

@@ -559,7 +559,18 @@ async def send_command_to_macro(pc_id: str, command: str, args: dict, cmd_id: in
             await ws.send_text(json.dumps({"type": "command", "id": cmd_id, "command": command, "args": args}))
             return True
         except Exception:
-            macro_ws_connections.pop(pc_id, None)
+            # ══════════════════════════════════════════════════════════════
+            # ★★내 것일 때만 지운다 (2026-09-11 전수조사)★★
+            #   위 `await send_text` 는 ★양보점★ 이다. 그 사이 같은 PC 가 재접속하면
+            #   macro_ws_connections[pc_id] 는 ★새 소켓★ 으로 바뀌어 있다.
+            #   초판은 무조건 pop 이라 ★옛 소켓의 전송 실패가 살아있는 새 소켓의
+            #   자리를 지웠다★ — 2026-09-10 에 핸들러 finally 에서 고친 것과
+            #   ★똑같은 부류인데 이 자리를 놓쳤다★(§A15: 같은 부류를 코드로 막아야 끝).
+            # ══════════════════════════════════════════════════════════════
+            if macro_ws_connections.get(pc_id) is ws:
+                macro_ws_connections.pop(pc_id, None)
+            else:
+                _WS_KEPT[0] += 1
     return False
 
 
@@ -963,6 +974,11 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
         return out
 
     statuses = _mine(await get_all_statuses())
+    # ★카드마다 열지 않는다 (2026-09-11)★ — 아래 두 루프가 카드마다 get_char_info 를
+    #   불러 SQLite 연결을 새로 열고 있었다(카드 72장 = 연결 72개 = 실측 124ms).
+    #   한 번에 읽어 dict 로 들고 간다. 이 파일의 _fv_char_agg 가 이미 그 규칙을
+    #   주석으로 적어놨는데(「카드마다 쿼리 금지」) 여기만 안 지켰다.
+    _ci_all = {r.get("pc_id"): r for r in (await get_all_char_info() or [])}
     updater_statuses = _mine(await get_all_updater_statuses())
     _filters_raw = await get_all_slot_filters()
     all_filters = {split_ns(k)[1]: v for k, v in _filters_raw.items() if ns_of(k) == tenant}
@@ -1087,7 +1103,7 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
             pc["_lan_url_cached"] = True
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
-            ci = await get_char_info(ns(tenant, pid))
+            ci = _ci_all.get(ns(tenant, pid))      # ★한 번에 읽어둔 것에서 (2026-09-11)★
             if ci:
                 if ci.get("chars"):
                     pc["chars"] = [
@@ -1118,7 +1134,7 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
             # ★여기도 char_info를 붙인다(2026-07-28): 매크로가 죽어 pc_status 행이 없는 PC는
             #   이 분기로 오는데, 예전엔 char_info를 안 붙여 '창고키나 합계'에서 통째로 빠졌다.
             #   전광판 합계는 마지막으로 알던 값을 계속 세야 한다 — 꺼졌다고 재산이 준 게 아니다.★
-            ci = await get_char_info(ns(tenant, pid))
+            ci = _ci_all.get(ns(tenant, pid))      # ★한 번에 읽어둔 것에서 (2026-09-11)★
             if ci:
                 if ci.get("chars"):
                     row["chars"] = [c.get("name") or c.get("char_name") or "" for c in ci["chars"]]
@@ -1244,10 +1260,21 @@ def _pc_num(pc_id: str):
 
 
 async def _get_parsec_map(tenant: str) -> dict:
+    """파섹 주소록. ★못 읽은 것을 「없다」로 돌려주지 않는다 (2026-09-11 전수조사)★
+
+    초판은 조회 실패·JSON 깨짐도 `{}` 로 돌려줘서 「설정이 없다」와 구분이 안 됐다.
+    그 결과 `enrich_cmd_args` 가 peer_id 를 빈 값으로 지우고, 계정전환 5종
+    (switch_launcher·acct_tour·switch_account·kill_game·plrow_shot)이 시작조차 못 했다.
+    그런데 서버는 `ok:True` 를 돌려주고 이력에도 정상 전송으로 남는다 —
+    원인이 두 단계 뒤(「런처가 안 보인다」)에 나타난다(사고 419·476 계통).
+    ★적어도 흔적은 남긴다.★
+    """
     try:
         raw = await get_setting(ns(tenant, PARSEC_MAP_SETTING))
         return json.loads(raw) if raw else {}
-    except Exception:
+    except Exception as _pe:
+        print(f"[파섹] ★주소록을 못 읽었다★ (없는 것이 아니다): "
+              f"{_pe.__class__.__name__}: {_pe}", flush=True)
         return {}
 
 
@@ -1303,15 +1330,23 @@ async def push_state(tenant: str = "main"):
     if not any(_t == tenant for _w, _t in manager.active):
         _perf_count("push_state_skipped")
         return
+    # ★어느 길로 나가든 잰다 (2026-09-11)★ — 2026-09-10 에 _build_full_state 를
+    #   finally 로 고쳤는데 ★그것을 부르는 이 자리는 안 고쳤다★(§A15).
+    #   실패 판이 통계에서 빠지면 「푸시는 빠르고 정상」인데 화면은 안 갱신된다.
     _t0 = time.monotonic()
-    statuses = await _build_full_state(tenant)
-    ver = _load_version_json()
-    latest = {
-        "macro": ver.get("exe", {}).get("version", ""),
-        "updater": ver.get("updater", {}).get("version", ""),
-    }
-    await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest}, tenant)
-    _perf_note("push_state", (time.monotonic() - _t0) * 1000)
+    try:
+        statuses = await _build_full_state(tenant)
+        ver = await asyncio.to_thread(_load_version_json)
+        latest = {
+            "macro": ver.get("exe", {}).get("version", ""),
+            "updater": ver.get("updater", {}).get("version", ""),
+        }
+        await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest}, tenant)
+    except Exception:
+        _perf_count("push_state_failed")
+        raise
+    finally:
+        _perf_note("push_state", (time.monotonic() - _t0) * 1000)
 
 
 async def push_log(tenant: str, pc_id: str, message: str, level: str = "info"):
@@ -3620,7 +3655,10 @@ function pendFromHistory(cmds){
   (cmds||[]).forEach(c => {
     const b = baseId(String(c.pc_id||''));
     const e = pendingCmds[b];
-    if (!e || e.phase === 'warn') return;
+    // ★warn 이어도 계속 본다 (2026-09-11)★ — 한 번 ⚠ 가 되면 그 뒤 서버가 보내는
+    //   acked/expired/cancelled 를 영영 안 보던 자리다. pendStep 은 2026-09-08 에
+    //   같은 이유로 고쳤는데 ★이 함수는 안 고쳤다★(같은 부류를 옆에 남겨둠).
+    if (!e) return;
     // id 로 맞춘다. 서버 응답 json 을 못 읽었을 때만 (pc_id + command) 로 폴백한다.
     // ★idResolved 를 기다린다★ — 서버는 명령을 넣자마자 cmd_history 를 브로드캐스트하는데
     //   (main.py /command 의 _push_cmd_history), 그때 우리는 아직 fetch 응답을 못 읽어
@@ -4478,7 +4516,7 @@ function buildCard(pc) {
   const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${_uage}초째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
   const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
-  const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${pc.macro_version}</span>` : '';
+  const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${esc(pc.macro_version)}</span>` : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
     ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
     : '';
@@ -6460,9 +6498,9 @@ function renderCmdHistory(cmds) {
       : '';
     return `<div class="flex gap-2 items-center py-0.5">
       <span class="text-gray-600 shrink-0">${(c.created_at||'').slice(11,19)}</span>
-      <span class="text-indigo-400 shrink-0">${c.pc_id}</span>
-      <span class="text-gray-200">${c.command}</span>
-      <span class="${sc} ml-auto shrink-0">${c.status}</span>${cancelBtn}
+      <span class="text-indigo-400 shrink-0">${esc(c.pc_id)}</span>
+      <span class="text-gray-200">${esc(c.command)}</span>
+      <span class="${sc} ml-auto shrink-0">${esc(c.status)}</span>${cancelBtn}
     </div>`;
   }).join('');
 }
@@ -7304,9 +7342,16 @@ const _alertSeen = new Map();          // "kind|pc" → 마지막 발화 시각 
 
 // ratePct/pitchHz 는 서버(edge-tts) 단위. 브라우저 폴백에서는 배수로 환산해 쓴다.
 // 기본값은 낮고 느리게 — 윈도우 기본음성 특유의 기계적인 느낌을 피하는 방향.
+// ★최상위 JSON.parse 는 감싼다 (2026-09-11)★ — 여기서 던지면 아래 1,200여 줄이
+//   정의조차 안 돼 화면이 백지가 된다(2026-07-27 사고와 같은 증상, 다른 원인).
+//   이 파일의 다른 localStorage 파싱은 전부 try 로 감싸져 있는데 여기만 빠져 있었다.
+function _ttsSaved(){
+  try { return JSON.parse(localStorage.getItem('ttsCfg') || '{}') || {}; }
+  catch (e) { return {}; }
+}
 const ttsCfg = Object.assign(
   { engine: 'server', name: '', ratePct: 25, pitchHz: 18 },
-  JSON.parse(localStorage.getItem('ttsCfg') || '{}')
+  _ttsSaved()
 );
 function saveTtsCfg(){ localStorage.setItem('ttsCfg', JSON.stringify(ttsCfg)); }
 function _sgn(n){ return (n >= 0 ? '+' : '') + n; }
@@ -7592,10 +7637,10 @@ async function openBugsModal(pc_id) {
         <span class="text-xs text-gray-400 font-mono truncate mr-2">${esc(b.filename)}</span>
         <div class="flex items-center gap-2 shrink-0">
           <span class="text-xs text-gray-600">${(b.size/1024).toFixed(1)}KB</span>
-          <button onclick="deleteBug('${b.filename}')" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
+          <button onclick="deleteBug('${esc(encodeURIComponent(b.filename))}')" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
         </div>
       </div>
-      <img src="/bugs/image/${b.filename}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${b.filename}" loading="lazy">
+      <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${esc(b.filename)}" loading="lazy">
     </div>
   `).join('');
 }
@@ -7797,7 +7842,7 @@ function renderVietnam(){
           `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${r.slot},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
           VIETNAM_COLS.map(c=>{
             const cls = (c.red && c.red(r)) ? 'text-red-400 font-bold' : 'text-gray-200';
-            return `<td class="px-3 py-1.5 ${_ta(c.align)} ${cls}">${c.fmt(r)}</td>`;
+            return `<td class="px-3 py-1.5 ${_ta(c.align)} ${cls}">${esc(c.fmt(r))}</td>`;
           }).join('')+
           `</tr>`;
       }).join('')
@@ -7836,7 +7881,8 @@ function renderCharTable() {
     const daily = r.daily_ticket || '–';
     const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
     const nmProg = r.nightmare_progress || '';
-    const nm = nmProg ? `${nmTicket} <span class="text-pink-400 text-[10px]">${nmProg}</span>` : nmTicket;
+    // ★nm 만 일부러 HTML 을 품는다★ — 조각을 여기서 감싸고, 쓰는 자리는 그대로 둔다 (2026-09-11)
+    const nm = nmProg ? `${esc(nmTicket)} <span class="text-pink-400 text-[10px]">${esc(nmProg)}</span>` : esc(nmTicket);
     const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/3` : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
@@ -7867,28 +7913,28 @@ function renderCharTable() {
         <input type="checkbox" ${slotEnabled ? 'checked' : ''}
           onchange="toggleSlotFilter('${r.pc_id}',${r.slot},this.checked)"
           onclick="event.stopPropagation()" class="cursor-pointer accent-green-500"></td>
-      <td class="px-3 py-1.5 text-gray-400">${r.slot||'–'}</td>
-      <td class="px-3 py-1.5 text-white">${r.name||'–'}</td>
-      <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${cls}</td>
+      <td class="px-3 py-1.5 text-gray-400">${esc(r.slot||'–')}</td>
+      <td class="px-3 py-1.5 text-white">${esc(r.name||'–')}</td>
+      <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${esc(cls)}</td>
       <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${r.slot})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
       <td class="px-3 py-1.5 text-right ${gpLow?'':'text-gray-200'}">${gpLow?rc(gp):gp}</td>
       <td class="px-3 py-1.5 text-right font-medium ${ppLow?'':'text-cyan-400'}">${ppLow?rc(pp):pp}</td>
-      <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(odd):odd}</td>
-      <td class="px-3 py-1.5 text-center">${dailyFull?rc(daily):daily}</td>
+      <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(esc(odd)):esc(odd)}</td>
+      <td class="px-3 py-1.5 text-center">${dailyFull?rc(esc(daily)):esc(daily)}</td>
       <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):nm}</td>
-      <td class="px-3 py-1.5 text-center">${awFull?rc(aw):aw}</td>
-      <td class="px-3 py-1.5">${sancFull?rc(sanc):sanc}</td>
-      <td class="px-3 py-1.5 text-center">${mail}</td>
-      <td class="px-3 py-1.5 text-center">${scrollLow?rc(scroll):scroll}</td>
-      <td class="px-3 py-1.5">${extFull?rc(ext):ext}</td>
+      <td class="px-3 py-1.5 text-center">${awFull?rc(esc(aw)):esc(aw)}</td>
+      <td class="px-3 py-1.5">${sancFull?rc(esc(sanc)):esc(sanc)}</td>
+      <td class="px-3 py-1.5 text-center">${esc(mail)}</td>
+      <td class="px-3 py-1.5 text-center">${scrollLow?rc(esc(scroll)):esc(scroll)}</td>
+      <td class="px-3 py-1.5">${extFull?rc(esc(ext)):esc(ext)}</td>
       <td class="px-3 py-1.5 text-center">${arcanaLink}</td>
       <td class="px-3 py-1.5 text-center">${equipLink}</td>
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-orange-400">${trade}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
-      <td class="px-3 py-1.5 text-center text-fuchsia-300">${r.abyss_time || '–'}</td>
+      <td class="px-3 py-1.5 text-center text-fuchsia-300">${esc(r.abyss_time || '–')}</td>
       <td class="px-3 py-1.5 text-right text-fuchsia-200">${r.abyss_point ? Number(r.abyss_point).toLocaleString() : '–'}</td>
-      <td class="px-3 py-1.5 text-center ${r.corridor_full ? 'text-green-400 font-medium' : 'text-sky-300'}">${r.corridor_progress || '–'}</td>
+      <td class="px-3 py-1.5 text-center ${r.corridor_full ? 'text-green-400 font-medium' : 'text-sky-300'}">${esc(r.corridor_progress || '–')}</td>
     </tr>`;
   }
 
@@ -8094,14 +8140,14 @@ function renderInfoContent(info) {
       const display = RAW_FIELDS.has(k) ? v : POWER_FIELDS.has(k) ? fmtPower(v) : fmtNum(v);
       return `<div class="flex justify-between text-xs py-0.5 border-b border-gray-800/60">
         <span class="text-gray-500">${lbl}</span>
-        <span class="text-gray-200 font-medium">${display}</span>
+        <span class="text-gray-200 font-medium">${esc(display)}</span>
       </div>`;
     }).join('');
     return `<div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
       <div class="px-4 py-2.5 bg-gray-750 border-b border-gray-700 flex items-center gap-2">
         <span class="text-xs font-bold text-indigo-400">${i+1}.</span>
-        <span class="text-sm font-bold text-gray-100">${c.name||c.char_name||`캐릭${i+1}`}</span>
-        ${c.class?`<span class="text-xs text-gray-500 ml-auto">${c.class}</span>`:''}
+        <span class="text-sm font-bold text-gray-100">${esc(c.name||c.char_name||`캐릭${i+1}`)}</span>
+        ${c.class?`<span class="text-xs text-gray-500 ml-auto">${esc(c.class)}</span>`:''}
       </div>
       <div class="px-4 py-2">${rows||'<div class="text-xs text-gray-600 py-2">데이터 없음</div>'}</div>
     </div>`;
@@ -8594,11 +8640,14 @@ async def receive_logs(pc_id: str, request: Request):
     except Exception:
         raise HTTPException(status_code=400)
     logs = data.get("logs", [])
+    _saved = 0
+    _dropped = max(0, len(logs) - 50)
     for entry in logs[:50]:   # 배치당 최대 50개
         level   = str(entry.get("level", "info"))[:10]
         message = str(entry.get("message", ""))[:500]
         if message:
             await insert_log(ns(tenant, pc_id), level, message)
+            _saved += 1
             # ★★로그 경로는 둘이다 — 여기도 부팅을 봐야 한다 [S2 치명]★★
             #   매크로는 WS 가 끊겨 있으면 이 HTTP 로 로그를 보낸다(report_module _flush_logs).
             #   초판은 WS 쪽에만 감지를 달아서, ★부팅 직후 WS 가 아직 안 붙은 경우★ 의
@@ -8615,7 +8664,18 @@ async def receive_logs(pc_id: str, request: Request):
                     await _rot_note_hotkey(tenant, pc_id, message)
                 except Exception as _he:
                     print(f"[순환] 핫키 감지 실패(무시): {_he}")
-    return JSONResponse({"ok": True, "count": len(logs)})
+    # ★버린 줄을 증거로 남긴다 (2026-09-11 전수조사)★
+    #   초판은 `count: len(logs)` 로 ★받은 개수 전부★ 를 돌려줬다. 매크로는 post 전에
+    #   버퍼를 비우고 이 값을 안 보므로 51번째부터는 ★어디에도 안 남았다★(최대 1950줄).
+    #   이 경로는 WS 가 끊겼을 때만 타는 폴백이라 ★사고 구간의 로그가 여기서 잘린다.★
+    if _dropped:
+        try:
+            await insert_log(ns(tenant, pc_id), "warn",
+                             f"[서버] 로그 배치 {len(logs)}줄 중 50줄만 저장 — {_dropped}줄 버림")
+        except Exception:
+            pass
+    return JSONResponse({"ok": True, "count": _saved, "received": len(logs),
+                         "dropped": _dropped})
 
 
 @app.get("/commands/recent")
@@ -8936,7 +8996,12 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
                 await _rot_save(force=True)
                 await _rot_say(tenant, pc_id, f"{command} 명령으로 순환을 해제했습니다")
     except Exception as _re:
-        print(f"[순환] 무장/해제 실패(무시): {_re}")
+        # ★거부와 같은 창구로 내보낸다 (2026-09-11 전수조사)★
+        #   초판은 print 만 해서 `_rot_result` 가 `{}` 로 남았다. 그러면 응답에
+        #   `armed` 키가 ★아예 없고★ 대시보드는 `armed === false` 만 보므로 통과한다.
+        #   즉 ★가장 나쁜 경우가 가장 조용했다.★
+        print(f"[순환] 무장/해제 실패: {_re}")
+        _rot_result = {"armed": False, "why": f"서버 오류: {_re.__class__.__name__}: {_re}"}
 
     cmd_id = await insert_command(nspc, command, args)
     # 매크로 WS 연결되어 있으면 즉시 전달
@@ -9112,6 +9177,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                 cmd_id = msg.get("command_id")
                 if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
                     await ack_command(cmd_id)
+                    # ★이력도 알린다 (2026-09-11 전수조사)★ — HTTP ack 라우트는
+                    #   이걸 부르는데 WS 갈래만 빠져 있었다(§A12: 규칙이 둘).
+                    #   그래서 ★WS 로 붙은 건강한 PC 에서만★ 대시보드의 ②ack 단계가
+                    #   안 돌아, 받은 명령이 ⏳ 로 남았다가 ⚠ 로 넘어갔다.
+                    await _push_cmd_history(tenant)
             elif msg_type == "pong":
                 pass
     except WebSocketDisconnect as _wde:
@@ -9155,13 +9225,25 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
     await manager.connect(websocket, tenant)
-    # 초기 상태 전송 (updater 정보 포함)
-    pcs = await _build_full_state(tenant)
-    await websocket.send_text(json.dumps({"type": "state", "pcs": pcs}))
+    # ══════════════════════════════════════════════════════════════════════
+    # ★★등록했으면 어느 길로 나가든 지운다 (2026-09-11 전수조사)★★
+    #   초판은 ①초기 상태 조립·전송이 try ★밖★ 이고 ②`WebSocketDisconnect` 만
+    #   잡았다. `_build_full_state` 는 DB 를 여러 번 치므로 거기서 터지거나,
+    #   lifespan 종료(`CancelledError`)면 `manager.disconnect` 를 건너뛴다.
+    #   ★남은 좀비 하나가 `push_state` 의 「보는 사람 없으면 안 만든다」 가드를
+    #   통째로 푼다★ — 초당 1회 카드 72장 조립이 되살아난다.
+    # ══════════════════════════════════════════════════════════════════════
     try:
+        # 초기 상태 전송 (updater 정보 포함)
+        pcs = await _build_full_state(tenant)
+        await websocket.send_text(json.dumps({"type": "state", "pcs": pcs}))
         while True:
             await websocket.receive_text()   # keep alive; client doesn't send
     except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
         manager.disconnect(websocket)
 
 
@@ -9350,11 +9432,26 @@ async def telegram_send(pc_id: str, request: Request):
     name = clean_pc_id(pc_id)
     # ★음소거 확인 (2026-08-20)★ — 조용히 삼키지 않고 ok:true + muted 로 알려준다.
     #   매크로는 실패로 재시도하지 않고, 나중에 로그를 보면 왜 안 왔는지 알 수 있다.
-    _left = _tg_muted(pc_id)
+    # ★★⛔·🚨 는 음소거를 무시한다 (2026-09-11 전수조사)★★
+    #   같은 파일 `_rot_say` 가 `hard or (...)` 로 이미 그 규칙을 쓰는데 이 창구만
+    #   ★본문을 보지도 않고★ 전부 삼켰다(§A12: 규칙이 둘). 정지·사망·캡차·큐브가
+    #   전부 이 경로다. ★사람을 세워놓는 알람이 음소거에 같이 죽으면 안 된다.★
+    _hard = str(text).lstrip().startswith(("⛔", "🚨"))
+    _left = 0 if _hard else _tg_muted(pc_id)
     if _left > 0:
         print(f"[tg-mute] {name} 음소거 중({_left/60:.0f}분 남음) — 전송 생략: {text[:60]}",
               flush=True)
-        return JSONResponse({"ok": True, "muted": True,
+        # ★생략도 그 PC 카드에 남긴다 (2026-09-11)★ — 초판은 Railway stdout 에만
+        #   적어서 「왜 안 왔지」를 추적할 방법이 아예 없었다.
+        try:
+            await insert_log(ns(tenant, pc_id), "warn",
+                             f"[텔레그램] 중계 생략(음소거 {_left/60:.0f}분 남음): {text[:120]}")
+        except Exception:
+            pass
+        # ★ok:False 로 답한다★ — 매크로는 200 을 성공으로 읽어 「중계 전송」을
+        #   ★안 나갔는데★ 로그에 찍었다(§A2: 로그가 증거인데 거짓이면 전부 무너진다).
+        return JSONResponse({"ok": False, "muted": True,
+                             "reason": "muted",
                              "minutes_left": round(_left / 60.0, 1)})
     mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
     if mid is None:
@@ -9556,6 +9653,15 @@ async def dashboard_send_updater_command(pc_id: str, request: Request):
     tenant = check_session(request)
     if not tenant:
         raise HTTPException(status_code=401)
+    # ★브로드캐스트 차단 [A7] (2026-09-11 전수조사)★ — 매크로 큐(`/command/{pc}`)
+    #   에는 이 가드가 있는데 ★업데이터 큐에는 한 줄도 없었다.★
+    #   `get_pending_updater_command` 가 all_key 를 지원하므로 `/updater/command/all`
+    #   한 번이면 폴링 창에 걸린 업데이터 전부가 그 명령을 집는다.
+    #   update 는 stop_macro→start_macro 라 ★사냥이 끊긴다★ — 매크로 쪽보다 반경이 크다.
+    if str(pc_id).strip() in _BROADCAST_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
     body = await request.json()
     command = body.get("command")
     if not command:
@@ -13097,7 +13203,11 @@ async def fv_command_send(request: Request):
             results.append({"pc": pid, **r})
         except Exception as e:
             results.append({"pc": pid, "ok": False, "error": str(e)})
+    # ★부분 성공을 성공이라 하지 않는다 (2026-09-11 전수조사)★
+    #   초판은 `ok: sent > 0` 이라 24대 중 1대만 되어도 참이었다. `ok` 만 보는
+    #   호출부(운영 스크립트·자동화)는 「전 함대에 나갔다」로 읽는다.
     sent = sum(1 for r in results if r.get("ok"))
-    return _fv_json(request, {"ok": sent > 0, "cmd": cmd,
+    return _fv_json(request, {"ok": sent == len(targets), "partial": 0 < sent < len(targets),
+                              "cmd": cmd,
                               "targets": len(targets), "sent": sent,
                               "results": results})
