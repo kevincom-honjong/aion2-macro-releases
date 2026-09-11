@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.950",
+    "version": "1.1.951",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "d192ebd4f6e5a580b4a38b3e9b0fc72b50c8e5f0413defe8e5c8f12b03032b43",
+    "sha256": "76bea59eae928a4b9abee87635d836c5b4acd51c906e1e640d720d14cc428590",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -65,8 +65,10 @@
     "cor_portal_orb6.png": "b4b92f65fe04165bc2d85cabbf07af4470c5b11ebf0b8f0c78961e4d531fc200",
     "cor_revive_basic.png": "d39cd1d99e92f32290f4b0bb44b597aeebfd48f226b956965c9f703a771ac9be",
     "cor_revive_pvp.png": "18c421d70156faf836b53a58dbdcdd2382b64ca2309d8b2b015da0a44bd611a4",
+    "cor_row_expired.png": "ba5c7305d2b2b8648e51976f149231f3f58da1683c6843b49f3cf38fe21a473d",
     "cor_row_lower.png": "422161f1df692c79a934467a784217c3051aa61cc62f94f3f82d119203b81270",
     "cor_row_middle.png": "ee220f9e394cb7382b1484cdcabe6733b9ef9df91353a3f2ea7427ee76423811",
+    "cor_row_unavail.png": "326c34821df81b7059aac7aa09f81085a23b243c5e0183c6eaa9cd59dd29e33f",
     "cor_spent.png": "7244da0aa1e0b1e71a62c6e80e4779de08fa78bbe855d7329650c6bf5cfdcbe4",
     "cor_target_bar.png": "b57e1d745809afc6df6c2a51fe117e826e2f064cfb6a80616b2e8401bc06b0a4",
     "cor_teleport_btn.png": "8909b8e8474cf176e6a43dbd744ed981a81c6ecfff35b6d749e9d6149f04a63d",
@@ -479,11 +481,11 @@
     "sha256": "7da084df9553bf6dd41d892b243383b8bf2ce131dd483751535ea0e8e378a7c6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260910104945",
-  "updated_at": "2026-09-10T20:22:58",
+  "images_version": "20260911141253",
+  "updated_at": "2026-09-11T14:12:53",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.950",
+    "version": "1.1.951",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
