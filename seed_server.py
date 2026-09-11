@@ -476,20 +476,34 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, 'version mismatch')
             return
         size = os.path.getsize(path)
-        # ★사고 530★ 헤더는 바로 보낸다(연결은 됐다는 신호) → 전송 자리를 기다린다
+        # ══════════════════════════════════════════════════════════════════
+        # ★★사고 554 (2026-09-11, 주인님: 「내부망 시드 잘 안 되는 것 같은데」)★★
+        #   ★실측★ 오늘 업데이터 로그에 ★IncompleteRead(0 bytes read, 77279028 more expected)★
+        #   가 7건(14:37 PC-13·18·22·24 등). 시드는 죽지 않았다 — 사고 530 의 대기실이
+        #   ★헤더(200 + Content-Length)를 먼저 보내고★ 자리를 기다리다 끊었기 때문에,
+        #   받는 쪽에는 ★「200 이라더니 0바이트」★ 로 보였다. 그게 「시드 실패」로 찍혔다.
+        #   ⇒ ★자리를 먼저 잡고, 못 잡으면 깨끗하게 503★ 을 준다. 그래야 업데이터가
+        #     즉시·조용히 GitHub 로 간다(에러가 아니라 「지금 바쁘다」다).
+        # ══════════════════════════════════════════════════════════════════
+        _t_wait = time.time()
+        if not _seed_slots.acquire(timeout=SEED_WAIT_S):
+            print(f"[시드] {self.client_address[0]} 대기 {SEED_WAIT_S:.0f}s 초과 (전송중 {_seed_busy[0]}대) "
+                  f"- 503 으로 돌려보냄(GitHub 로) {time.strftime('%H:%M:%S')}", flush=True)
+            try:
+                _body = b"seed busy"
+                self.send_response(503)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(_body)))
+                self.send_header("Retry-After", "30")
+                self.end_headers()
+                self.wfile.write(_body)
+            except Exception:
+                pass
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(size))
         self.end_headers()
-        _t_wait = time.time()
-        if not _seed_slots.acquire(timeout=SEED_WAIT_S):
-            print(f"[시드] {self.client_address[0]} 대기 {SEED_WAIT_S:.0f}s 초과 (전송중 {_seed_busy[0]}대) "
-                  f"- 끊어서 GitHub 로 보냄 {time.strftime('%H:%M:%S')}", flush=True)
-            try:
-                self.connection.close()
-            except Exception:
-                pass
-            return
         _seed_busy[0] += 1
         _waited = time.time() - _t_wait
         sent = 0
