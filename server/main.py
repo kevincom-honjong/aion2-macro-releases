@@ -27,7 +27,7 @@ from database import (
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     recent_updater_commands,
-    upsert_char_info, get_char_info, get_all_char_info,
+    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
     tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
@@ -12845,6 +12845,8 @@ FV_TENANT   = (os.getenv("FV_TENANT", "main") or "main").strip()
 FV_FLEET_N  = 8     # 통합 2026-09-12 (CONTRACTS_대시보드 #3) — 이 대수 이상은 confirm_fleet:true 없이 안 보낸다(A7)
 FV_SNAP_TTL = 3.0                      # 스냅샷 서버 캐시(초) — 주인님 지시
 FV_ALERT_KEEP = 200                    # global.alerts 링버퍼 길이
+FV_AGE_UNKNOWN_S = 10 ** 9             # progress.kina_age_s 「모름」 — 팜뷰 계약(CONTRACTS_팜뷰 2026-09-13): 정수, 모르면 10^9
+FV_KINA_DELTA_MAX = 10 ** 12           # kina_adjust 한 번에 옮길 수 있는 상한(오타·단위 사고 방어: 1조)
 
 _fv_snap: dict = {"ts": 0.0, "body": None}
 _FV_ALERTS = _fv_deque(maxlen=FV_ALERT_KEEP)
@@ -13044,6 +13046,14 @@ def _fv_maybe_raw(request: Request, body):
     return body
 
 
+def _fv_age_int(ts_str) -> int:
+    """_age_s 를 팜뷰 계약 모양으로: 정수 초, 못 읽으면 FV_AGE_UNKNOWN_S. 음수(시계 앞섬)는 0."""
+    a = _age_s(ts_str)
+    if a is None:
+        return FV_AGE_UNKNOWN_S
+    return max(0, int(a))
+
+
 def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     """_build_full_state 한 줄 → FarmView 가 쓰기 좋은 모양.
     ★raw 에 원본을 통째로 실어 둔다★ — 화면에 뜨는데 여기 안 담긴 필드가 있어도
@@ -13094,6 +13104,8 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
             "kina":          row.get("kina"),
             "kina_rate":     row.get("kina_rate"),
             "total_kina":    row.get("_total_kina"),
+            # 창고 키나를 잰 지 몇 초인가(정수, 모름 10^9) — 팜뷰가 낡은 계정을 안 고르게(2026-09-13)
+            "kina_age_s":    _fv_age_int(row.get("_char_collected_at")),
             "uptime_hours":  row.get("uptime_hours"),
             "deaths_30m":    row.get("deaths_30m"),
             "abyss_kina":    row.get("abyss_kina"),
@@ -13394,6 +13406,60 @@ async def fv_command_list(request: Request):
         "note": ("pc 는 'PC-01' · ['PC-01','PC-02'] · 'all' 셋 중 하나. "
                  "'all' 은 서버가 실제 카드 목록으로 펼쳐 한 대씩 보낸다."),
     })
+
+
+def _fv_kina_body(body) -> tuple:
+    """kina_adjust 본문 검사 → (pc_id, delta, why, tid) 또는 (None, 오류문, None, None). bool 은 int 로 안 친다."""
+    if not isinstance(body, dict):
+        return None, "본문은 객체여야 합니다", None, None
+    pc_id = clean_pc_id(str(body.get("pc_id") or "").strip())
+    if not pc_id or pc_id in _BROADCAST_IDS:
+        return None, "pc_id 필드가 필요합니다(카드 하나)", None, None
+    delta = body.get("delta_kina")
+    if isinstance(delta, bool) or not isinstance(delta, int):
+        return None, "delta_kina 는 정수여야 합니다", None, None
+    if abs(delta) > FV_KINA_DELTA_MAX:
+        return None, f"delta_kina 가 너무 큽니다(상한 ±{FV_KINA_DELTA_MAX:,})", None, None
+    why = body.get("why") or {}
+    if not isinstance(why, dict):
+        return None, "why 는 객체여야 합니다", None, None
+    tid = str(why.get("tid") or "").strip()
+    if not tid:
+        return None, "why.tid 가 필요합니다(거래 id — 같은 tid 는 두 번 빼지 않습니다)", None, None
+    return pc_id, delta, why, tid
+
+
+@app.post("/api/fv/kina_adjust")
+async def fv_kina_adjust(request: Request):
+    """팜뷰 «팔린 만큼 줄인다»(주인님 2026-09-13, CONTRACTS_팜뷰): 매니아에서 팔린 만큼 창고 키나를 뺀다.
+    같은 why.tid 는 dup:true 로 값 그대로. 다음 /char_info 수집이 오면 진짜 값이 덮는다(그게 «맞춰 나가기»)."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return _fv_err(400, "JSON 본문이 필요합니다")
+    pc_id, delta, why, tid = _fv_kina_body(body)
+    if pc_id is None:
+        return _fv_err(400, delta)
+    nspc = ns(FV_TENANT, pc_id)
+    res = await adjust_char_kina(nspc, tid, delta, why)
+    if res is None:
+        return _fv_err(404, f"카드 '{pc_id}' 의 창고 키나 기록(char_info)이 없습니다")
+    res["pc_id"] = pc_id
+    if not res["dup"]:
+        # 증거는 그 PC 로그줄(A2) — 대시보드·팜뷰 events 양쪽에 보인다
+        await insert_log(nspc, "info",
+                         f"[팜뷰] 창고 키나 {delta:+,} ({why.get('server') or '?'} {why.get('man') or '?'}만 → "
+                         f"{why.get('won') or '?'}원, tid {tid}) {res['before']:,} → {res['after']:,}")
+        _fv_snap["body"] = None          # 스냅샷 캐시(3초)를 비워 다음 폴링이 새 값을 본다
+        try:
+            # char_info 프레임은 안 쏜다 — handleCharInfoMsg 가 chars 를 덮고 「정보수집 완료」 토스트를 띄운다.
+            await push_state(FV_TENANT)   # 카드 재조립(보는 사람 없으면 안 만든다)
+        except Exception as e:
+            print(f"[fv] kina_adjust 방송 실패 {pc_id}: {e}")
+    return JSONResponse({"ok": True, **res})
 
 
 @app.post("/api/fv/command")

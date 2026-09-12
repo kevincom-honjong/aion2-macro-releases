@@ -83,6 +83,18 @@ async def init_db() -> None:
                 collected_at TEXT NOT NULL
             )
         """)
+        # 팜뷰 «팔린 만큼 줄인다»(CONTRACTS_팜뷰 2026-09-13) — 매니아 거래 1건 = 행 1개. tid 가 PK 라 두 번 못 뺀다.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS kina_adjust (
+                tid     TEXT PRIMARY KEY,
+                pc_id   TEXT NOT NULL,
+                delta   INTEGER NOT NULL,
+                before  INTEGER NOT NULL,
+                after   INTEGER NOT NULL,
+                why     TEXT DEFAULT '{}',
+                at      TEXT NOT NULL
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS nightmare_progress (
                 pc_id      TEXT NOT NULL,
@@ -821,6 +833,33 @@ async def get_char_info(pc_id: str) -> dict | None:
         "chars": chars,
         "collected_at": row["collected_at"],
     }
+
+
+async def adjust_char_kina(pc_id: str, tid: str, delta: int, why: dict) -> dict | None:
+    """창고 키나를 delta 만큼 옮긴다(팜뷰 «팔린 만큼 줄인다», 2026-09-13).
+    · char_info 행이 없으면 None(→ 404). collected_at 은 ★안 건드린다★ — 수집 시각은 매크로 것.
+    · 같은 tid 는 두 번 빼지 않는다 → {"dup": True, before=after=지금 값}.
+    · after = max(0, before + delta). BEGIN IMMEDIATE 로 읽기-쓰기를 한 트랜잭션에."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT total_kina FROM char_info WHERE pc_id=?", (pc_id,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            await db.execute("ROLLBACK")
+            return None
+        before = int(row[0] or 0)
+        async with db.execute("SELECT 1 FROM kina_adjust WHERE tid=?", (tid,)) as cur:
+            seen = await cur.fetchone()
+        if seen:
+            await db.execute("ROLLBACK")
+            return {"pc_id": pc_id, "before": before, "after": before, "dup": True}
+        after = max(0, before + int(delta))
+        await db.execute(
+            "INSERT INTO kina_adjust(tid, pc_id, delta, before, after, why, at) VALUES(?,?,?,?,?,?,?)",
+            (tid, pc_id, int(delta), before, after, json.dumps(why or {}, ensure_ascii=False), _now()))
+        await db.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (after, pc_id))
+        await db.commit()
+    return {"pc_id": pc_id, "before": before, "after": after, "dup": False}
 
 
 # ── 악몽 진행 상태 ──────────────────────────────────────────────────────────

@@ -2,7 +2,14 @@
 
 먼저 `CLAUDE.md`(같은 폴더)를 읽고, 그다음 이 파일. 상태 정본은 `../../web/.claude/ops/NOW.md` 0-AB·0-AC 절(더 길다).
 
-## 이번에 고친 것 (2026-09-10 ~ 09-12, 전부 배포됨 또는 이번 커밋)
+## 이번에 고친 것 (2026-09-10 ~ 09-13, 전부 배포됨 또는 이번 커밋)
+
+### 09-13 — 팜뷰 «팔린 만큼 줄인다» (주인님 지시, 팜뷰 세션 요청)
+| 무엇 | 자리 |
+|---|---|
+| `POST /api/fv/kina_adjust` — 매니아 거래 1건만큼 `char_info.total_kina` 차감, `why.tid` 로 멱등(`dup:true`), 바닥 0, 그 PC 로그줄 + 스냅샷 캐시 무효화. 대시보드 `char_info` 프레임은 ★안 쏜다★(캐릭 목록을 지우고 「정보수집 완료」 토스트가 뜬다) | `fv_kina_adjust`·`_fv_kina_body`·`database.adjust_char_kina`·표 `kina_adjust` |
+| `progress.kina_age_s`(정수, 모름 10^9) | `_fv_age_int`·`_fv_pc_view` |
+| 계약 시험 19건 + 되돌리기 증명 3건 | `tests/test_contracts.py t_fv_kina_adjust`·`prove_guards.py` |
 
 ### 09-12 (이번 커밋) — 1단계 20건 + 2단계 정리
 | 등급 | 무엇 | 자리 |

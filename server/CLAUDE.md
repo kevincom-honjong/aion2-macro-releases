@@ -75,7 +75,7 @@ DB_PATH=/tmp/t.db BUGS_DIR=/tmp/bugs DASHBOARD_PASSWORD=x API_KEY=y python -X ut
 | 아이온2 매크로 | S→M | WS 봉투 `{type:"command", id, command, args}` · 사람 명령은 `args._by="human"` | 재접속 때 밀린 명령 최대 `WS_RECONNECT_DRAIN`(8) 건을 밀리초 간격으로 |
 | 업데이터 (`src/updater/client`) | 양방향 | `POST /check` · `GET /img/{fname}`(무인증, 매니페스트 안 이름만) · `/updater/*` | `/img` 는 `version.json` `images` 에 있는 이름만 상류를 찌른다 |
 | 브라우저 대시보드 (main.py 인라인 JS) | S→B | WS `/ws`: `state`(카드)·`cmd_history`·`alert`·`log`·`char_info` | `cmd_history` 항목 `{id,pc_id,command,status,created_at,updated_at,args}`, `args` 에서 `_` 키는 걷어낸다. `status` ∈ pending/acked/expired/cancelled |
-| 팜뷰 (`src/farmview`) | S→FV | `GET /api/fv/snapshot`·`/events`·`/pc/{id}`·`/tts`, `POST /api/fv/command` | 인증 `X-FV-Token`. `pcs` 는 ★dict★(pc_id 키). `progress.{trade_kina,gakin_kina,odd_energy,awakening_ticket,subscribed,total_kina}` · `today.{slots_done,slots_total,slots_left,daily_progress[].today}` · `global.totals.{total_kina,bugs,…}`. 문서 `../FV_API.md` |
+| 팜뷰 (`src/farmview`) | S→FV | `GET /api/fv/snapshot`·`/events`·`/pc/{id}`·`/tts`, `POST /api/fv/command`·`/kina_adjust` | 인증 `X-FV-Token`. `pcs` 는 ★dict★(pc_id 키). `progress.{trade_kina,gakin_kina,odd_energy,awakening_ticket,subscribed,total_kina,kina_age_s}` · `kina_adjust` 는 `why.tid` 로 멱등(`dup`) · `today.{slots_done,slots_total,slots_left,daily_progress[].today}` · `global.totals.{total_kina,bugs,…}`. 문서 `../FV_API.md` |
 | 관제컴 도구 `../parsec_multi.py` | →S | `POST /parsec/map`(API 키) | 바꾸고 싶은 것은 `../CONTRACTS_대시보드.md` #2 |
 | 텔레그램 | S↔TG | 서버가 유일한 폴러(`_tg_poller`). 매크로는 `/telegram/send·photo` 로 중계 | ⛔·🚨 는 음소거를 뚫는다. 생략은 `ok:false` |
 

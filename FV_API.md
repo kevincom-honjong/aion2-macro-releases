@@ -76,6 +76,7 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
         "kina": 812340,
         "kina_rate": 145000,
         "total_kina": 130801794,
+        "kina_age_s": 5210,
         "uptime_hours": 3.4,
         "deaths_30m": 0,
         "abyss_kina": null,
@@ -410,6 +411,8 @@ while True:
 | `since` 형식 오류 | 400 | `{"error": "since 가 ISO8601 이 아닙니다 (예: 2026-09-08T05:00:00Z)", "code": 400}` |
 | 본문 없음/객체 아님 | 400 | `{"error": "JSON 본문이 필요합니다", "code": 400}` |
 | 스냅샷 조립 실패 | 500 | `{"error": "스냅샷 조립 실패: …", "code": 500}` |
+| `kina_adjust` 카드는 있는데 창고 기록이 없음 | 404 | `{"error": "카드 'PC-07' 의 창고 키나 기록(char_info)이 없습니다", "code": 404}` |
+| `kina_adjust` 본문 오류 | 400 | `{"error": "why.tid 가 필요합니다(거래 id — 같은 tid 는 두 번 빼지 않습니다)", "code": 400}` 등 |
 
 **`FV_TOKEN` 미설정(404) 과 토큰 오류(401) 를 갈라 보라** — 404 면 서버에 환경변수를 안 넣은 것이다.
 
@@ -532,6 +535,27 @@ asyncio.run(main())
 | 5 | `today.slots_done` · `global.totals.bugs` | 서버 값이 정본 — `slots_done` 은 `completed && today!==false`, `totals.bugs` 는 물리 PC 단위 합. 팜뷰의 자체 재계산(`slots_today`)은 같은 규칙이라 그대로 둔다 |
 
 이 문서는 `updater/FV_API.md` 가 정본이고 `farmview/docs/FV_API.md` 는 바이트 동일 사본이다 — `src/verify_all.py` 가 diff 로 지킨다.
+
+## 2026-09-13 추가 — «팔린 만큼 줄인다» (CONTRACTS_팜뷰, 주인님 지시)
+
+### `progress.kina_age_s` — 창고 키나를 잰 지 몇 초인가
+정수(초). `char_info.collected_at`(매크로 전체수집 시각) 기준. **모르면 `1000000000`(10^9)** — `null` 이 아니다.
+팜뷰는 이 값으로 «창고키나 N시간 전» 을 그리고, 낡은 계정을 파는 계정으로 안 고른다. `kina_adjust` 는 이 시각을 **안 바꾼다**.
+
+### `POST /api/fv/kina_adjust` — 매니아에서 팔린 만큼 창고 키나를 뺀다
+```json
+{"pc_id": "PC-04b", "delta_kina": -210000000,
+ "why": {"tid": "2026090603221474", "server": "챈가룽", "man": 21000, "won": 84000, "src": "itemmania"}}
+```
+응답
+```json
+{"ok": true, "pc_id": "PC-04b", "before": 500000000, "after": 290000000, "dup": false}
+```
+- `after = max(0, before + delta_kina)`. `char_info.total_kina` 를 그 값으로 쓴다. 다음 `/char_info` 수집이 오면 진짜 값이 덮는다(그게 «맞춰 나가기»).
+- **같은 `why.tid` 는 두 번 빼지 않는다** → `{"ok": true, "dup": true, "before": <지금>, "after": <지금>}`, 값 그대로. 재시도는 안전하다.
+- 기록 표 `kina_adjust(tid PK, pc_id, delta, before, after, why, at)`. Railway 재배포로 SQLite 가 비면 기록도 사라진다(팜뷰가 감수하기로 함).
+- 거부: `delta_kina` 정수 아님(bool 포함)·상한 ±1조 초과·`why.tid` 없음·`pc_id` 가 `all` → 400. 카드/창고 기록 없음 → 404. 토큰 → 401.
+- 차감 1건마다 그 PC 로그에 `[팜뷰] 창고 키나 -210,000,000 (챈가룽 21000만 → 84000원, tid …) 500,000,000 → 290,000,000` 한 줄이 남는다 — `/api/fv/events` 의 `log` 로도 보인다. 스냅샷 캐시(3초)는 즉시 비운다.
 
 ## 2026-09-09 추가 — 캐릭터 합 4종
 `progress.trade_kina`(거래키나) · `progress.gakin_kina`(각인키나) · `progress.odd_energy`(오드에너지, `"300(+1,195)/840"` → 300+1195 규칙) · `progress.awakening_ticket`(각성전 티켓) — 그 카드(pc_id) 캐릭터들의 **합**, 없으면 0. `global.totals` 에도 같은 이름으로 전체 합. `total_kina` 는 그대로(계정 창고값, 캐릭마다 중복이라 합치지 않는다). 서버 `main.py _fv_char_agg`.

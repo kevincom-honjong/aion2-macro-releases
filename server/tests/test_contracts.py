@@ -14,7 +14,7 @@ import json
 
 from _harness import main, db, ok, FakeWS, Req, run_all, finish, TG_SENT   # noqa: E402
 
-MIN_CHECKS = 26
+MIN_CHECKS = 45
 
 
 def _has(d, keys):
@@ -112,6 +112,67 @@ async def t_server_to_farmview():
     ok("S→FV events[] 항목에 at·type 이 있다", all(_has(x, ("at", "type")) for x in e["events"]))
 
 
+async def t_fv_kina_adjust():
+    """팜뷰 «팔린 만큼 줄인다»(CONTRACTS_팜뷰 2026-09-13): POST /api/fv/kina_adjust · progress.kina_age_s."""
+    main.FV_TOKEN = "fvsecret"
+    H = {"X-FV-Token": "fvsecret"}
+    fresh = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    await db.upsert_char_info("PC-C1", 500_000_000, [{"slot": 1, "name": "러닝"}], collected_at=fresh)
+    await db.upsert_updater_status("PC-C7", {"pc_id": "PC-C7", "macro_state": "running", "updater_version": "3.1.13"})
+    await main.receive_report("PC-C7", Req({"pc_id": "PC-C7", "status": "idle"}))   # char_info 가 ★없는★ 카드
+    # ① kina_age_s — 있으면 작은 정수, 없으면 10^9
+    main._fv_snap["body"] = None
+    r = await main.fv_snapshot(Req(api_key=None, headers=H))
+    body = json.loads(bytes(r.body))
+    age1 = body["pcs"]["PC-C1"]["progress"].get("kina_age_s")
+    age7 = body["pcs"]["PC-C7"]["progress"].get("kina_age_s")
+    ok("S→FV progress.kina_age_s 는 정수(수집 방금 → 60초 미만)", isinstance(age1, int) and not isinstance(age1, bool) and 0 <= age1 < 60, str(age1))
+    ok("S→FV char_info 없는 카드는 kina_age_s = 10^9(모름)", age7 == 10 ** 9, str(age7))
+    ok("S→FV _fv_age_int: 못 읽는 시각도 10^9", main._fv_age_int("garbage") == 10 ** 9 and main._fv_age_int(None) == 10 ** 9)
+    # ② 차감 — 명세 원문 그대로
+    why = {"tid": "2026090603221474", "server": "챈가룽", "man": 21000, "won": 84000, "src": "itemmania"}
+    r = await main.fv_kina_adjust(Req({"pc_id": "PC-C1", "delta_kina": -210_000_000, "why": why}, api_key=None, headers=H))
+    a = json.loads(bytes(r.body))
+    ok("FV→S kina_adjust 응답 {ok,pc_id,before,after,dup}", r.status_code == 200 and _has(a, ("ok", "pc_id", "before", "after", "dup")), str(a))
+    ok("FV→S after = before + delta (5억 - 2.1억 = 2.9억)", a.get("before") == 500_000_000 and a.get("after") == 290_000_000 and a.get("dup") is False, str(a))
+    ci = await db.get_char_info("PC-C1")
+    ok("FV→S char_info.total_kina 가 실제로 바뀌었다", ci and ci["total_kina"] == 290_000_000, str(ci and ci["total_kina"]))
+    ok("FV→S collected_at 은 안 건드린다(수집 시각은 매크로 것)", ci and ci["collected_at"] == fresh, str(ci and ci["collected_at"]))
+    main._fv_snap["ts"] = __import__("time").time()          # 캐시가 살아 있어도 …
+    r = await main.fv_snapshot(Req(api_key=None, headers=H))
+    ok("FV→S 차감 뒤 snapshot 캐시가 비워져 새 total_kina 가 바로 보인다",
+       json.loads(bytes(r.body))["pcs"]["PC-C1"]["progress"]["total_kina"] == 290_000_000)
+    logs = await db.get_logs("PC-C1", 5)
+    ok("FV→S 그 PC 로그줄에 [팜뷰] 차감이 남는다(A2 증거)", any("[팜뷰]" in str(l.get("message")) and "2026090603221474" in str(l.get("message")) for l in logs), str([l.get("message") for l in logs][:2]))
+    # ③ 같은 tid 두 번 → dup:true, 값 그대로
+    r = await main.fv_kina_adjust(Req({"pc_id": "PC-C1", "delta_kina": -210_000_000, "why": why}, api_key=None, headers=H))
+    d = json.loads(bytes(r.body))
+    ci2 = await db.get_char_info("PC-C1")
+    ok("FV→S 같은 why.tid 는 두 번 안 뺀다 → dup:true", r.status_code == 200 and d.get("dup") is True and d.get("ok") is True, str(d))
+    ok("FV→S dup 일 때 total_kina 그대로(2.9억)", ci2["total_kina"] == 290_000_000 and d.get("after") == 290_000_000, str(ci2["total_kina"]))
+    # ④ 바닥은 0
+    r = await main.fv_kina_adjust(Req({"pc_id": "PC-C1", "delta_kina": -999_999_999, "why": {"tid": "t-floor"}}, api_key=None, headers=H))
+    f = json.loads(bytes(r.body))
+    ok("FV→S after = max(0, before+delta) — 음수로 안 내려간다", f.get("after") == 0 and f.get("before") == 290_000_000, str(f))
+    # ⑤ 거부 모양 — 전부 {"error","code"}
+    cases = [
+        ("모르는 카드(char_info 없음) 404", {"pc_id": "PC-C7", "delta_kina": -1, "why": {"tid": "t1"}}, 404),
+        ("없는 카드 404", {"pc_id": "PC-99", "delta_kina": -1, "why": {"tid": "t2"}}, 404),
+        ("why.tid 없음 400", {"pc_id": "PC-C1", "delta_kina": -1, "why": {"server": "x"}}, 400),
+        ("delta_kina 문자열 400", {"pc_id": "PC-C1", "delta_kina": "-1", "why": {"tid": "t3"}}, 400),
+        ("delta_kina bool 400", {"pc_id": "PC-C1", "delta_kina": True, "why": {"tid": "t4"}}, 400),
+        ("pc_id 'all' 400(A7)", {"pc_id": "all", "delta_kina": -1, "why": {"tid": "t5"}}, 400),
+        ("상한 초과(±1조) 400", {"pc_id": "PC-C1", "delta_kina": -(10 ** 12 + 1), "why": {"tid": "t6"}}, 400),
+    ]
+    for label, b, code in cases:
+        r = await main.fv_kina_adjust(Req(b, api_key=None, headers=H))
+        e = json.loads(bytes(r.body))
+        ok("FV→S kina_adjust " + label, r.status_code == code and _has(e, ("error", "code")) and e["code"] == code, "%s %s" % (r.status_code, e))
+    r = await main.fv_kina_adjust(Req({"pc_id": "PC-C1", "delta_kina": -1, "why": {"tid": "t7"}}, api_key=None))
+    ok("FV→S kina_adjust 토큰 없으면 401", r.status_code == 401)
+    ok("FV→S 거부된 시도는 값을 안 바꾼다", (await db.get_char_info("PC-C1"))["total_kina"] == 0)
+
+
 async def t_ws_frames():
     """매크로 → 서버 WS 프레임 어휘: status / log / ack / pong 을 서버가 받는다."""
     import asyncio
@@ -151,7 +212,7 @@ async def t_ws_frames():
 
 
 def test_all():
-    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_ws_frames])
+    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_fv_kina_adjust, t_ws_frames])
     finish("test_contracts", MIN_CHECKS)
 
 
