@@ -10,6 +10,7 @@
 | `POST /api/fv/kina_adjust` — 매니아 거래 1건만큼 `char_info.total_kina` 차감, `why.tid` 로 멱등(`dup:true`), 바닥 0, 그 PC 로그줄 + 스냅샷 캐시 무효화. 대시보드 `char_info` 프레임은 ★안 쏜다★(캐릭 목록을 지우고 「정보수집 완료」 토스트가 뜬다) | `fv_kina_adjust`·`_fv_kina_body`·`database.adjust_char_kina`·표 `kina_adjust` |
 | `progress.kina_age_s`(정수, 모름 10^9) | `_fv_age_int`·`_fv_pc_view` |
 | 계약 시험 19건 + 되돌리기 증명 3건 | `tests/test_contracts.py t_fv_kina_adjust`·`prove_guards.py` |
+| ★실물 검증★ 2026-09-13 PC-07: -1000만(tid TEST-0913) → dup → +1000만(restore) 원상, `/status` `_total_kina`·PC-07 로그 두 줄·`collected_at` 불변을 서버 원본으로 확인. 표 `kina_adjust` 에 시험 2행이 남아 있다(값은 원상). `won` 없으면 로그가 «?원»(의도) | — |
 
 ### 09-12 (이번 커밋) — 1단계 20건 + 2단계 정리
 | 등급 | 무엇 | 자리 |
