@@ -1362,6 +1362,18 @@ async def _get_parsec_map(tenant: str) -> dict:
         return {}
 
 
+PARSEC_MAP_TOKEN = (os.getenv("PARSEC_MAP_TOKEN", "") or "").strip()   # 통합 2026-09-12 (CONTRACTS_대시보드 #2)
+
+
+def _parsec_map_token_tenant(request: Request):
+    """`X-Parsec-Token` 이 env PARSEC_MAP_TOKEN 과 같으면 main 테넌트로 쓴다. env 가 비면 None(길 닫힘)."""
+    if not PARSEC_MAP_TOKEN:
+        return None
+    if request.headers.get("X-Parsec-Token", "") == PARSEC_MAP_TOKEN:
+        return "main"
+    return None
+
+
 @app.post("/parsec/map")
 async def set_parsec_map(request: Request):
     """관제컴의 updater/parsec_multi.py 가 밀어넣는 {"번호": "peer_id"} 주소록.
@@ -1369,7 +1381,10 @@ async def set_parsec_map(request: Request):
     파섹 세션 토큰은 관제컴 밖으로 나오지 않는다 — 여기 올라오는 건 peer_id 뿐이고,
     peer_id 만으로는 접속이 안 된다(호스트가 내 파섹 계정으로 로그인돼 있어야 한다).
     """
-    tenant = check_api_key(request) or check_session(request)
+    # ★통합 2026-09-12 (CONTRACTS_대시보드 #2)★ 쓰기 전용 토큰 길을 먼저 본다. env 가 비어 있으면 그 길은 닫혀 있고
+    #   API 키 길이 그대로 열려 있다 — 관제컴 parsec_multi.py 가 토큰을 쓰기 시작하고 Railway env 에
+    #   PARSEC_MAP_TOKEN 을 넣은 뒤에야 API 키 길을 닫는다(순서를 바꾸면 도구가 깨진다).
+    tenant = _parsec_map_token_tenant(request) or check_session(request) or check_api_key(request)
     if not tenant:
         raise HTTPException(status_code=401)
     try:
@@ -9614,15 +9629,40 @@ async def _updater_cmd_belongs_to(cmd_id: int, tenant: str) -> bool:
     return pc is not None and ns_of(pc) == tenant
 
 
+ACK_DROP_STATUSES = ("cancelled", "rejected")   # 통합 2026-09-12 — CONTRACTS_대시보드 #1
+
+
 @app.post("/command/{pc_id}/ack/{cmd_id}")
 async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
+    """매크로의 ack. ★통합 2026-09-12 (CONTRACTS_대시보드 #1)★ 본문은 선택 —
+    {"status":"acked"|"cancelled"|"rejected", "why":"..."}. 없으면 예전처럼 acked.
+    cancelled/rejected 는 pending 일 때만 상태를 바꾼다(cancel_command 와 같은 규칙, §A12) —
+    매크로가 오버라이드로 큐를 버리거나 「이전 명령 처리 중」으로 거부한 것이 이력에 ⛔ 로 보인다.
+    예전엔 매크로가 실행 전에 ack 하고 그 뒤 버려도 서버는 acked 뿐이라 ★유실이 안 보였다★."""
     tenant = _require_api_key(request)
     if not await _cmd_belongs_to(cmd_id, tenant):
         raise HTTPException(status_code=404)
-    ok = await ack_command(cmd_id)
+    status, why = "acked", ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            status = str(body.get("status") or "acked").strip().lower()
+            why = str(body.get("why") or "")[:200]
+    except Exception:
+        pass
+    if status in ACK_DROP_STATUSES:
+        ok = await cancel_command(cmd_id)
+        try:
+            await insert_log(ns(tenant, clean_pc_id(pc_id)), "warning",
+                             f"[명령] 매크로가 #{cmd_id} 를 {status} 로 돌려보냈다 — {why or '사유 없음'}")
+        except Exception as e:
+            print(f"[ack] 취소 기록 실패(무시): {e}")
+    else:
+        status = "acked"
+        ok = await ack_command(cmd_id)
     # 내역 브로드캐스트
     await _push_cmd_history(tenant)
-    return JSONResponse({"ok": ok})
+    return JSONResponse({"ok": ok, "status": status if ok else None})
 
 
 @app.delete("/commands/{cmd_id}")
@@ -10972,8 +11012,9 @@ ROT_KEY          = "acct_rotate"      # DB 설정 키(순환 상태 + 부팅 지
 ROT_ALLOW_KEY    = "rot_allow"        # ★카나리아 게이트★ 허용 PC 목록(쉼표). 비면 아무도 무장 못 함
 ROT_TICK         = 30.0               # 엔진 주기(초)
 ROT_COLLECT_MAX  = 420.0              # 정보수집 대기 ★하한★ (실제 상한은 _rot_collect_max)
-ROT_COLLECT_PER_CHAR = 150.0          # 캐릭 1명당 여유(초) — 실측 98초/캐릭 + 50% 여유
-ROT_COLLECT_HARD_MAX = 1800.0         # 캐릭이 아무리 많아도 30분
+ROT_COLLECT_PER_CHAR = 250.0          # 캐릭 1명당 여유(초) — ★통합 2026-09-12★ PC-07 실측: 6캐릭 28.5분(=285초/캐릭,
+                                      #   어비스 시간 판독 포함). 150 이면 22분에 ★멀쩡한 수집을 죽였다★(SHARED_ISSUES_아이온2 #1, 장부 #756)
+ROT_COLLECT_HARD_MAX = 2400.0         # 캐릭이 아무리 많아도 40분 (통합 2026-09-12: 30분은 6캐릭 실측 28.5분에 붙어 있었다)
 ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작) 대기 상한
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -12812,6 +12853,7 @@ from database import get_commands_since as _fv_cmds_since
 
 FV_TOKEN    = (os.getenv("FV_TOKEN", "") or "").strip()
 FV_TENANT   = (os.getenv("FV_TENANT", "main") or "main").strip()
+FV_FLEET_N  = 8     # 통합 2026-09-12 (CONTRACTS_대시보드 #3) — 이 대수 이상은 confirm_fleet:true 없이 안 보낸다(A7)
 FV_SNAP_TTL = 3.0                      # 스냅샷 서버 캐시(초) — 주인님 지시
 FV_ALERT_KEEP = 200                    # global.alerts 링버퍼 길이
 
@@ -12982,6 +13024,37 @@ async def _fv_char_agg(tenant: str) -> dict:
     return out
 
 
+FV_UNKNOWN_S = 10 ** 9   # 통합 2026-09-12 (CONTRACTS_팜뷰) — silent_s·updater.age_s 는 ★항상 정수★, 모르면 큰 수.
+#   예전엔 silent_s=-1 / age_s=None 이 나갔다. 팜뷰 fvdash.group() 은 silent_s 가 ★가장 작은★ 카드를
+#   대표로 고르므로 -1(모름)이 대표가 됐다. 「모름」은 「아주 오래 조용함」으로 보내야 맞다.
+
+
+def _fv_int(v) -> int:
+    try:
+        n = int(v)
+    except Exception:
+        return FV_UNKNOWN_S
+    return n if n >= 0 else FV_UNKNOWN_S
+
+
+def _fv_maybe_raw(request: Request, body):
+    """통합 2026-09-12 (CONTRACTS_대시보드 #4) — `raw`(카드 59필드·PII·응답의 절반)는 ?raw=1 일 때만.
+    캐시된 본문을 고치지 않고 새 dict 를 만든다."""
+    try:
+        if request.query_params.get("raw") == "1":
+            return body
+    except Exception:
+        return body
+    if isinstance(body, dict):
+        pcs = body.get("pcs")
+        if isinstance(pcs, dict):
+            return {**body, "pcs": {k: ({kk: vv for kk, vv in v.items() if kk != "raw"} if isinstance(v, dict) else v)
+                                    for k, v in pcs.items()}}
+        if "raw" in body:
+            return {k: v for k, v in body.items() if k != "raw"}
+    return body
+
+
 def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     """_build_full_state 한 줄 → FarmView 가 쓰기 좋은 모양.
     ★raw 에 원본을 통째로 실어 둔다★ — 화면에 뜨는데 여기 안 담긴 필드가 있어도
@@ -12997,7 +13070,7 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
         "online":      st != "offline",
         "status":      st,
         "last_report": row.get("_updated_at"),
-        "silent_s":    row.get("_macro_silent_s"),
+        "silent_s":    _fv_int(row.get("_macro_silent_s")),   # 항상 정수(통합 2026-09-12)
         "ws_live":     row.get("_ws_live"),
         "macro_version": row.get("macro_version"),
         "doing": {
@@ -13055,7 +13128,7 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
         "updater": {
             "state":     row.get("_updater_state"),
             "version":   row.get("_updater_version"),
-            "age_s":     row.get("_updater_age_s"),
+            "age_s":     _fv_int(row.get("_updater_age_s")),   # 항상 정수(통합 2026-09-12)
             "view_url":  row.get("_view_url"),
         },
         "links": {"lan_url": row.get("lan_url"), "view_url": row.get("_view_url")},
@@ -13181,7 +13254,7 @@ async def fv_snapshot(request: Request):
         body = _fv_snap["body"]
         body = {**body, "cached": True,
                 "cache_age_s": round(now - _fv_snap["ts"], 2)}
-        return _fv_json(request, body)
+        return _fv_json(request, _fv_maybe_raw(request, body))
     try:
         body = await _fv_build_snapshot()
     except Exception as e:
@@ -13314,7 +13387,7 @@ async def fv_pc_detail(pc_id: str, request: Request, logs: int = 300):
         out["corridor"] = CORRIDOR_PROG.get(nspc)
     except Exception:
         out["corridor"] = None
-    return _fv_json(request, out)
+    return _fv_json(request, _fv_maybe_raw(request, out))
 
 
 @app.get("/api/fv/command")
@@ -13358,8 +13431,12 @@ async def fv_command_send(request: Request):
     target = body.get("pc")
     rows = await _build_full_state(FV_TENANT)
     known_pcs = [str(r.get("pc_id")) for r in rows if r.get("pc_id")]
+    confirm_fleet = body.get("confirm_fleet") is True
     if isinstance(target, str) and target.strip().lower() == "all":
-        # ★브로드캐스트 키를 쓰지 않는다★ — 실제 목록으로 펼쳐 한 대씩(A7 가드 유지)
+        # ★통합 2026-09-12 (CONTRACTS_대시보드 #3)★ 맨몸 "all" 은 거부 — 부르는 쪽이 목록을 펼쳐 보내고
+        #   confirm_fleet:true 를 같이 싣는다. A7(함대 전체 명령은 사람 몫)의 판정을 서버 한 곳에 둔다.
+        if not confirm_fleet:
+            return _fv_err(400, "pc:'all' 은 받지 않습니다 — PC 목록을 펼쳐 보내고 confirm_fleet:true 를 붙이십시오 (A7)")
         targets = list(known_pcs)
     elif isinstance(target, str):
         targets = [clean_pc_id(target)]
@@ -13369,6 +13446,8 @@ async def fv_command_send(request: Request):
         return _fv_err(400, "pc 는 문자열·배열·'all' 중 하나여야 합니다")
     if not targets:
         return _fv_err(400, "대상 PC 가 없습니다")
+    if len(targets) >= FV_FLEET_N and not confirm_fleet:
+        return _fv_err(400, f"{len(targets)}대는 함대 규모입니다 — confirm_fleet:true 없이는 보내지 않습니다 (A7)")
 
     results = []
     for pid in targets:

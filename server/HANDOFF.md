@@ -59,5 +59,5 @@
 - **다른 손이 `main.py` 를 고치면 static/ 미러가 낡는다** — `verify.py` 4단계가 잡는다. `--sync-static` 으로 다시 뽑는다.
 
 ## 다른 영역에 넘긴 것 (요약 — 원문은 `../SHARED_ISSUES_대시보드.md` · `../CONTRACTS_대시보드.md`)
-- **SHARED_ISSUES 7건**: 매크로가 실행 전 ack(유실 안 보임) · `telegram_send` 가 `ok:false` 를 안 봄 · HTTP 로그 폴백 51줄부터 유실 · `web/server/main.py` 미러 낡음 · `parsec_multi.py` 가 API 키로 주소록 씀 · 업데이터 명령 만료 없음 · exe 안 비밀 11개.
+- **SHARED_ISSUES 7건**: 매크로가 실행 전 ack(유실 안 보임) · `telegram_send` 가 `ok:false` 를 안 봄 · HTTP 로그 폴백 51줄부터 유실 · `updater/server/main.py` 미러 낡음 · `parsec_multi.py` 가 API 키로 주소록 씀 · 업데이터 명령 만료 없음 · exe 안 비밀 11개.
 - **CONTRACTS 5건**: ack 에 status/why 싣기 · 파섹 주소록 쓰기 인증 분리 · FV `pc:"all"` 서버 거부 · FV `raw` 제거 · FV 값 뜻 정정(`slots_done`·`totals.bugs`·events 잘림 — 이번에 서버가 고침, 팜뷰가 알아야 함).

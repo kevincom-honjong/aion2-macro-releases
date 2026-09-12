@@ -86,6 +86,44 @@ err = logging.error
 # ==================================================
 pc_id: str = "PC-?"
 macro_proc: subprocess.Popen | None = None
+
+# ★통합 2026-09-12 (SHARED_ISSUES_대시보드 #6)★ 최근 실행한 명령 id — 같은 id 는 두 번 실행하지 않는다.
+#   ack POST 가 실패하면(서버 굳음·재배포 창) 10초마다 같은 update 가 다시 와서 stop→start 를 반복했다.
+#   매크로 큐엔 15분 만료·id dedup 이 있는데 업데이터엔 둘 다 없었다. 서버 쪽 만료는 주인님 결정 대기.
+_done_cmd_ids: list = []
+DONE_CMD_IDS_MAX = 50
+
+
+def _remember_cmd_id(cmd_id) -> None:
+    if cmd_id is None:
+        return
+    _done_cmd_ids.append(cmd_id)
+    del _done_cmd_ids[:-DONE_CMD_IDS_MAX]
+
+
+def _ack_updater_cmd(session, cmd_id) -> bool:
+    """ack 한 번. 실패는 ★로그에 남긴다★(예전엔 except: pass — 재실행 폭주의 원인이 안 보였다)."""
+    try:
+        session.post(f"{CONTROL_SERVER}/updater/command/{pc_id}/ack/{cmd_id}",
+                     timeout=(TIMEOUT_CONNECT, 5))
+        return True
+    except Exception as _e:
+        err(f"[폴링] 명령 #{cmd_id} ack 실패 — 다음 폴링에 같은 명령이 또 올 수 있다(중복은 걸러진다): {_e}")
+        return False
+
+
+def _handle_polled(session, data: dict) -> None:
+    """폴링으로 받은 명령 한 건 — 중복이면 ack 만, 아니면 ack + 기억 + 실행(스레드).
+    (_poll_thread 가 게이트 56 함수 길이 40줄을 넘어 여기로 뺐다, 통합 2026-09-12)"""
+    cmd_id = data.get("id")
+    if cmd_id is not None and cmd_id in _done_cmd_ids:
+        # ★통합 2026-09-12★ 이미 실행한 id — ack 만 다시 보내고 실행은 안 한다(SHARED_ISSUES_대시보드 #6)
+        _ack_updater_cmd(session, cmd_id)
+        log(f"[명령] 중복 #{cmd_id} 무시 ({data.get('command')})")
+    else:
+        _ack_updater_cmd(session, cmd_id)
+        _remember_cmd_id(cmd_id)
+        threading.Thread(target=handle_command, args=(data,), daemon=True).start()
 macro_state: str = "stopped"   # stopped / running / updating / crashed
 _state_lock = threading.Lock()
 
@@ -1342,15 +1380,7 @@ def _poll_thread():
                 _consecutive_errors = 0
                 data = r.json()
                 if data.get("command"):
-                    cmd_id = data.get("id")
-                    try:
-                        _session.post(
-                            f"{CONTROL_SERVER}/updater/command/{pc_id}/ack/{cmd_id}",
-                            timeout=(TIMEOUT_CONNECT, 5),
-                        )
-                    except Exception:
-                        pass
-                    threading.Thread(target=handle_command, args=(data,), daemon=True).start()
+                    _handle_polled(_session, data)
             else:
                 _consecutive_errors += 1
         except Exception as e:
