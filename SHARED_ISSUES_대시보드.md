@@ -34,7 +34,7 @@
 - 제안: 미러를 버리거나(정본 하나면 충분하다), web 쪽 도구가 필요할 때 `updater/server/main.py` 를 직접 읽게 한다.
 
 ## 5. 관제컴 `parsec_multi.py` 가 API 키로 주소록을 덮어쓴다
-> **부분: 2026-09-12 서버에 `X-Parsec-Token`(env `PARSEC_MAP_TOKEN`) 길을 열었다(시험 I5). env→도구→API 키 길 닫기 순서는 주인님. INTEGRATION_LOG D5**
+> **처리 완료: 2026-09-13 주인님 「더 쉽고 확실한 방법」 → 세션 로그인만. 도구는 seed_secret.txt 비번으로 /auth/login, 서버 POST 는 check_session 만(API 키 401). INTEGRATION_LOG D5**
 - 파일: `src/updater/parsec_multi.py` (382행 근처, `X-Api-Key` 로 `POST /parsec/map`)
 - 문제: 매크로 API 키는 공개 exe 에 각인돼 유출 전제다. 그 키로 파섹 주소록(peer_id)을 덮을 수 있으면 다음 계정전환이 ★공격자 호스트로 접속★ 한다. 서버 쪽에서 세션 전용으로 바꾸면 이 도구가 깨진다.
 - 재현 조건: 유출 키로 `POST /parsec/map {"map":{"8":"<남의 peer_id>"}}`.
@@ -48,7 +48,7 @@
 - 제안: 서버가 만료(15분)와 `delivered_at` 표시를 넣을 수 있지만 「꺼진 PC 가 켜지면 밀린 업데이트를 받는다」가 의도된 동작일 수 있어 주인님 결정이 필요하다. 클라이언트는 최소한 같은 id 를 두 번 실행하지 않게.
 
 ## 7. 공용 exe 안의 비밀 11개 (게이트 `secret_audit` 빨간불)
-> **미해결: 2026-09-12 주인님 결정. INTEGRATION_LOG D3**
+> **처리 완료: 2026-09-13 주인님 「키는 프로그램에 박는다」 — 게이트 20 면제 표식. INTEGRATION_LOG D3**
 - 파일: `src/updater/exe/혼종_통합_자동.exe` · `src/lc/config.py` (secrets_default)
 - 문제: 공개 저장소에 올라가는 exe 에서 API 키·텔레그램·OCR 키가 추출된다. 서버는 그래서 API 키를 「유출 전제」로 다룬다. 대시보드 쪽에서 막을 수 없다.
 - 재현 조건: `python -X utf8 secret_audit.py --gate` (web/.claude/ops).

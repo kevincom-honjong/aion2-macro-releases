@@ -336,6 +336,40 @@ def cmd_grid(names):
     print("\n각 창이 로그인 화면이면 그 슬롯은 아직 로그인 전입니다(슬롯마다 1회 필요).")
 
 
+def _password() -> str:
+    """대시보드 비밀번호 — ★소스에 안 박는다★. 찾는 순서: --pw 인자 → env AION2_PW → 이 파일 옆/updater 루트의
+    seed_secret.txt(내부망 시드가 이미 쓰는 그 파일). ★주인님 결정 2026-09-13★ 주소록 쓰기는 세션 로그인으로만."""
+    for i, a in enumerate(sys.argv):
+        if a == "--pw" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1].strip()
+    if os.environ.get("AION2_PW"):
+        return os.environ["AION2_PW"].strip()
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "seed_secret.txt"), os.path.join(here, "..", "seed_secret.txt")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except Exception:
+            pass
+    return ""
+
+
+def _session_opener(server: str):
+    """비번으로 /auth/login → 세션 쿠키를 문 opener. 비번이 없으면 None."""
+    import http.cookiejar
+    pw = _password()
+    if not pw:
+        return None
+    cj = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    op.open(urllib.request.Request(server + "/auth/login",
+                                   data=json.dumps({"password": pw}).encode("utf-8"),
+                                   headers={"Content-Type": "application/json"}), timeout=20).read()
+    return op
+
+
 def _api_key() -> str:
     """대시보드 서버 API 키. ★소스에 절대 박지 않는다★ — 이 파일은 공개 레포에 들어갈 수 있다.
 
@@ -379,11 +413,16 @@ def cmd_push():
                  f"  현재 이름: {', '.join(h['name'] for h in rows)}")
 
     body = json.dumps({"map": m}, ensure_ascii=False).encode("utf-8")
+    # ★주인님 결정 2026-09-13★ 주소록 쓰기는 ★세션 로그인★ 으로만 — 공용 API 키(공개 exe 에 각인, 유출 전제)로
+    #   주소록을 덮으면 다음 계정전환이 남의 호스트로 접속한다. 비번은 seed_secret.txt(시드가 쓰는 그 파일)에 있다.
+    op = _session_opener(SERVER)
+    if op is None:
+        sys.exit("대시보드 비밀번호를 못 찾았습니다 — --pw <비번> 또는 env AION2_PW 또는 seed_secret.txt(updater 루트). "
+                 "주소록 쓰기는 세션 로그인으로만 됩니다(2026-09-13).")
     req = urllib.request.Request(f"{SERVER}/parsec/map", data=body, method="POST",
-                                 headers={"Content-Type": "application/json",
-                                          "X-Api-Key": _api_key()})
+                                 headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with op.open(req, timeout=20) as r:
             res = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         sys.exit(f"서버 거부 (HTTP {e.code}): {e.read().decode('utf-8', 'replace')[:200]}")

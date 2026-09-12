@@ -1362,18 +1362,6 @@ async def _get_parsec_map(tenant: str) -> dict:
         return {}
 
 
-PARSEC_MAP_TOKEN = (os.getenv("PARSEC_MAP_TOKEN", "") or "").strip()   # 통합 2026-09-12 (CONTRACTS_대시보드 #2)
-
-
-def _parsec_map_token_tenant(request: Request):
-    """`X-Parsec-Token` 이 env PARSEC_MAP_TOKEN 과 같으면 main 테넌트로 쓴다. env 가 비면 None(길 닫힘)."""
-    if not PARSEC_MAP_TOKEN:
-        return None
-    if request.headers.get("X-Parsec-Token", "") == PARSEC_MAP_TOKEN:
-        return "main"
-    return None
-
-
 @app.post("/parsec/map")
 async def set_parsec_map(request: Request):
     """관제컴의 updater/parsec_multi.py 가 밀어넣는 {"번호": "peer_id"} 주소록.
@@ -1381,12 +1369,13 @@ async def set_parsec_map(request: Request):
     파섹 세션 토큰은 관제컴 밖으로 나오지 않는다 — 여기 올라오는 건 peer_id 뿐이고,
     peer_id 만으로는 접속이 안 된다(호스트가 내 파섹 계정으로 로그인돼 있어야 한다).
     """
-    # ★통합 2026-09-12 (CONTRACTS_대시보드 #2)★ 쓰기 전용 토큰 길을 먼저 본다. env 가 비어 있으면 그 길은 닫혀 있고
-    #   API 키 길이 그대로 열려 있다 — 관제컴 parsec_multi.py 가 토큰을 쓰기 시작하고 Railway env 에
-    #   PARSEC_MAP_TOKEN 을 넣은 뒤에야 API 키 길을 닫는다(순서를 바꾸면 도구가 깨진다).
-    tenant = _parsec_map_token_tenant(request) or check_session(request) or check_api_key(request)
+    # ★주인님 결정 2026-09-13 (CONTRACTS_대시보드 #2, 「더 쉽고 확실한 방법으로」)★ 쓰기는 ★세션 로그인★ 으로만.
+    #   공용 API 키는 공개 exe 에 각인돼 유출 전제다 — 그 키로 주소록을 덮으면 다음 계정전환이 남의 호스트로 간다.
+    #   관제컴 parsec_multi.py 는 seed_secret.txt(시드가 쓰는 비번)로 /auth/login 해서 쿠키로 보낸다. GET 은 그대로.
+    tenant = check_session(request)
     if not tenant:
-        raise HTTPException(status_code=401)
+        raise HTTPException(status_code=401, detail="파섹 주소록 쓰기는 대시보드 세션 로그인으로만 받습니다 — "
+                                                    "parsec_multi.py 를 최신으로(비번은 seed_secret.txt / --pw / AION2_PW)")
     try:
         body = await request.json()
     except Exception:

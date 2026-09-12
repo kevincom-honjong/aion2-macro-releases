@@ -6,7 +6,7 @@
   I2 FV silent_s · updater.age_s 는 항상 정수, 모름 = 10**9      (CONTRACTS_팜뷰 · 팜뷰 fvdash.group 대표 카드)
   I3 FV raw 는 ?raw=1 일 때만                                       (CONTRACTS_대시보드 #4 · 팜뷰는 raw 를 버린다)
   I4 FV pc:"all" 은 400 · 8대 이상은 confirm_fleet 필요             (CONTRACTS_대시보드 #3 · 팜뷰 fvdash.send_cmd)
-  I5 /parsec/map 쓰기 토큰 길은 env 가 있을 때만 열린다             (CONTRACTS_대시보드 #2)
+  I5 /parsec/map 쓰기는 세션 로그인으로만(API 키·토큰 401)          (CONTRACTS_대시보드 #2 · 주인님 결정 2026-09-13)
   I6 순환 정보수집 상한이 6캐릭 28.5분(PC-07 실측)을 넘긴다          (SHARED_ISSUES_아이온2 #1)
 """
 import os
@@ -73,13 +73,22 @@ async def t_fv_all():
     ok("I4 1대는 confirm_fleet 없이도 400 이 아니다(모르는 PC 면 그 사유로 답한다)", "confirm_fleet" not in b3, b3[:120])
 
 
-def t_parsec_token():
-    main.PARSEC_MAP_TOKEN = ""
-    ok("I5 env 가 비면 토큰 길은 닫혀 있다", main._parsec_map_token_tenant(Req(api_key=None, headers={"X-Parsec-Token": "x"})) is None)
-    main.PARSEC_MAP_TOKEN = "tok"
-    ok("I5 토큰이 맞으면 main", main._parsec_map_token_tenant(Req(api_key=None, headers={"X-Parsec-Token": "tok"})) == "main")
-    ok("I5 토큰이 틀리면 None", main._parsec_map_token_tenant(Req(api_key=None, headers={"X-Parsec-Token": "no"})) is None)
-    main.PARSEC_MAP_TOKEN = ""
+async def t_parsec_token():
+    """주인님 결정 2026-09-13 — 파섹 주소록 ★쓰기★ 는 세션 로그인으로만. API 키·토큰 헤더로는 401."""
+    from fastapi import HTTPException
+    try:
+        await main.set_parsec_map(Req({"map": {"8": "peer8"}}, api_key="testkey"))
+        ok("I5 API 키로는 주소록을 못 덮는다(401)", False, "예외 없이 통과했다")
+    except HTTPException as e:
+        ok("I5 API 키로는 주소록을 못 덮는다(401)", e.status_code == 401, str(e.status_code))
+    try:
+        await main.set_parsec_map(Req({"map": {"8": "peer8"}}, api_key=None, headers={"X-Parsec-Token": "x"}))
+        ok("I5 토큰 헤더 길은 없다(401)", False, "예외 없이 통과했다")
+    except HTTPException as e:
+        ok("I5 토큰 헤더 길은 없다(401)", e.status_code == 401, str(e.status_code))
+    r = await main.set_parsec_map(Req({"map": {"8": "peer8"}}, api_key=None, session=main.new_session("main")))
+    ok("I5 세션 로그인은 통과", getattr(r, "status_code", 200) == 200, str(getattr(r, "status_code", None)))
+    ok("I5 서버에 PARSEC_MAP_TOKEN 길이 남아 있지 않다", not hasattr(main, "_parsec_map_token_tenant"))
 
 
 def t_collect_cap():
