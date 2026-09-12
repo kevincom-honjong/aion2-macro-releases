@@ -498,6 +498,7 @@ async def get_updater_command_pc(cmd_id: int) -> "str | None":
 # ★로그 정리 빈도 (2026-09-11)★ — 키(pc_id)마다 이만큼 쌓일 때마다 한 번 훑는다.
 #   초판은 ★매 삽입마다★ 훑어서 지울 게 없어도 쓰기 트랜잭션+fsync 를 냈다.
 LOG_PRUNE_EVERY = 200
+LOG_KEEP_PER_PC = 3000       # 키(pc_id)당 보관 줄수 — 스팸은 클라에서 걸러 중요 이벤트만 오므로 며칠치
 _LOG_SINCE_PRUNE: dict = {}
 
 
@@ -535,10 +536,10 @@ async def insert_log(pc_id: str, level: str, message: str,
             await db.execute(
                 """
                 DELETE FROM logs WHERE pc_id=? AND id NOT IN (
-                    SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT 3000
+                    SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT ?
                 )
                 """,
-                (pc_id, pc_id),
+                (pc_id, pc_id, LOG_KEEP_PER_PC),
             )
         await db.commit()
 

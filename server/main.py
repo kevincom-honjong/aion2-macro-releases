@@ -401,6 +401,22 @@ def valid_session(token: Optional[str]) -> Optional[str]:
     return tenant if tenant in TENANTS else None
 
 
+def _require_session(request: Request) -> str:
+    """세션 필수 — 없으면 401. (2026-09-12 정리: 똑같은 3줄이 30곳에 있었다)"""
+    tenant = check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    return tenant
+
+
+def _require_api_key(request: Request) -> str:
+    """매크로 API 키 필수 — 없으면 403. (2026-09-12 정리: 똑같은 3줄이 16곳에 있었다)"""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    return tenant
+
+
 def check_session(request: Request) -> Optional[str]:
     """유효 세션이면 테넌트명 반환(truthy), 아니면 None — 기존 `if not check_session(...)` 호환.
     기간제 만료 테넌트는 기존 세션도 즉시 무효(2026-07-26)."""
@@ -514,6 +530,8 @@ manager = ConnectionManager()
 
 # 매크로 WebSocket 연결 관리
 macro_ws_connections: dict[str, WebSocket] = {}   # pc_id → WebSocket
+WS_RECONNECT_DRAIN = 8       # 재접속 때 밀린 명령을 한 묶음으로 보내는 상한 — 매크로 HTTP drain(report_module) 과 같은 수
+LOG_BATCH_MAX = 50           # POST /log 한 배치에 저장하는 상한 — 넘치면 count/dropped 로 정직하게 답한다
 
 # ★★★'살아있다는 증거' 는 상태보고 하나가 아니다 (2026-08-21 실사고)★★★
 #   주인님: "사냥 잘하는데 왜 대시보드에는 오프라인 떠잇는경우는 뭐야?"
@@ -542,6 +560,39 @@ def mark_seen(nspc: str) -> None:
 
 
 _lan_cache_last: dict[str, str] = {}   # nspc → 마지막으로 받은 내부망 주소
+LAN_CACHE_KEY = "lan_cache_last"
+_lan_cache_dirty = [False]
+
+
+async def _lan_cache_restore() -> None:
+    """★재배포 뒤 복원 (2026-09-12 전수조사 B6)★ — CORRIDOR_PROG·_ROT 는 영속인데 이것만
+    메모리였다. 매크로가 죽은 PC 는 채워줄 주체가 없어 「내부망 주소 없음」이 돌아왔다
+    (2026-08-21 주인님 지적의 재발 경로). 토큰은 재기동 때 바뀌므로 다음 push 가 덮는다."""
+    try:
+        raw = await get_setting(LAN_CACHE_KEY)
+        if raw:
+            d = json.loads(raw)
+            if isinstance(d, dict):
+                _lan_cache_last.update({str(k): str(v) for k, v in d.items() if v})
+                print(f"[lan] 내부망 주소 캐시 복원: {len(_lan_cache_last)}건")
+    except Exception as e:
+        print(f"[lan] 캐시 복원 실패(무시): {e}")
+
+
+async def _lan_cache_saver() -> None:
+    """바뀐 게 있을 때만 60초마다 저장. 저장 실패는 다음 바퀴에 다시."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            return
+        if not _lan_cache_dirty[0]:
+            continue
+        try:
+            await set_setting(LAN_CACHE_KEY, json.dumps(_lan_cache_last, ensure_ascii=False)[:200000])
+            _lan_cache_dirty[0] = False
+        except Exception as e:
+            print(f"[lan] 캐시 저장 실패(다음 바퀴에 다시): {e}")
 
 
 def seen_fresh(nspc: str, secs: int) -> bool:
@@ -811,6 +862,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[KILL] rental_kill 로드 실패(무시): {e}")
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
+    await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     # ★계정 자동순환 엔진 (2026-08-20)★ — 무장된 PC 가 하나도 없으면 아무 일도 안 한다.
     rot_task = asyncio.create_task(_rot_engine())
@@ -818,10 +870,11 @@ async def lifespan(app: FastAPI):
     eff_task = asyncio.create_task(_eff_watch())
     # ★루프 굳음 감시 (2026-09-10 주인님 지시)★ - 재기만 한다, 아무것도 안 고친다.
     wd_task = asyncio.create_task(_loop_watchdog())
+    lan_task = asyncio.create_task(_lan_cache_saver())
     try:
         yield
     finally:
-        for _t in (tg_task, rot_task, eff_task, wd_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task):
             if _t:
                 _t.cancel()
                 try:
@@ -911,9 +964,42 @@ BUG_COUNT_TTL = 30.0
 _BUG_COUNT_CACHE: dict[str, tuple] = {}      # tenant -> (잰 시각, {pc_id: 개수})
 
 
+_BUG_LIST_CACHE: dict[str, tuple] = {}       # tenant -> (잰 시각, [(fname, size), ...] 최신순)
+
+
 def _bug_cache_bust(tenant: str) -> None:
-    """버그스샷을 올리거나 지운 직후에 부른다 - 다음 조회가 다시 센다."""
+    """버그스샷을 올리거나 지운 직후에 부른다 - 다음 조회가 다시 센다.
+    (2026-09-12) 개수 캐시와 ★목록 캐시★ 를 같이 버린다 — 둘이 따로 놀면 배지와 목록이 어긋난다."""
     _BUG_COUNT_CACHE.pop(tenant, None)
+    _BUG_LIST_CACHE.pop(tenant, None)
+
+
+def _bug_scan(tenant: str) -> list:
+    """폴더를 ★한 번★ 훑어 (fname, size) 를 최신순으로. TTL 안이면 캐시.
+    ★2026-09-12★ 예전 _list_bug_files 는 listdir 뒤 파일마다 getsize 를 따로 불렀다
+    (481장 = 481 syscall ≈ 20ms, 그것도 ★동기★ 로 루프 위에서). scandir 의 DirEntry.stat
+    은 같은 정보를 한 번에 준다. 무효화는 _bug_cache_bust 한 곳."""
+    hit = _BUG_LIST_CACHE.get(tenant)
+    if hit and (time.monotonic() - hit[0]) < BUG_COUNT_TTL:
+        return hit[1]
+    bdir = tenant_bugs_dir(tenant)
+    rows: list = []
+    if os.path.isdir(bdir):
+        try:
+            with os.scandir(bdir) as it:
+                for e in it:
+                    if not e.name.endswith(".png") or not e.is_file():
+                        continue
+                    try:
+                        sz = e.stat().st_size
+                    except Exception:
+                        sz = 0
+                    rows.append((e.name, sz))
+        except Exception:
+            rows = []
+    rows.sort(key=lambda r: r[0], reverse=True)
+    _BUG_LIST_CACHE[tenant] = (time.monotonic(), rows)
+    return rows
 
 
 def _bug_counts(tenant: str) -> dict:
@@ -945,6 +1031,20 @@ def _bug_counts(tenant: str) -> dict:
     _perf_note("bug_counts_scan", (time.monotonic() - _t) * 1000)
     _BUG_COUNT_CACHE[tenant] = (time.monotonic(), counts)
     return dict(counts)
+
+
+def _attach_char_info(card: dict, ci: dict | None) -> None:
+    """char_info 한 행을 카드에 붙인다 — 이름 목록·창고키나·수집 시각.
+    (2026-09-12 정리: _build_full_state 안에 똑같은 블록이 두 번 있었다 — base 카드용과
+     매크로가 죽어 pc_status 가 없는 업데이터 전용 카드용. 규칙은 하나여야 한다, §A12)"""
+    if not ci:
+        return
+    if ci.get("chars"):
+        card["chars"] = [c.get("name") or c.get("char_name") or "" for c in ci["chars"]]
+    if ci.get("total_kina"):
+        card["_total_kina"] = ci["total_kina"]
+    if ci.get("collected_at"):           # 카드 "수집 X분 전" 표시용 (2026-07-25)
+        card["_char_collected_at"] = ci["collected_at"]
 
 
 async def _build_full_state(tenant: str = "main") -> list[dict]:
@@ -1097,24 +1197,15 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
         #   (토큰은 매크로 재기동 때 바뀌므로, 재기동하면 다음 push 가 새 값으로 덮는다)
         _lk = ns(tenant, pid)
         if pc.get("lan_url"):
+            if _lan_cache_last.get(_lk) != pc["lan_url"]:
+                _lan_cache_dirty[0] = True
             _lan_cache_last[_lk] = pc["lan_url"]
         elif _lan_cache_last.get(_lk):
             pc["lan_url"] = _lan_cache_last[_lk]
             pc["_lan_url_cached"] = True
         # char_info 이름 항상 로드 (OCR 수집값 우선)
         if pid:
-            ci = _ci_all.get(ns(tenant, pid))      # ★한 번에 읽어둔 것에서 (2026-09-11)★
-            if ci:
-                if ci.get("chars"):
-                    pc["chars"] = [
-                        c.get("name") or c.get("char_name") or ""
-                        for c in ci["chars"]
-                    ]
-                if ci.get("total_kina"):
-                    pc["_total_kina"] = ci["total_kina"]
-                # 카드 "수집 X분 전" 표시용 (2026-07-25)
-                if ci.get("collected_at"):
-                    pc["_char_collected_at"] = ci["collected_at"]
+            _attach_char_info(pc, _ci_all.get(ns(tenant, pid)))   # ★한 번에 읽어둔 것에서★
 
     for pid, u in updater_map.items():
         if pid not in seen:
@@ -1134,14 +1225,7 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
             # ★여기도 char_info를 붙인다(2026-07-28): 매크로가 죽어 pc_status 행이 없는 PC는
             #   이 분기로 오는데, 예전엔 char_info를 안 붙여 '창고키나 합계'에서 통째로 빠졌다.
             #   전광판 합계는 마지막으로 알던 값을 계속 세야 한다 — 꺼졌다고 재산이 준 게 아니다.★
-            ci = _ci_all.get(ns(tenant, pid))      # ★한 번에 읽어둔 것에서 (2026-09-11)★
-            if ci:
-                if ci.get("chars"):
-                    row["chars"] = [c.get("name") or c.get("char_name") or "" for c in ci["chars"]]
-                if ci.get("total_kina"):
-                    row["_total_kina"] = ci["total_kina"]
-                if ci.get("collected_at"):
-                    row["_char_collected_at"] = ci["collected_at"]
+            _attach_char_info(row, _ci_all.get(ns(tenant, pid)))
             statuses.append(row)
 
     # ★2차 패스 — 한 PC = 한 매크로(2026-08-15 사용자: "컴퓨터가 같은데... 한 번에 한
@@ -1698,6 +1782,11 @@ LICENSE_SECRET = os.getenv("LICENSE_SECRET", "aion2-license-v1-7f3a")
 #   매크로가 실제로 읽는 설정은 awakening_preset / sale_price 둘뿐이라(실측) 무해하다.
 #   parsec_pw 는 명령 args 로만 배달된다(enrich_cmd_args) — 매크로는 조회할 필요가 없다.
 SECRET_SETTINGS = {"parsec_pw", "parsec_id"}
+# ★매크로(API 키)가 읽어도 되는 키 — 허용 목록 (2026-09-12 전수조사 D5)★
+#   예전엔 「비밀 두 개만 빼고 전부」였다(부정 목록). 그래서 유출 전제인 API 키로
+#   `corridor_prog_all`(전 테넌트 회랑 진행)·`rental_kill`(차단된 지인 목록)이 읽혔다.
+#   매크로가 실제로 읽는 키는 lc/ 전수 grep 으로 둘뿐이다. 새 키가 필요하면 여기 더한다.
+MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 
 
 @app.get("/setting/{key}")
@@ -1705,8 +1794,10 @@ async def get_setting_ep(key: str, request: Request):
     """매크로(X-Api-Key)와 대시보드(세션) 양쪽 조회 허용 — ★비밀 키는 세션만★."""
     if key in SECRET_SETTINGS:
         tenant = check_session(request)          # API 키로는 못 읽는다
-    else:
+    elif key in MACRO_READABLE_SETTINGS:
         tenant = check_api_key(request) or check_session(request)
+    else:
+        tenant = check_session(request)          # ★그 밖은 세션만★ (2026-09-12)
     if not tenant:
         raise HTTPException(status_code=401)
     val = await get_setting(ns(tenant, key))
@@ -1716,9 +1807,7 @@ async def get_setting_ep(key: str, request: Request):
 @app.post("/setting/{key}")
 async def set_setting_ep(key: str, request: Request):
     """대시보드(세션)에서 설정 변경."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     try:
         body = await request.json()
     except Exception:
@@ -1928,9 +2017,7 @@ async def health(request: Request):
 @app.get("/debug/deaths")
 async def debug_deaths(request: Request):
     """[진단용] death_events 원본 + 현재시각/컷오프/집계. 사망수 안 줄어드는 원인 추적."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
     events = [e for e in await get_all_death_events() if ns_of(e.get("pc_id") or "") == tenant]
@@ -5412,10 +5499,14 @@ async function sendCmd(pc_id, command, args={}) {
   }
   // ★무장이 거부되면 반드시 말한다★ — start 자체는 200 이라 화면엔 아무 표시가 없었다.
   //   순환이 안 켜진 걸 사람이 알 방법이 카드의 🔁 배지 '없음' 뿐이면 아무도 못 알아챈다.
-  if (command === 'start') {
+  // ★rotate 가 실린 모든 명령을 본다 (2026-09-12)★ — 예전엔 start 만 봐서, [🔁 전 계정 순환]
+  //   으로 보낸 회랑·일일던전이 24대 전부 거부돼도 「시작」 토스트만 떴다.
+  //   그리고 `=== false` 대신 `'armed' in j` — 서버가 예외로 armed 를 빼먹던 시절의
+  //   「가장 나쁜 경우가 가장 조용한」 모양을 화면 쪽에서도 막는다.
+  if (command === 'start' || (args && args.rotate)) {
     try {
       const j = await res.clone().json();
-      if (j && j.armed === false) showToast(`⚠️ ${pc_id} 사냥은 시작 — 계정 순환은 무장 안 됨 (${j.why||''})`);
+      if (j && ('armed' in j) && !j.armed) showToast(`⚠️ ${pc_id} 「${command}」 — 계정 순환은 무장 안 됨 (${j.why||''})`);
     } catch(e) {}
   }
   // ★사고 308-b — 서버가 주는 cmd_id 를 회수한다★
@@ -8600,21 +8691,36 @@ async def dashboard(request: Request):
 
 @app.get("/status")
 async def all_statuses(request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     pcs = await _build_full_state(tenant)
     return JSONResponse({"pcs": pcs})
 
 
+def _public_args(a):
+    """화면용 args — `_` 로 시작하는 내부 표식(`_by`·`_note`)을 걷어낸다 (2026-09-12).
+    문자열(DB 원문)이면 문자열로, dict 면 dict 로 돌려준다(모양을 안 바꾼다)."""
+    was_str = isinstance(a, str)
+    d = a
+    if was_str:
+        try:
+            d = json.loads(a)
+        except Exception:
+            return a
+    if not isinstance(d, dict):
+        return a
+    d = {k: v for k, v in d.items() if not str(k).startswith("_")}
+    return json.dumps(d, ensure_ascii=False) if was_str else d
+
+
 def _strip_cmds(cmds: list, tenant: str) -> list:
-    """명령 내역을 테넌트 것만 남기고 pc_id 접두사 제거."""
+    """명령 내역을 테넌트 것만 남기고 pc_id 접두사 제거 (+ 내부 표식 제거)."""
     out = []
     for c in cmds:
         t, raw = split_ns(c.get("pc_id") or "")
         if t == tenant:
             c = dict(c)
             c["pc_id"] = raw
+            c["args"] = _public_args(c.get("args"))
             out.append(c)
     return out
 
@@ -8631,9 +8737,7 @@ async def _push_cmd_history(tenant: str):
 
 @app.get("/logs/{pc_id}")
 async def pc_logs(pc_id: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     logs = await get_logs(ns(tenant, pc_id), limit=2000)
     return JSONResponse({"logs": logs})
 
@@ -8641,9 +8745,7 @@ async def pc_logs(pc_id: str, request: Request):
 @app.post("/log/{pc_id}")
 async def receive_logs(pc_id: str, request: Request):
     """매크로가 보내는 로그 배치 수신"""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
@@ -8651,8 +8753,8 @@ async def receive_logs(pc_id: str, request: Request):
         raise HTTPException(status_code=400)
     logs = data.get("logs", [])
     _saved = 0
-    _dropped = max(0, len(logs) - 50)
-    for entry in logs[:50]:   # 배치당 최대 50개
+    _dropped = max(0, len(logs) - LOG_BATCH_MAX)
+    for entry in logs[:LOG_BATCH_MAX]:
         level   = str(entry.get("level", "info"))[:10]
         message = str(entry.get("message", ""))[:500]
         if message:
@@ -8681,7 +8783,7 @@ async def receive_logs(pc_id: str, request: Request):
     if _dropped:
         try:
             await insert_log(ns(tenant, pc_id), "warn",
-                             f"[서버] 로그 배치 {len(logs)}줄 중 50줄만 저장 — {_dropped}줄 버림")
+                             f"[서버] 로그 배치 {len(logs)}줄 중 {LOG_BATCH_MAX}줄만 저장 — {_dropped}줄 버림")
         except Exception:
             pass
     return JSONResponse({"ok": True, "count": _saved, "received": len(logs),
@@ -8690,9 +8792,7 @@ async def receive_logs(pc_id: str, request: Request):
 
 @app.get("/commands/recent")
 async def recent_commands(request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
     return JSONResponse({"commands": cmds})
 
@@ -8731,9 +8831,7 @@ def _live_touch(key: str):
 async def upload_live_frame(pc_id: str, request: Request):
     """매크로 → 서버. 본문은 JPEG 원본, 메타는 X-Live-Meta 헤더(JSON).
     반환 204 = 보는 사람 없으니 그만 보내라."""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)
     body = await request.body()
     if len(body) > LIVE_MAX_BYTES:
@@ -8761,9 +8859,7 @@ async def upload_live_frame(pc_id: str, request: Request):
 @app.get("/live/{pc_id}.jpg")
 async def get_live_frame(pc_id: str, request: Request):
     """대시보드 → 서버. 최신 프레임 1장. 가져갈 때마다 '보는 중' 시각을 갱신한다."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     key = ns(tenant, clean_pc_id(pc_id))
     _live_touch(key)
     f = LIVE_FRAMES.get(key)
@@ -8776,9 +8872,7 @@ async def get_live_frame(pc_id: str, request: Request):
 @app.get("/live/{pc_id}/meta")
 async def get_live_meta(pc_id: str, request: Request):
     """클릭 좌표 + 단계 자막 + 프레임 나이(초)."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     key = ns(tenant, clean_pc_id(pc_id))
     # ★프레임이 없어도 관심은 등록한다★ — 대시보드를 연 직후엔 아직 프레임이 없는데,
     #   여기서 등록해 두지 않으면 매크로의 첫 프레임이 곧바로 204를 맞고 꺼진다.
@@ -8925,6 +9019,13 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
     #   ★send_args 에만 단다★ — DB·명령 이력에 남는 `args` 는 안 건드린다(화면 잡음 방지).
     # ══════════════════════════════════════════════════════════════════════
     send_args = {**send_args, "_by": "human"}
+    # ★★DB 에도 남긴다 (2026-09-12 전수조사 C1)★★
+    #   초판은 「화면 잡음 방지」로 send_args 에만 달았다. 그런데 ★재배달 두 경로★
+    #   (HTTP 폴링·WS 재접속)는 DB 행을 읽어 enrich 를 태우므로 표식이 없었다 →
+    #   매크로가 「이전 명령 처리 중」으로 거부 = 사고 523 수정이 ★WS 가 그 순간 붙어
+    #   있을 때만★ 작동했다. PC-21 peer_id 사고(첫 배달만 맞고 재배달이 틀림)와 같은 기계다.
+    #   화면 잡음은 `_strip_cmds` 가 `_` 로 시작하는 키를 걷어내 막는다.
+    args = {**args, "_by": "human"}
     if command == "set_info":
         # ★계정 비번을 이력에 남기지 않는다 (2026-08-17)★
         #   set_info 는 info.txt 의 계정 칸(아이디·비번·PIN…)을 채우는 명령이라
@@ -8933,7 +9034,7 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
         _kv = (args.get("kv") or {})
         args = {"kv": {k: ("***" if ("비번" in k or "PIN" in k) else v)
                        for k, v in _kv.items()},
-                "_note": f"{len(_kv)}칸"}
+                "_note": f"{len(_kv)}칸", "_by": "human"}
     elif command in ("switch_launcher", "acct_tour", "switch_account", "find_host"):
         # DB·이력에는 ★마스킹된 것만★ 남긴다 (아래 enrich 가 배달 때마다 다시 채운다)
         args = {**args, "peer_id": (send_args.get("peer_id") or "")[:6] + "…",
@@ -9028,9 +9129,7 @@ async def send_command(pc_id: str, request: Request):
     #   없어(구조적) 유출을 전제해야 한다. 실제로 공개 저장소에 평문 노출돼 있었고,
     #   그 키 하나로 로그인 없이 함대 전체에 시작/정지/판매 명령을 넣을 수 있었다.
     #   매크로·업데이터는 명령을 '폴링(GET)'하고 'ack'만 하므로 이 변경에 기능 손실이 없다.★
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     # ★브로드캐스트 차단 [A7]★ — 위 _BROADCAST_IDS 주석 참조.
     #   막다가 잃는 기능이 0 이라(대시보드에 호출부 없음) 그냥 거부한다.
     if str(pc_id).strip() in _BROADCAST_IDS:
@@ -9049,9 +9148,7 @@ async def send_command(pc_id: str, request: Request):
 
 @app.delete("/status/{pc_id}")
 async def remove_pc(pc_id: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     await delete_pc_all_data(ns(tenant, pc_id))
     await push_state(tenant)
     return JSONResponse({"ok": True})
@@ -9133,7 +9230,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         #   enrich_cmd_args 를 거치는데 이 경로는 안 거쳤다 = PC-21 peer_id 사고가
         #   ★절반만★ 막혀 있었다. WS 가 끊겼다 붙는 건 흔한 일이라 실전 경로다.
         # ==================================================================
-        _pending = await get_pending_commands(nspc, all_key=ns(tenant, "all"), limit=8)
+        _pending = await get_pending_commands(nspc, all_key=ns(tenant, "all"), limit=WS_RECONNECT_DRAIN)
         for _p in _pending:
             _pargs = await enrich_cmd_args(tenant, pc_id,
                                            _p["command"], _p.get("args") or {})
@@ -9263,9 +9360,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/report/{pc_id}")
 async def receive_report(pc_id: str, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
@@ -9288,9 +9383,7 @@ async def receive_report(pc_id: str, request: Request):
 async def receive_alert(pc_id: str, request: Request):
     """매크로 → 대시보드 실시간 알림. 캡차 3회 실패처럼 '사람이 지금 봐야 하는' 이벤트용.
     본문이 브라우저 DOM과 TTS로 그대로 흘러가므로 길이·문자 제한을 서버에서 건다."""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     try:
         data = await request.json()
     except Exception:
@@ -9341,13 +9434,16 @@ async def telegram_status(request: Request):
 _TG_MUTE: dict[str, float] = {}      # pc_id(접미사 제거) → 만료 epoch
 
 
-def _tg_muted(pc_id: str) -> float:
-    """음소거 중이면 남은 초, 아니면 0. 만료된 항목은 즉시 청소한다."""
+def _tg_muted(tenant: str, pc_id: str) -> float:
+    """음소거 중이면 남은 초, 아니면 0. 만료된 항목은 즉시 청소한다.
+    ★키에 테넌트를 넣는다 (2026-09-12 전수조사 D3)★ — 예전엔 `PC-16` 하나였다.
+    PC 이름은 테넌트마다 겹치므로(PC-01~24) 지인이 자기 PC-16 을 끄면 ★본판 PC-16 알람★
+    이 같이 죽었다. 자원(dict) 쪽에서 가른다(§A11) — 호출부는 셋뿐이다."""
     base = _base_pc(clean_pc_id(pc_id) or "")
     now = time.time()
     for k in [k for k, v in _TG_MUTE.items() if v <= now]:
         _TG_MUTE.pop(k, None)
-    return max(0.0, _TG_MUTE.get(base, 0.0) - now)
+    return max(0.0, _TG_MUTE.get(ns(tenant, base), 0.0) - now)
 
 
 @app.post("/telegram/mute/{pc_id}")
@@ -9356,9 +9452,7 @@ async def telegram_mute(pc_id: str, request: Request):
 
     대시보드 세션 전용 — 알림을 끄는 일이라 사람이 눌러야 한다.
     """
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     try:
         body = await request.json()
     except Exception:
@@ -9367,23 +9461,25 @@ async def telegram_mute(pc_id: str, request: Request):
     base = _base_pc(clean_pc_id(pc_id) or "")
     if not base:
         raise HTTPException(status_code=400, detail="pc_id 이상")
+    _mk = ns(tenant, base)                    # ★테넌트별 (2026-09-12)★
     if hours <= 0:
-        _TG_MUTE.pop(base, None)
+        _TG_MUTE.pop(_mk, None)
         return JSONResponse({"ok": True, "pc": base, "muted": False})
     hours = min(hours, 24.0)                  # 하루 넘는 음소거는 만들지 않는다
-    _TG_MUTE[base] = time.time() + hours * 3600.0
+    _TG_MUTE[_mk] = time.time() + hours * 3600.0
     return JSONResponse({"ok": True, "pc": base, "muted": True,
                          "hours": hours,
-                         "until": time.strftime("%H:%M", time.localtime(_TG_MUTE[base]))})
+                         "until": time.strftime("%H:%M", time.localtime(_TG_MUTE[_mk]))})
 
 
 @app.get("/telegram/mute")
 async def telegram_mute_list(request: Request):
-    if not check_session(request):
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     now = time.time()
-    return JSONResponse({"muted": {k: round((v - now) / 60.0, 1)
-                                   for k, v in _TG_MUTE.items() if v > now}})
+    # ★내 테넌트 것만, 접두사는 벗겨서 (2026-09-12)★ — 예전엔 전 테넌트 목록이 통째로 나갔다
+    return JSONResponse({"muted": {split_ns(k)[1]: round((v - now) / 60.0, 1)
+                                   for k, v in _TG_MUTE.items()
+                                   if v > now and ns_of(k) == tenant}})
 
 
 @app.post("/telegram/send/{pc_id}")
@@ -9447,7 +9543,7 @@ async def telegram_send(pc_id: str, request: Request):
     #   ★본문을 보지도 않고★ 전부 삼켰다(§A12: 규칙이 둘). 정지·사망·캡차·큐브가
     #   전부 이 경로다. ★사람을 세워놓는 알람이 음소거에 같이 죽으면 안 된다.★
     _hard = str(text).lstrip().startswith(("⛔", "🚨"))
-    _left = 0 if _hard else _tg_muted(pc_id)
+    _left = 0 if _hard else _tg_muted(tenant, pc_id)
     if _left > 0:
         print(f"[tg-mute] {name} 음소거 중({_left/60:.0f}분 남음) — 전송 생략: {text[:60]}",
               flush=True)
@@ -9474,9 +9570,7 @@ async def telegram_send(pc_id: str, request: Request):
 @app.post("/telegram/photo/{pc_id}")
 async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(...)):
     """매크로 → 텔레그램 사진 중계(캡차 스샷). expect_reply면 답장 라우팅 대상으로 등록."""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
         return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
@@ -9497,9 +9591,7 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
 
 @app.get("/command/{pc_id}")
 async def poll_command(pc_id: str, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
@@ -9524,9 +9616,7 @@ async def _updater_cmd_belongs_to(cmd_id: int, tenant: str) -> bool:
 
 @app.post("/command/{pc_id}/ack/{cmd_id}")
 async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     if not await _cmd_belongs_to(cmd_id, tenant):
         raise HTTPException(status_code=404)
     ok = await ack_command(cmd_id)
@@ -9538,9 +9628,7 @@ async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
 @app.delete("/commands/{cmd_id}")
 async def cancel_cmd(cmd_id: int, request: Request):
     """pending 명령 취소 (dashboard용)"""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     if not await _cmd_belongs_to(cmd_id, tenant):
         raise HTTPException(status_code=404)
     ok = await cancel_command(cmd_id)
@@ -9586,9 +9674,7 @@ async def receive_updater_logs(pc_id: str, request: Request):
       계정 자동순환 상태기계(_rot_note_boot)를 건드린다. 업데이터 부팅은 매크로 부팅이
       아니므로 그 경로를 절대 타면 안 된다. 여기는 순수 저장만 한다.
     """
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     try:
         data = await request.json()
     except Exception:
@@ -9625,17 +9711,13 @@ async def receive_updater_logs(pc_id: str, request: Request):
 @app.get("/updater/logs/{pc_id}")
 async def updater_logs(pc_id: str, request: Request):
     """대시보드가 읽는다 (세션 인증)."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     return JSONResponse({"logs": await get_logs(_upd_log_key(tenant, pc_id), limit=1000)})
 
 
 @app.post("/updater/status/{pc_id}")
 async def updater_report_status(pc_id: str, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     try:
         data = await request.json()
     except Exception:
@@ -9649,9 +9731,7 @@ async def updater_report_status(pc_id: str, request: Request):
 
 @app.get("/updater/command/{pc_id}")
 async def updater_poll_command(pc_id: str, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     cmd = await get_pending_updater_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
     if cmd:
         return JSONResponse({"command": cmd["command"], "args": cmd.get("args", {}), "id": cmd["id"]})
@@ -9660,9 +9740,7 @@ async def updater_poll_command(pc_id: str, request: Request):
 
 @app.post("/updater/command/{pc_id}")
 async def dashboard_send_updater_command(pc_id: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     # ★브로드캐스트 차단 [A7] (2026-09-11 전수조사)★ — 매크로 큐(`/command/{pc}`)
     #   에는 이 가드가 있는데 ★업데이터 큐에는 한 줄도 없었다.★
     #   `get_pending_updater_command` 가 all_key 를 지원하므로 `/updater/command/all`
@@ -9685,9 +9763,7 @@ async def dashboard_recent_updater_commands(request: Request, limit: int = 60):
     """★업데이터 명령 큐 조회 (2026-08-22 사고 146)★
     /commands/recent 는 ★매크로 큐★ 만 본다. 업데이터 큐는 여태 밖에서 볼 수가 없어서
     "업데이트를 눌러도 안 한다" 를 확증도 반증도 못 했다. 이게 그 눈이다."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     limit = max(1, min(int(limit or 60), 300))
     # ★테넌트 격리★ — main 은 접두어가 없으므로 LIKE 로는 못 좁힌다(남의 테넌트가 샌다).
     #   넉넉히 받아서 ns_of() 로 거른 뒤 limit 만큼만 돌려준다.
@@ -9707,9 +9783,7 @@ async def dashboard_recent_updater_commands(request: Request, limit: int = 60):
 
 @app.post("/updater/command/{pc_id}/ack/{cmd_id}")
 async def updater_ack_command(pc_id: str, cmd_id: int, request: Request):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     if not await _updater_cmd_belongs_to(cmd_id, tenant):
         raise HTTPException(status_code=404)
     ok = await ack_updater_command(cmd_id)
@@ -9721,25 +9795,18 @@ async def updater_ack_command(pc_id: str, cmd_id: int, request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _list_bug_files(tenant: str, pc_id: Optional[str] = None) -> list[dict]:
+    """버그스샷 목록 {filename,size} 최신순. pc_id 를 주면 그 ★물리 PC★ 것만.
+    (2026-09-12) 훑기는 _bug_scan 캐시로. 세는 규칙·순서·모양은 그대로다."""
     result = []
-    bdir = tenant_bugs_dir(tenant)
-    if not os.path.isdir(bdir):
-        return result
-    for fname in sorted(os.listdir(bdir), reverse=True):
-        if not fname.endswith('.png'):
-            continue
+    _bp = _base_pc(pc_id) if pc_id else None
+    for fname, size in _bug_scan(tenant):
         if pc_id:
             m = re.match(r'^(.+?)_\d{8}_\d{6}_', fname)
             # ★★베이스끼리 비교한다 (2026-08-23)★★ — 예전엔 정확일치라
             #   `PC-24b` 로 물어보면 `PC-24_...` 파일이 하나도 안 걸렸다.
             #   묻는 쪽이 접미사를 달고 오든 아니든, 스샷은 그 PC 의 것이다.
-            if not m or _base_pc(m.group(1)) != _base_pc(pc_id):
+            if not m or _base_pc(m.group(1)) != _bp:
                 continue
-        path = os.path.join(bdir, fname)
-        try:
-            size = os.path.getsize(path)
-        except Exception:
-            size = 0
         result.append({"filename": fname, "size": size})
     return result
 
@@ -9786,9 +9853,7 @@ def _prune_bugs(bdir: str, pc_id: str):
 
 @app.post("/bugs/{pc_id}")
 async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...)):
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)   # 파일명 접두사도 저장 키 소독과 일관
     bdir = tenant_bugs_dir(tenant)
     os.makedirs(bdir, exist_ok=True)
@@ -9819,9 +9884,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
 
 @app.get("/bugs/download")
 async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     # ★CSRF 방어(2026-07-27 보안감사): 이 GET은 '다운로드 후 서버 파일 삭제'라는 파괴적
     #   부수효과가 있는데, 쿠키가 SameSite=Lax라 다른 사이트의 링크·이미지 태그로도 실행된다
     #   (= 링크 한 번에 증거 스샷 전량 소실). 대시보드에서 온 요청만 허용한다.★
@@ -9863,25 +9926,19 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
 
 @app.get("/bugs")
 async def list_all_bugs(request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     return JSONResponse({"bugs": _list_bug_files(tenant)})
 
 
 @app.get("/bugs/{pc_id}")
 async def list_pc_bugs(pc_id: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     return JSONResponse({"bugs": _list_bug_files(tenant, pc_id)})
 
 
 @app.get("/bugs/image/{filename:path}")
 async def serve_bug_image(filename: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     filename = os.path.basename(filename)
     path = os.path.join(tenant_bugs_dir(tenant), filename)
     if not os.path.exists(path):
@@ -9894,9 +9951,7 @@ async def list_tenants(request: Request):
     """대시보드 '렌탈 관리' 패널용 (2026-08-06). ★main 세션에만 목록을 준다★ —
     렌탈 세션엔 is_main=false + 빈 목록(다른 지인이 있는지조차 노출 금지).
     비밀번호·api_key는 절대 싣지 않는다(화면에 필요 없음)."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     if tenant != "main":
         return JSONResponse({"is_main": False, "tenants": []})
     rows = []
@@ -9947,7 +10002,7 @@ async def download_updater(request: Request):
     tenant = check_session(request)
     if not tenant:
         return RedirectResponse(url="/login")
-    ver = _load_version_json()
+    ver = await _load_version_json_async()
     url = (ver.get("updater") or {}).get("download_url") or \
         "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
     fname = "updater.exe" if tenant == "main" else "rental_updater.exe"
@@ -9961,24 +10016,33 @@ async def download_updater(request: Request):
         info = _rental_info_txt(tenant)
         try:
             import httpx as _hx2, zipfile as _zf, tempfile as _tf
-            with _hx2.Client(timeout=_hx2.Timeout(10.0, read=180.0), follow_redirects=True) as _c:
-                _r = _c.get(url)
-                if _r.status_code != 200:
-                    raise HTTPException(status_code=502, detail="업데이터 원본 조회 실패")
-                exe_bytes = _r.content
-            tmp = _tf.NamedTemporaryFile(delete=False, suffix=".zip")
-            with _zf.ZipFile(tmp, "w", _zf.ZIP_DEFLATED) as z:
-                z.writestr("rental_updater.exe", exe_bytes)
-                z.writestr("info.txt", info)
-            tmp.close()
+            # ★스레드로 (2026-09-12)★ — 바로 아래 main 경로는 AsyncClient 스트리밍인데
+            #   이 갈래만 ★동기★ 로 75MB 를 받고 압축했다(read=180초). 지인 하나가
+            #   설치 파일을 받는 동안 전 함대의 WS 와 대시보드가 멈추는 구조였다(§A12).
+            def _build_zip_sync():
+                with _hx2.Client(timeout=_hx2.Timeout(10.0, read=180.0),
+                                 follow_redirects=True) as _c:
+                    _r = _c.get(url)
+                    if _r.status_code != 200:
+                        return _r.status_code, None
+                    _exe = _r.content
+                _t = _tf.NamedTemporaryFile(delete=False, suffix=".zip")
+                with _zf.ZipFile(_t, "w", _zf.ZIP_DEFLATED) as z:
+                    z.writestr("rental_updater.exe", _exe)
+                    z.writestr("info.txt", info)
+                _t.close()
+                return 200, _t.name
+            _sc, _tmpname = await asyncio.to_thread(_build_zip_sync)
+            if _sc != 200:
+                raise HTTPException(status_code=502, detail="업데이터 원본 조회 실패")
             from starlette.background import BackgroundTask as _BT
 
-            def _rm(p=tmp.name):
+            def _rm(p=_tmpname):
                 try:
                     os.remove(p)
                 except Exception:
                     pass
-            return FileResponse(tmp.name, media_type="application/zip",
+            return FileResponse(_tmpname, media_type="application/zip",
                                 filename="rental_setup.zip", background=_BT(_rm))
         except HTTPException:
             raise
@@ -10141,9 +10205,7 @@ async def _tts_file(text: str, rate: str = "", pitch: str = ""):
 @app.delete("/bugs")
 async def delete_bugs_bulk(request: Request, pc_id: Optional[str] = None):
     """버그스샷 일괄 삭제. pc_id 주면 그 PC만, 없으면 테넌트 전체(2026-07-27 사용자 요청)."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     bugs = _list_bug_files(tenant, pc_id)
     bdir = tenant_bugs_dir(tenant)
     removed = 0
@@ -10160,9 +10222,7 @@ async def delete_bugs_bulk(request: Request, pc_id: Optional[str] = None):
 
 @app.delete("/bugs/image/{filename:path}")
 async def delete_bug_image(filename: str, request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     filename = os.path.basename(filename)
     path = os.path.join(tenant_bugs_dir(tenant), filename)
     if not os.path.exists(path):
@@ -10180,9 +10240,7 @@ async def delete_bug_image(filename: str, request: Request):
 @app.post("/char_info/{pc_id}")
 async def receive_char_info(pc_id: str, request: Request):
     """매크로가 수집한 캐릭터 세부정보 저장"""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
@@ -10213,9 +10271,7 @@ async def receive_char_info(pc_id: str, request: Request):
 @app.post("/slot_filter/{pc_id}")
 async def set_slot_filter(pc_id: str, request: Request):
     """대시보드 → 슬롯 활성화/비활성화 저장 + 매크로에 명령 전달"""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     body = await request.json()
     filters = body.get("filters", {})
     # int 키로 정규화
@@ -10254,9 +10310,7 @@ async def query_char_info(pc_id: str, request: Request):
 @app.post("/nightmare/progress/{pc_id}")
 async def save_nightmare_progress(pc_id: str, request: Request):
     """매크로가 악몽 진행 상태 전송"""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
     try:
         data = await request.json()
@@ -10274,9 +10328,7 @@ async def save_nightmare_progress(pc_id: str, request: Request):
 @app.get("/nightmare/progress/{pc_id}")
 async def query_nightmare_progress(pc_id: str, request: Request):
     """대시보드가 악몽 진행 상태 조회"""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     progress = await get_nightmare_progress(ns(tenant, pc_id))
     return JSONResponse({"pc_id": pc_id, "slots": progress})
 
@@ -10303,9 +10355,7 @@ def _screenshot_path(tenant: str, category: str, pc_id: str, slot: int) -> str:
 @app.post("/screenshot/{category}/{pc_id}/{slot}")
 async def upload_screenshot(category: str, pc_id: str, slot: int, request: Request):
     """매크로가 스크린샷 업로드 (arcana, equip 등)"""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     try:
         data = await request.json()
     except Exception:
@@ -10333,9 +10383,7 @@ async def upload_screenshot(category: str, pc_id: str, slot: int, request: Reque
 @app.get("/screenshot/{category}/{pc_id}/{slot}")
 async def get_screenshot(category: str, pc_id: str, slot: int, request: Request):
     """대시보드가 스크린샷 조회"""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     fpath = _screenshot_path(tenant, category, pc_id, slot)
     if not os.path.exists(fpath):
         raise HTTPException(status_code=404, detail="Not found")
@@ -10392,9 +10440,7 @@ def _corridor_cutoff() -> float:
 @app.post("/corridor/progress/{pc_id}")
 async def save_corridor_progress(pc_id: str, request: Request):
     """매크로 → 서버. 회랑 진행 전체 스냅샷."""
-    tenant = check_api_key(request)
-    if not tenant:
-        raise HTTPException(status_code=403)
+    tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)
     try:
         data = await request.json()
@@ -10412,9 +10458,7 @@ async def save_corridor_progress(pc_id: str, request: Request):
 @app.get("/corridor/progress")
 async def all_corridor_progress(request: Request):
     """대시보드 → 서버. 전광판 '회랑 남음' 집계용."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     # ══════════════════════════════════════════════════════════════════
     # ★★만료 스냅샷을 버리면 그 PC 가 "남은 것 0" 으로 세어진다 (2026-08-24)★★
     #
@@ -10452,9 +10496,7 @@ async def all_corridor_progress(request: Request):
 @app.get("/characters")
 async def get_all_characters(request: Request):
     """해당 테넌트 PC들의 모든 캐릭터 정보를 플랫 테이블로 반환"""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     all_info = [i for i in await get_all_char_info() if ns_of(i.get("pc_id") or "") == tenant]
     # 악몽 진행 상태도 같이 조회
     all_nm = [n for n in await get_all_nightmare_progress() if ns_of(n.get("pc_id") or "") == tenant]
@@ -10463,7 +10505,7 @@ async def get_all_characters(request: Request):
         bosses = nm.get("bosses", {})
         cleared = sum(1 for b in bosses.values() if b.get("cleared"))
         total = len(bosses) if bosses else 7
-        best_stage = max((b.get("stage", 0) for b in bosses.values()), default=0) if bosses else 0
+        # (best_stage 를 계산만 하고 안 쓰던 죽은 줄을 지웠다 — 2026-09-12 pyflakes)
         nm_map[(split_ns(nm["pc_id"])[1], nm["slot"])] = f"{nm.get('tab','몽충I')} {cleared}/{total}" if bosses else ""
     # 회랑 진행(2026-08-01) — 메모리 스냅샷을 (pc,slot) 문자열로 병합 (사용자: "하2/2·중1/1" 형식)
     cor_map, cor_full = {}, {}
@@ -10546,6 +10588,32 @@ _GH_CDN_JSDELIVR = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-rel
 _GH_CDN = _GH_RAW
 
 _version_cache = {"data": {}, "ts": 0}
+_version_lock = asyncio.Lock()
+VERSION_CACHE_TTL_S = 300            # version.json 캐시 수명(초) — 함대 21대가 5분마다 /check 를 찌른다
+
+
+async def _load_version_json_async() -> dict:
+    """★async 경로에서는 이것만 쓴다 (2026-09-12)★
+
+    `_load_version_json` 은 ★동기 httpx★ 다(raw 6초 + api 8초 = 최악 14초). 그걸
+    async 핸들러 안에서 그대로 부르면 그 시간 동안 ★서버 전체★ 가 멈춘다 — 매크로
+    24대의 WS 핑(한도 10초)이 한꺼번에 시간초과한다. 스레드로 보내고, 캐시가 비었을 때
+    24대가 동시에 GitHub 을 두드리지 않게 갱신은 ★한 번에 하나★ 만 한다.
+    """
+    if _version_cache["data"] and time.time() - _version_cache["ts"] < VERSION_CACHE_TTL_S:
+        return _version_cache["data"]
+    async with _version_lock:
+        # ★잠금 안에서 한 번 더 본다★ — 앞사람이 방금 채웠으면 나는 갱신하지 않는다.
+        #   이 줄이 없으면 24대가 줄을 서서 ★차례로 24번★ GitHub 을 두드린다(시험으로 확인).
+        if _version_cache["data"] and time.time() - _version_cache["ts"] < VERSION_CACHE_TTL_S:
+            return _version_cache["data"]
+        data = await asyncio.to_thread(_load_version_json)
+        # ★캐시는 여기서도 채운다★ — 안쪽 함수가 어느 갈래(raw·api·구운 사본)로 돌아왔든
+        #   결과가 쓸 만하면 다음 사람은 캐시를 보게 한다.
+        if isinstance(data, dict) and (data.get("exe") or {}).get("version"):
+            _version_cache["data"] = data
+            _version_cache["ts"] = time.time()
+        return data or {}
 
 def _load_version_json() -> dict:
     """version.json 로드 (5분 캐시).
@@ -10559,7 +10627,7 @@ def _load_version_json() -> dict:
     """
     import time as _time
     now = _time.time()
-    if _version_cache["data"] and now - _version_cache["ts"] < 300:
+    if _version_cache["data"] and now - _version_cache["ts"] < VERSION_CACHE_TTL_S:
         return _version_cache["data"]
     # 1차: GitHub raw (항상 최신 — 재배포 없이 반영되는 유일한 경로)
     # ★httpx를 쓴다: requests는 requirements.txt에 없다. 예전엔 로컬 파일이 1순위라
@@ -10627,6 +10695,28 @@ _IMG_PROXY_CACHE: dict = {}          # fname -> (bytes, sha256, 담은시각)
 #   레포도 version.json 도 jsDelivr 도 전부 맞았고 ★서버만 옛것★ 이라 아무도 못 봤다.
 #   → ①TTL 로 스스로 낡게 하고 ②version.json 해시와 대조해 ★다르면 안 쓴다.★
 _IMG_CACHE_TTL = 600.0               # 초 — 이만큼 지나면 상류에서 다시 받는다
+_IMG_CACHE_MAX = 300                 # ★장수 상한 (2026-09-12)★ — 템플릿 217장보다 커야 한다.
+                                     #   예전엔 80장에서 ★통째로 clear★ 라 대량 동기화 때 캐시가 전멸했다.
+
+
+def _fetch_image_upstream(fname: str, sources: list):
+    """★스레드에서 도는 동기 함수★ — 상류 3곳을 차례로. (data, name, errs) 를 돌려준다.
+    (2026-09-12) 예전엔 이 루프가 async 핸들러 안에서 ★동기★ 로 돌아 최악 45초 동안
+    서버 전체를 세웠다. 무인증 경로라 아무나 그걸 시킬 수 있었다."""
+    import httpx as _hx
+    errs = []
+    for name, url in sources:
+        try:
+            r = _hx.get(url, timeout=15.0, follow_redirects=True,
+                        headers={"Accept": "application/vnd.github.raw"}
+                        if name == "ghapi" else None)
+        except Exception as e:
+            errs.append(f"{name}:{e.__class__.__name__}")
+            continue
+        if r.status_code == 200 and r.content:
+            return r.content, name, errs
+        errs.append(f"{name}:{r.status_code}")
+    return None, "", errs
 
 
 @app.get("/img/{fname}")
@@ -10656,7 +10746,7 @@ async def serve_image(fname: str):
         if time.time() - _t <= _IMG_CACHE_TTL:
             _want = None
             try:
-                _want = (_load_version_json() or {}).get("images", {}).get(fname)
+                _want = ((await _load_version_json_async()) or {}).get("images", {}).get(fname)
             except Exception:
                 _want = None
             # 기대 해시를 모르면(매니페스트에 없는 파일) TTL 만으로 판단한다
@@ -10680,29 +10770,24 @@ async def serve_image(fname: str):
             ("jsdelivr", f"https://cdn.jsdelivr.net/gh/{_repo}@main/images2/{_q}"),
             ("ghapi", f"https://api.github.com/repos/{_repo}/contents/images2/{_q}?ref=main"),
         ]
-        data = None
-        _errs = []
-        import httpx as _hx
-        for _name, _url in _sources:
-            try:
-                r = _hx.get(_url, timeout=15.0, follow_redirects=True,
-                            headers={"Accept": "application/vnd.github.raw"}
-                            if _name == "ghapi" else None)
-            except Exception as _e:
-                _errs.append(f"{_name}:{_e.__class__.__name__}")
-                continue
-            if r.status_code == 200 and r.content:
-                data = r.content
-                if _name != "raw":
-                    print(f"[img] {fname} — raw 실패 → {_name} 로 받음", flush=True)
-                break
-            _errs.append(f"{_name}:{r.status_code}")
+        # ★매니페스트에 없는 이름은 상류를 안 찌른다 (2026-09-12)★ — 무인증 경로라
+        #   아무 이름이나 던지면 GitHub API 60회/시 한도까지 우리가 대신 써버렸다.
+        #   업데이터가 요청하는 이름은 전부 version.json 의 images 에 있다.
+        #   매니페스트를 못 읽은 판(빈 dict)은 예전처럼 통과시킨다(함대가 멈추면 안 된다).
+        _manifest = ((await _load_version_json_async()) or {}).get("images") or {}
+        if _manifest and fname not in _manifest:
+            raise HTTPException(status_code=404)
+        data, _name, _errs = await asyncio.to_thread(_fetch_image_upstream, fname, _sources)
         if data is None:
             print(f"[img] {fname} 전 상류 실패: {_errs}", flush=True)
             raise HTTPException(status_code=404)
-        if len(_IMG_PROXY_CACHE) > 80:
-            _IMG_PROXY_CACHE.clear()
+        if _name != "raw":
+            print(f"[img] {fname} — raw 실패 → {_name} 로 받음", flush=True)
         _IMG_PROXY_CACHE[fname] = (data, hashlib.sha256(data).hexdigest(), time.time())
+        # ★가장 오래 담긴 것부터 하나씩★ — 통째로 비우지 않는다
+        while len(_IMG_PROXY_CACHE) > _IMG_CACHE_MAX:
+            _oldest = min(_IMG_PROXY_CACHE, key=lambda k: _IMG_PROXY_CACHE[k][2])
+            _IMG_PROXY_CACHE.pop(_oldest, None)
     return Response(content=data, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
@@ -10718,12 +10803,14 @@ async def check_purge(request: Request):
     ★캐시를 없애지는 않는다★ — 함대 21대가 5분마다 찌르는 걸 전부 GitHub raw 로
     보내면 rate limit 에 걸린다. ★비우는 문만 열어둔다.★
     """
-    if not check_api_key(request):
+    # ★main 키만 (2026-09-12)★ — 이 캐시는 테넌트 구분이 없는 ★전역★ 이라 지인 키로도
+    #   전 함대의 /check 응답을 흔들 수 있었다. 배포 스크립트는 main 키를 쓴다.
+    if check_api_key(request) != "main":
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     _old = ((_version_cache.get("data") or {}).get("exe") or {}).get("version")
     _version_cache["data"] = {}
     _version_cache["ts"] = 0
-    _new = (_load_version_json().get("exe") or {}).get("version")
+    _new = ((await _load_version_json_async()).get("exe") or {}).get("version")
     return {"ok": True, "was": _old, "now": _new}
 
 
@@ -10756,7 +10843,7 @@ async def updater_check(request: Request):
     elif key_tenant == "main":
         client_edition = "main"
 
-    ver = _load_version_json()
+    ver = await _load_version_json_async()
     result: dict = {}
 
     # exe 업데이트 체크 (에디션별 채널)
@@ -11057,6 +11144,12 @@ _ROT_SAVED = ""                       # 마지막으로 DB 에 쓴 직렬화본(
 #   ★사유 없이 사라진 것만★ 텔레그램으로 튀어나온다.
 _ROT_SEEN: set = set()                # 직전에 무장돼 있던 키들
 _ROT_GONE_WHY: dict = {}              # key -> 정상 해제 사유 (한 번 쓰고 소비)
+# ★단계 함수가 지금 들고 있는 무장 (2026-09-12 전수조사 G2)★ — _rot_stop 이 st 없이
+#   불릴 때 「내가 방금 보던 그 무장인가」를 확인할 재료. 엔진은 PC 를 ★순차로★ 돌므로
+#   한 칸이면 된다. (호출부 18곳에 st= 를 일일이 붙이는 대신 자원 쪽에서 한 번에, §A11)
+_ROT_STEP_CUR: dict = {"key": None, "st": None}
+ROT_ERR_ALARM_N = 3                   # 같은 PC 단계가 이만큼 연속 터지면 사람에게 알린다
+ROT_BOOT_GRACE_S = 25                 # 엔진이 부팅 직후 첫 틱 전에 기다리는 초(상태 보고가 채워질 여유)
 
 
 def _rot_now() -> float:
@@ -11158,6 +11251,7 @@ async def _rot_load() -> None:
     미완 슬롯이 없어 감시기에도 안 걸린다 — 완전 무음. 그래서 복원 결과를 반드시 남긴다.
     """
     global _ROT_SAVED
+    raw = None
     try:
         raw = await get_setting(ROT_KEY)
         if not raw:
@@ -11173,7 +11267,24 @@ async def _rot_load() -> None:
         _ROT_SAVED = raw
         print(f"[순환] 복원 {len(_ROT)}대: {sorted(_ROT)} / 부팅지문 {len(_ROT_BOOT)}건")
     except Exception as e:
-        print(f"[순환] 복원 실패(무시): {e}")
+        # ★깨진 저장본을 따로 보관하고 사람에게 알린다 (2026-09-12 전수조사 F4)★
+        #   초판은 print 뿐이었고, 그러면 _ROT 가 빈 채로 다음 _rot_save 가 ★깨진 blob 을
+        #   빈 상태로 덮어써★ 복구 가능성까지 없앴다. 독스트링이 「반드시 남긴다」고 한
+        #   그 자리에 사람에게 닿는 채널이 없었다.
+        print(f"[순환] ★복원 실패★ 저장본을 {ROT_KEY}.broken 에 보관: {e}")
+        try:
+            if raw:
+                await set_setting(ROT_KEY + ".broken", str(raw)[:200000])
+        except Exception:
+            pass
+        try:
+            _chat = (TENANTS.get("main") or {}).get("chat_id") or ""
+            if _chat and tg_enabled():
+                await tg_send_text(_chat, "🚨 서버 재시작 — 순환 상태 복원에 실패했습니다. "
+                                          "무장해둔 PC 는 ▶시작을 다시 눌러야 합니다 "
+                                          f"({e.__class__.__name__})")
+        except Exception:
+            pass
 
 
 async def _rot_allow(tenant: str = "main") -> set:
@@ -11223,11 +11334,23 @@ async def _rot_say(tenant: str, pc_id: str, text: str,
     #   A2("증거를 붙인다")가 통째로 무너진다.
     _chat = (TENANTS.get(tenant) or {}).get("chat_id") or ""
     _will_send = (bool(_chat) and tg_enabled()
-                  and (hard or (not routine and not _tg_muted(base))))
+                  and (hard or (not routine and not _tg_muted(tenant, base))))
     # ★로그는 '왜' 안 보냈는지도 말해야 한다 (§A2)★ — 초판은 routine 무음까지
     #   "음소거/미설정" 이라고 적어 ★이유를 거짓으로★ 말했다. 나중에 "왜 안 왔지" 를
     #   추적할 때 엉뚱한 곳(테넌트 chat_id·PC 음소거)을 파게 된다.
-    _why = ("중계 전송" if _will_send
+    # ★보낸 뒤에 적는다 (2026-09-12 전수조사 G4)★ — 초판은 보내기 ★전에★ 「중계 전송」
+    #   이라 적어서, 텔레그램이 죽어도 로그는 「보냈다」였다. 감시기(watch_all)는 그
+    #   문자열로 알람을 줍는다 = 사람은 못 받았는데 기록은 받은 것으로(§A2).
+    _sent_ok, _send_err = False, ""
+    if _will_send:
+        try:
+            _mid = await tg_send_text(_chat, f"🔁 {base} · {text}")
+            _sent_ok = _mid is not None
+            if not _sent_ok:
+                _send_err = "mid=None"
+        except Exception as _se:
+            _send_err = _se.__class__.__name__
+    _why = (("중계 전송" if _sent_ok else f"중계 실패({_send_err})") if _will_send
             else "중계 생략(진행중계·routine)" if routine
             else "중계 생략(음소거/미설정)")
     _line = f"[{_ts}] [텔레그램] {_why}: {base} | [순환] {text}"
@@ -11242,13 +11365,18 @@ async def _rot_say(tenant: str, pc_id: str, text: str,
             await insert_log(ns(tenant, _t), "warn" if hard else "info", _line)
         except Exception:
             pass
+    # ★⛔·🚨 는 대시보드 배너·음성에도 (2026-09-12)★ — 효율 감시(_eff_say)는 같은 급의
+    #   사건에 push_alert 를 부르는데 순환 정지만 텔레그램뿐이었다. 텔레그램이 죽은 5분 동안
+    #   3대가 ⛔ 정지해도 화면엔 아무것도 안 떴다.
+    if hard:
+        try:
+            await push_alert(tenant, base, "rot", f"[순환] {text}", speak=True, say=str(text)[:60])
+        except Exception:
+            pass
     if not _will_send:
         print(f"[순환] {base} 텔레그램 생략(음소거/미설정): {text}")
-        return
-    try:
-        await tg_send_text(_chat, f"🔁 {base} · {text}")
-    except Exception as e:
-        print(f"[순환] 텔레그램 실패(무시): {e}")
+    elif not _sent_ok:
+        print(f"[순환] {base} 텔레그램 실패({_send_err}): {text}")
 
 
 async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = None) -> bool:
@@ -11315,6 +11443,7 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
     #   시작은 ★사냥(hunting)★ 이다 — 캐릭터를 다 돌고 나서 plan 을 편다.
     #   그래서 stage 는 작업 순환이 아니라 완주 순환과 같은 hunting 으로 연다.
     _stage0 = "hunting" if (full or not task) else "tasking"
+    _ROT_GONE_WHY.pop(key, None)   # ★재무장 — 옛 해제 사유가 남아 소실 감시를 눈멀게 하지 않게 (2026-09-12)★
     _ROT[key] = {"stage": _stage0, "since": _rot_now(),
                  "armed_at": _rot_now(), "expect_restart": False, "target": "",
                  "day": _kst_today_key(),   # ★게임일 [C3]★
@@ -11638,7 +11767,12 @@ async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) ->
     (지금은 호출 직전에 await 가 없어 사고가 안 나지만, 하나만 생겨도 주인님이 방금
      다시 누른 무장을 지우게 된다)."""
     key = ns(tenant, base)
+    if st is None and _ROT_STEP_CUR.get("key") == key:
+        st = _ROT_STEP_CUR.get("st")           # ★단계 함수가 보고 있던 그 무장★ (2026-09-12)
     if st is not None and _ROT.get(key) is not st:
+        # ★그 사이 주인님이 다시 무장했다★ — 옛 판단으로 새 무장을 지우지 않는다.
+        #   독스트링은 「호출 직전에 await 가 없다」고 적었지만 실제로는 5곳이 await 뒤였다.
+        print(f"[순환] {base} 정지 요청이 ★옛 무장★ 을 가리켜 무시했다(그 사이 재무장): {msg}")
         return
     _ROT_GONE_WHY[key] = "rot_stop: " + str(msg or "")[:40]   # ★소실 감시가 오탐하지 않게★
     _ROT.pop(key, None)
@@ -12544,7 +12678,7 @@ async def _rot_progress_fp(tenant: str, active: dict) -> str:
 async def _rot_engine() -> None:
     """계정 자동순환 엔진 — 무장된 PC 만 본다. 무장이 없으면 아무 일도 안 한다."""
     await _rot_load()
-    await asyncio.sleep(25)              # 부팅 직후 상태가 채워질 여유
+    await asyncio.sleep(ROT_BOOT_GRACE_S)   # 부팅 직후 상태가 채워질 여유 (상수로 — 시험이 0 으로 놓는다)
     print("[순환] 엔진 시작")
     while True:
         try:
@@ -12572,10 +12706,26 @@ async def _rot_engine() -> None:
                         st = _ROT.get(ns(tenant, base))
                         if not st:
                             continue
+                        _ROT_STEP_CUR.update(key=ns(tenant, base), st=st)
                         try:
                             await _rot_step_pc(tenant, base, st, pcs)
+                            st["err_n"] = 0
                         except Exception as e:
-                            print(f"[순환] {base} 단계 예외(무시): {e}")
+                            # ★삼키되 세고, 계속 터지면 알린다 (2026-09-12 전수조사 F2)★
+                            #   상한 알람(14시간·무진전)이 ★_rot_step_pc 안에★ 살아서,
+                            #   단계가 매 틱 예외로 죽으면 알람도 같이 죽고 카드엔 🔁 만 남았다.
+                            st["err_n"] = int(st.get("err_n") or 0) + 1
+                            st["err_last"] = f"{e.__class__.__name__}: {str(e)[:120]}"
+                            print(f"[순환] {base} 단계 예외({st['err_n']}회 연속): {st['err_last']}")
+                            if st["err_n"] == ROT_ERR_ALARM_N:
+                                try:
+                                    await _rot_say(tenant, base,
+                                                   f"🚨 순환 엔진이 이 PC 단계에서 {ROT_ERR_ALARM_N}틱 연속 "
+                                                   f"터집니다 — 상한 알람도 같이 멈춰 있습니다: {st['err_last']}")
+                                except Exception:
+                                    pass
+                        finally:
+                            _ROT_STEP_CUR.update(key=None, st=None)
                 await _rot_save()
         except Exception as e:
             print(f"[순환] 엔진 예외(무시): {e}")
@@ -12585,9 +12735,7 @@ async def _rot_engine() -> None:
 # ── 조회 / 수동 조작 ─────────────────────────────────────────────────────────
 @app.get("/rotate")
 async def rotate_list(request: Request):
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     out = {}
     for k, st in list(_ROT.items()):
         t, raw = split_ns(k)
@@ -12601,9 +12749,7 @@ async def rotate_list(request: Request):
 @app.post("/rotate/allow")
 async def rotate_allow(request: Request):
     """카나리아 게이트 설정 — body {"pcs": "PC-10,PC-20"} 또는 {"pcs": "*"}."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     try:
         body = await request.json()
     except Exception:
@@ -12618,9 +12764,7 @@ async def rotate_allow(request: Request):
 @app.post("/rotate/{pc_id}")
 async def rotate_set(pc_id: str, request: Request):
     """순환 수동 on/off — body {"on": true|false}."""
-    tenant = check_session(request)
-    if not tenant:
-        raise HTTPException(status_code=401)
+    tenant = _require_session(request)
     try:
         body = await request.json()
     except Exception:
@@ -12685,8 +12829,15 @@ def _fv_guard(request: Request):
     """통과하면 None, 아니면 JSONResponse. ★세션·쿠키·429 를 일절 안 본다.★"""
     if not FV_TOKEN:
         return _fv_err(404, "Not Found")          # 토큰 미설정 = API 전체를 숨긴다
+    # ★추측 카운터를 API 키와 공유한다 (2026-09-12)★ — 이 토큰 하나로 함대 명령이
+    #   나가는데 락아웃이 0 이었다. 성공하면 카운터를 안 건드리므로 정상 폴링은 무관하다.
+    _ip = _ip_from_xff(request.headers.get("x-forwarded-for", ""),
+                       request.client.host if request.client else "")
+    if _key_probe_blocked(_ip):
+        return _fv_err(429, "too many attempts")
     supplied = (request.headers.get("X-FV-Token") or "").encode("utf-8", "replace")
     if not hmac.compare_digest(supplied, FV_TOKEN.encode("utf-8", "replace")):
+        _key_probe_failed(_ip)
         return _fv_err(401, "X-FV-Token 이 올바르지 않습니다")
     return None
 
@@ -12837,7 +12988,10 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     FarmView 가 못 보는 일이 없게."""
     st = str(row.get("status") or "offline")
     dp = row.get("daily_progress") or []
-    done = sum(1 for d in dp if d.get("completed"))
+    # ★대시보드와 같은 완료 규칙 (2026-09-12 전수조사 H2)★ — completed 플래그는 늙지 않아
+    #   서버가 today 를 얹는다(_build_full_state). 화면 dpDone 은 `completed && today!==false`
+    #   인데 여기만 completed 만 봐서 ★어제 완주가 오늘 완주로★ 읽혔다.
+    done = sum(1 for d in dp if d.get("completed") and d.get("today") is not False)
     return {
         "pc_id":       row.get("pc_id"),
         "online":      st != "offline",
@@ -12920,6 +13074,7 @@ async def _fv_build_snapshot() -> dict:
     vers: dict = {}
     total_kina = 0
     total_bugs = 0
+    _bug_seen: set = set()     # ★PC 단위로 한 번만★ — _bug_count 는 물리 PC 값을 계정 카드마다 복사한 것
     online = 0
     tot4 = {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0, "awakening_ticket": 0}
     for r in rows:
@@ -12940,7 +13095,10 @@ async def _fv_build_snapshot() -> dict:
         except Exception:
             pass
         try:
-            total_bugs += int(r.get("_bug_count") or 0)
+            _bb = _base_pc(str(r.get("pc_id") or ""))
+            if _bb not in _bug_seen:          # (2026-09-12 H4) 카드 72장 합산이 실제 장수의 ~3배였다
+                _bug_seen.add(_bb)
+                total_bugs += int(r.get("_bug_count") or 0)
         except Exception:
             pass
 
@@ -13093,7 +13251,16 @@ async def fv_events(request: Request, since: str = "", limit: int = 500):
 
     events.sort(key=lambda e: (str(e.get("at") or ""), str(e.get("type"))))
     truncated = len(events) > limit
-    events = events[:limit]
+    if truncated:
+        # ★같은 초의 이벤트를 반으로 자르지 않는다 (2026-09-12 전수조사 H5)★
+        #   next_since 는 초 단위이고 다음 조회는 `created_at > since` 라, 잘려나간 쪽은
+        #   다음 판에도 ★영영★ 안 온다. 경계 초에 걸린 것은 통째로 다음 장으로 미룬다.
+        #   전부 같은 초면(미룰 수 없으면) 예전처럼 자른다.
+        _cut_at = str(events[limit - 1].get("at") or "")
+        _keep = [e for e in events[:limit] if str(e.get("at") or "") != _cut_at]
+        events = _keep if _keep else events[:limit]
+    else:
+        events = events[:limit]
     next_since = events[-1]["at"] if events else s_since
     return _fv_json(request, {"since": s_since, "next_since": next_since,
                               "count": len(events), "truncated": truncated,
