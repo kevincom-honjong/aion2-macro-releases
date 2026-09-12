@@ -2901,10 +2901,20 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <!-- 그룹 4: 거래 -->
   <div class="cmd-group">
     <span class="cmd-legend">TRADE</span>
-    <!-- 가격은 프리셋만(2026-07-30) — 매크로가 이 6종의 이미지 템플릿으로 입력을 검증한다.
-         자유 입력을 열면 템플릿이 없는 가격이 들어와 검증이 OCR로 떨어진다. -->
+    <!-- 가격은 프리셋만(2026-07-30) — 자유 입력을 열면 폭탄가가 들어온다.
+         ★2026-09-12 주인님: 「99999 까지 만들어놔」★ → 아래쪽 6종(99,999~149,999)을 더해 12종.
+         상단 6종(159,999~209,999)만 saleprice_*.png 2중 게이트가 있고, 새 6종은 템플릿이
+         아직 없어 sale.py::_sell_verify_price_img 가 False(=미확정) → ★기존 OCR 검증으로
+         폴백★ 한다(판정 공백 없음, 그 함수 독스트링). 새 가격으로 실제 판매를 한 번 돌리면
+         넘패드 크롭을 수확해 템플릿 12장을 채운다. -->
     <span class="price-wrap"><span class="price-k">₭</span><select id="sale-price" title="거래소 등록 가격 (전체 공통) — 확정하면 사이트 닫았다 열어도 유지">
       <option value="">가격 선택</option>
+      <option value="99999">99,999</option>
+      <option value="109999">109,999</option>
+      <option value="119999">119,999</option>
+      <option value="129999">129,999</option>
+      <option value="139999">139,999</option>
+      <option value="149999">149,999</option>
       <option value="159999">159,999</option>
       <option value="169999">169,999</option>
       <option value="179999">179,999</option>
