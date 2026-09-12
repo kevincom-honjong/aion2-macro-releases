@@ -422,9 +422,15 @@ def load_local_version() -> dict:
 
 
 def save_local_version(data: dict):
+    # ★2026-09-12★ 직접 open('w') 였다 — 쓰다 죽으면 load_local_version 이 0.0.0 으로 읽어
+    #   exe 74MB + 이미지 469장을 통째로 다시 받는다(자가치유지만 비싸다). 임시파일→replace.
     try:
-        with open(LOCAL_VERSION, 'w', encoding='utf-8') as f:
+        tmp = LOCAL_VERSION + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, LOCAL_VERSION)
     except Exception as e:
         err(f"[버전] 저장 실패: {e}")
 

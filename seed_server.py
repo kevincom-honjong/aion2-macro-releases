@@ -241,7 +241,8 @@ def _snapshot_loop():
             ver = _remote_version_json(max_age=SNAP_EVERY)
             if ver is None:
                 try:
-                    ver = json.load(open(VERSION_JSON, encoding='utf-8'))
+                    with open(VERSION_JSON, encoding='utf-8') as _vf:
+                        ver = json.load(_vf)
                 except Exception:
                     ver = None
             if ver is not None:
@@ -436,7 +437,8 @@ class Handler(BaseHTTPRequestHandler):
         _src = 'origin'
         if ver is None:
             try:
-                ver = json.load(open(VERSION_JSON, encoding='utf-8'))
+                with open(VERSION_JSON, encoding='utf-8') as _vf:
+                    ver = json.load(_vf)
                 _src = 'local'
             except Exception:
                 self.send_error(503)
