@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.954",
+    "version": "1.1.955",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "9bd8446f3d7524e0514f99b3c81f02b8df07290ce84a6a98c6bea633471ce720",
+    "sha256": "6b00a40537ba58b0b749af54209e10f2e7798a96936df4d0e0709d4e02d0162f",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -18,6 +18,7 @@
     "F_3.png": "63f5bbf1f10ee3dc03e5326bb10a99c0e12612ea28a373c5c821fa4edb7bf5e8",
     "F_4.png": "442c11e477e019550039a2d776e6968b77a48969c1a18aa1a2f101b2f6b25eb2",
     "abyss_1400.png": "dc66710c7d978fedd944d96e0c224708f02a3b8422d75d234963084a1d8ed970",
+    "abyss_npc_btn.png": "35961dc1c36c151a96efc31450de8c74a0f32852d92104314215667519875c0d",
     "arcana_title.png": "f921a005325a0605b79ff0df783bc858f051e2fd3524ca8cdc400106ad128873",
     "attendance.png": "7c03914cbf9308c53fb0129781fcdd80d2cca2f24134f3998b491f35196b7622",
     "attendance_close.png": "cde2541b7f726126a62e8bf9aea724a70dd843b57ada9fadc6ad5bab70023294",
@@ -481,11 +482,11 @@
     "sha256": "7da084df9553bf6dd41d892b243383b8bf2ce131dd483751535ea0e8e378a7c6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260911141253",
-  "updated_at": "2026-09-12T19:09:37",
+  "images_version": "20260912222634",
+  "updated_at": "2026-09-12T22:26:34",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.954",
+    "version": "1.1.955",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
