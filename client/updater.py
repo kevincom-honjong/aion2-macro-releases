@@ -2071,10 +2071,35 @@ def _view_grab_jpeg(quality: int = 55, scale: float = 1.0):
         return None
 
 
+def _info_kv() -> dict:
+    """info.txt 의 key=value 전부 (없으면 {})."""
+    kv = {}
+    try:
+        with open(INFO_TXT, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                if "=" in ln:
+                    k, v = ln.split("=", 1)
+                    kv[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return kv
+
+
 def _view_local_ip() -> str:
-    """내부망 IP — live.py 와 같은 규칙(외부로 가는 소켓의 로컬 주소)."""
+    """내부망 IP — ★live.py 와 같은 규칙★: info.txt `lan_prefix`(예 172.30.1.) 에 맞는 내 주소를 먼저 고른다.
+    (2026-09-13 실측) 옛 규칙(외부로 가는 소켓의 로컬 주소)은 인터넷 경로 어댑터(192.168.x)를 골라, 함대 카드의
+    _view_url 이 거의 전부 관제컴(172.30.1.x)에서 못 여는 주소였다. 매크로 8765(lan_url)는 lan_prefix 로 맞게 골랐다."""
     try:
         import socket
+        prefix = (_info_kv().get("lan_prefix") or "").strip()
+        if prefix:
+            ips = set()
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ips.add(info[4][0])
+            hits = sorted(ip for ip in ips if ip.startswith(prefix))
+            if len(hits) == 1:
+                return hits[0]
+            log(f"[보기] lan_prefix={prefix} 로 고른 결과가 {hits} (1개여야 함) → 인터넷 경로 주소로 폴백")
         sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sk.connect(("8.8.8.8", 80))
