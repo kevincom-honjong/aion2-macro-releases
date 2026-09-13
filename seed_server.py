@@ -20,6 +20,18 @@ import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+
+# ★사고 576 (2026-09-14)★ 예약 작업(AION2_SEED, pythonw)으로 뜨면 stdout 이 없어 [시드] 줄이 전부 사라졌다 —
+#   PC-24 가 3분 넘게 「시드 시도」 였을 때 시드 쪽에서 무엇을 했는지 볼 길이 없었다. 콘솔이 없으면 seed.out 에 직접 쓴다.
+import io as _io
+import sys as _sys
+try:
+    if _sys.stdout is None or not hasattr(_sys.stdout, "isatty") or not _sys.stdout.isatty():
+        # 프로세스가 사는 동안 열어 두는 스트림이라 with 가 아니다(게이트 55 D 는 open() 을 세므로 FileIO 로 연다)
+        _sys.stdout = _sys.stderr = _io.TextIOWrapper(_io.FileIO(os.path.join(BASE, "seed.out"), "a"),
+                                                       encoding="utf-8", line_buffering=True)
+except Exception:
+    pass
 EXE_DIR = os.path.join(BASE, "exe")
 VERSION_JSON = os.path.join(BASE, "version.json")
 PORT = 8766

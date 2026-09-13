@@ -578,6 +578,8 @@ def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
         _t0 = time.time()
         _last_prog = _t0            # ★사고 495★ 마지막으로 바이트가 온 시각
         _slow = ""
+        _total = int(r.headers.get("content-length") or 0)
+        _next_say = _t0 + 15.0      # ★사고 576 (2026-09-14 07:00 PC-24)★ 진행 로그가 없어 3분 13초가 「멈춤」으로 보였고 주인님이 손으로 재시작
         with open(tmp_path, 'wb') as f:
             for chunk in r.iter_content(chunk_size=65536):
                 _now = time.time()
@@ -585,6 +587,11 @@ def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
                     f.write(chunk)
                     written += len(chunk)
                     _last_prog = _now
+                if _now >= _next_say:                       # 15초마다 한 줄 — 대시보드에서 「받고 있다」가 보이게
+                    _next_say = _now + 15.0
+                    _pct = f"{written * 100 // _total}%" if _total else "?%"
+                    log(f"[다운로드] 시드 진행 {_pct} {written / 1048576:.1f}MB "
+                        f"{written / 1048576 / max(_now - _t0, 0.001):.2f}MB/s (상한 {SEED_MAX_S:.0f}초, 멈춤 {SEED_STALL_S:.0f}초)")
                 _slow = seed_slow_reason(written, _now - _t0, _now - _last_prog)
                 if _slow:
                     break
