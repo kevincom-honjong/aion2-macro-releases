@@ -2073,16 +2073,13 @@ def _view_grab_jpeg(quality: int = 55, scale: float = 1.0):
 
 def _info_kv() -> dict:
     """info.txt 의 key=value 전부 (없으면 {})."""
-    kv = {}
     try:
         with open(INFO_TXT, encoding="utf-8", errors="replace") as f:
-            for ln in f:
-                if "=" in ln:
-                    k, v = ln.split("=", 1)
-                    kv[k.strip()] = v.strip()
+            lines = f.read().splitlines()
     except Exception:
-        pass
-    return kv
+        return {}
+    pairs = [ln.split("=", 1) for ln in lines if "=" in ln]
+    return {k.strip(): v.strip() for k, v in pairs}
 
 
 def _view_local_ip() -> str:
