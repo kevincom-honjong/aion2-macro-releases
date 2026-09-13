@@ -2986,6 +2986,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     </select>
     <button onclick="selCmd('abyss')" class="chip chip-blue">어비스</button>
     <button onclick="selCmd('corridor')" class="chip chip-blue" title="어비스 회랑 순회 — 전 캐릭 (하층+중층 우리 진영 아티팩트), 진입=완료, 미완만 재개">회랑</button>
+    <button onclick="selCmd('surface')" class="chip chip-blue" title="표층 준비 — 왼쪽 캐릭부터 장비전투력 ≤4,300·파워 ≤400K·기본 이용 시간이 00:00:00 이 아닌 캐릭으로 어비스 표층에 들어가 준비완료 알람 1건. 어느 화면에서 눌러도 됨 (사고 574, 1.1.961+)">표층</button>
     <button onclick="selCmd('collect_info')" class="chip chip-sky">정보수집</button>
   </div>
 
@@ -3606,6 +3607,7 @@ const CMD_TRACK = {
   nightmare:       {t:'😈 악몽',          ttl:180000, exp:['nightmare','nightmare_wait']},
   awakening:       {t:'⚔ 각성전',         ttl:180000, exp:['awakening','awakening_wait']},
   corridor:        {t:'🌀 회랑',          ttl:180000, exp:['corridor']},
+  surface:         {t:'🏔 표층',          ttl:600000, exp:['abyss','idle','hunting','corridor','paused']},   // 사고 574 — 매크로는 새 상태를 안 보낸다(기존 어휘)
   abyss:           {t:'🌌 어비스',        ttl:180000, exp:['abyss']},
   // ★사고 392★ 순회의 전환 구간은 이제 acct_switching 을 보고한다 — 안 넣으면
   //   전환 중인데 「기대 상태 미도달」로 보인다(캐릭 전환과 라벨을 갈랐기 때문).
@@ -3623,7 +3625,7 @@ const CMD_TRACK = {
 // ★칩을 안 띄우는 명령★ — 라이브 화면·로그 요청처럼 사람이 결과를 즉시 눈으로 보는 것들.
 //   여기에까지 칩을 띄우면 라이브를 켤 때마다 카드가 깜빡여 ★진짜 신호를 가린다.★
 const CMD_SILENT = ['live_on','live_off','get_logs','request_logs','set_slot_filter',
-                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor'];
+                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor','stop_surface'];
 
 let pendingCmds = {};   // base(물리 PC) → 진행 표시 1건. 같은 PC 에 새 명령이 오면 ★덮어쓴다★
                         //   (누적하면 영영 안 지워진다 — 그 PC 의 매크로는 어차피 한 대뿐이다)
@@ -8092,6 +8094,7 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
             <button onclick="sendCmd('${pc}','corridor')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap">회랑</button>
+            <button onclick="sendCmd('${pc}','surface')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap" title="표층 준비 (사고 574)">표층</button>
             <button onclick="sendCmd('${pc}','awakening')" class="px-1.5 py-0.5 text-xs rounded bg-violet-900/60 hover:bg-violet-700 text-violet-300 whitespace-nowrap">각성전</button>
             <button onclick="sendCmd('${pc}','prepare')" class="px-1.5 py-0.5 text-xs rounded bg-amber-900/60 hover:bg-amber-700 text-amber-300 whitespace-nowrap" title="정산→추출→창고→정렬→귀환주문서">준비</button>
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
