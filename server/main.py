@@ -3625,7 +3625,7 @@ const CMD_TRACK = {
 // ★칩을 안 띄우는 명령★ — 라이브 화면·로그 요청처럼 사람이 결과를 즉시 눈으로 보는 것들.
 //   여기에까지 칩을 띄우면 라이브를 켤 때마다 카드가 깜빡여 ★진짜 신호를 가린다.★
 const CMD_SILENT = ['live_on','live_off','get_logs','request_logs','set_slot_filter',
-                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor','stop_surface'];
+                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor','stop_surface','netprobe'];
 
 let pendingCmds = {};   // base(물리 PC) → 진행 표시 1건. 같은 PC 에 새 명령이 오면 ★덮어쓴다★
                         //   (누적하면 영영 안 지워진다 — 그 PC 의 매크로는 어차피 한 대뿐이다)
@@ -8095,6 +8095,7 @@ function renderCharTable() {
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
             <button onclick="sendCmd('${pc}','corridor')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap">회랑</button>
             <button onclick="sendCmd('${pc}','surface')" class="px-1.5 py-0.5 text-xs rounded bg-indigo-900/60 hover:bg-indigo-700 text-indigo-300 whitespace-nowrap" title="표층 준비 (사고 574)">표층</button>
+            <button onclick="sendCmd('${pc}','netprobe')" class="px-1.5 py-0.5 text-xs rounded bg-slate-800/60 hover:bg-slate-600 text-slate-300 whitespace-nowrap" title="넷프로브 — 이 PC 에서 캡차 업체·관제 서버로 작은/큰(200KB) 요청을 재서 로그 [넷프로브] 4줄 (사냥 안 세움, 사고 579, 1.1.965+)">넷프로브</button>
             <button onclick="sendCmd('${pc}','awakening')" class="px-1.5 py-0.5 text-xs rounded bg-violet-900/60 hover:bg-violet-700 text-violet-300 whitespace-nowrap">각성전</button>
             <button onclick="sendCmd('${pc}','prepare')" class="px-1.5 py-0.5 text-xs rounded bg-amber-900/60 hover:bg-amber-700 text-amber-300 whitespace-nowrap" title="정산→추출→창고→정렬→귀환주문서">준비</button>
             <button onclick="sendCmd('${pc}','collect_info')" class="px-1.5 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap">정보수집</button>
