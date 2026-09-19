@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.979",
+    "version": "1.1.980",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "9496ccf718cf9e22ed9b509d8322f109162c77ef18c1601ac0a5d452df129b9e",
+    "sha256": "2408f0a75f4a093364d2bf7722ccd93b2dd1950afc5b356c2e12ad1a24db8354",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -393,6 +393,8 @@
     "saleprice_199999_d.png": "04cec3597f9695be198a7b5a7a21d89b969074a48aaf0a7cb4890d29fbfce2c6",
     "saleprice_209999.png": "59368ad190eadd647c9967480734e25f4b1e8bcfc20f2db6473b8ba03372ae2c",
     "saleprice_209999_d.png": "ca83b88dc2436462dec4e48cc98cdb2e490a1af8a4fd82ac83c72b2310217679",
+    "saleprice_89999.png": "97f6d601ede9f5db13c412b949a6ac855b19f847e2df93d51ff8c9bf7df09388",
+    "saleprice_89999_d.png": "e90d443a0372abbb689a01bf1409ea8d623020d65aa7506d8b853bd8a4ced5b3",
     "salsung.png": "dc82316086f80a1a061713696e67d33851ce485a94ae9a3af166bfdf7ed77437",
     "salsung_1.png": "56156b8269b5d3769908ccc24de26682fdbcee276edec725e8d5df82ad5fae75",
     "salsung_5.png": "d3d21332926bc079e11a269bb6d72d617b0fdf465f6c71f4e8941b8acde9d1ed",
@@ -486,11 +488,11 @@
     "sha256": "7da084df9553bf6dd41d892b243383b8bf2ce131dd483751535ea0e8e378a7c6",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20260917155827",
-  "updated_at": "2026-09-18T20:55:28",
+  "images_version": "20260919032659",
+  "updated_at": "2026-09-19T03:26:59",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.979",
+    "version": "1.1.980",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
