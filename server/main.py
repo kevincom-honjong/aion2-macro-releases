@@ -4265,6 +4265,25 @@ function isAwakenDone(pc_id){
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
   return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
 }
+// ★★사고 610 (2026-09-20 주인님)★★ 표층 이용 시간이 0 인 캐릭은 ★카드에서 이름을 빨갛게★
+//   주인님: 「표층 시간 00:00:00 이면 … 그 이름들 빨간색으로 표시되게 해줘 글자색」
+//   근거 값은 /characters 의 abyss_time — 정보수집이 어비스 창 「기본 이용 시간」을 읽어 넣고,
+//   표층 진입에서 0 을 보면 매크로가 00:00:00 으로 merge 한다(lc/surface_zero.record, 사고 574).
+//   ★빈 값·null·'–' 는 빨강이 아니다★ — 「못 읽었다」와 「0 이다」는 다르다(사고 464).
+//   카드 payload 엔 이름만 있어서(card["chars"]) charTableData 를 pc_id+slot 으로 조인한다.
+function isSurfaceZero(v){
+  const t = String(v == null ? '' : v).trim();
+  if (!t || t === '–' || t === '-') return false;
+  return t.includes(':') && /^[0:]+$/.test(t);
+}
+function surfaceZeroSlots(pc_id){
+  const out = new Set();
+  if (!pc_id) return out;
+  for (const r of charTableData) {
+    if (r.pc_id === pc_id && isSurfaceZero(r.abyss_time)) out.add(Number(r.slot));
+  }
+  return out;
+}
 // ★구독 O/X — PC명 옆 동그라미 뱃지 (2026-08-29 주인님 요청)★
 //   판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제.
 //   ★lc/info_collector._subscribed(사고 219) · dkSubCount(3644) 와 같은 규칙·같은 파서★ —
@@ -4378,8 +4397,10 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   //   완료는 아래 슬롯 칸(✓ 초록)과 계정 탭의 ✓ 가 이미 말하고,
   //   순환은 상태 옆 칩이 이미 말한다 — 같은 말을 세 번 하면 아무것도 안 읽힌다.
   const total = dp.length;
+  const zeroSlots = surfaceZeroSlots(pc && pc.pc_id);   // ★사고 610★ 표층 시간 0 인 슬롯
   const slots = dp.map(c => {
     const done = dpDone(c);
+    const sZero = zeroSlots.has(Number(c.slot));        // ★사고 610★
     const isActive = !done && c.slot === activeSlot;
     // char_info OCR 이름 우선, 없으면 daily_progress 이름, 없으면 슬롯 번호
     const name = (charNames && charNames[c.slot-1]) || c.name || `${c.slot}`;
@@ -4393,9 +4414,9 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
     const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+time:isActive?' 진행 중':''}">
+      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+time:isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
       <span class="font-bold text-xs leading-none">${icon}</span>
-      <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap">${esc(short)}</span>
+      <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap${sZero?';color:#f87171;font-weight:700':''}">${esc(short)}</span>
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
   }).join('');
@@ -11071,7 +11092,7 @@ def _rot_boot_grace(st: dict) -> dict:
 ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 # ★사냥 단계 절대 상한★ — 예전엔 「사냥 상한 < 무장 수명(TTL)」 을 지켜야 했다.
 #   ★TTL 이 없어졌으므로(2026-09-09 주인님 지시) 이제 이 값이 사냥 단계의 유일한 상한이다.★
-ROT_HUNT_MAX     = 14 * 3600.0        # 사냥 단계 절대 상한 [S9] — 좀비 방지용
+# ★사고 611★ ROT_HUNT_MAX(사냥 단계 14시간 상한)는 없앴다 — 주인님 지시. 좀비는 `not active` 로 갈린다.
 # ══════════════════════════════════════════════════════════════════════════════
 # ★★ROT_TTL 은 없앴다 (2026-09-09 주인님 지시) — 다시 만들지 마라★★
 #   ★주인님★ 「야 이딴 좇같은건뭐냐 ★순환무장해제하게끔하지마★ 잘돌다가 꺼지는건 뭐야」
@@ -11082,7 +11103,7 @@ ROT_HUNT_MAX     = 14 * 3600.0        # 사냥 단계 절대 상한 [S9] — 좀
 #
 #   ★왜 없애도 되는가★ TTL 은 「어느 단계에서 굳었나」를 못 본다. 굳은 것은
 #   ★단계마다 붙은 상한★ 이 훨씬 먼저 잡는다:
-#       hunting  ROT_HUNT_MAX 14h · switching ROT_SWITCH_MAX · collecting 수집 상한
+#       hunting  ★상한 없음(사고 611)★ · switching ROT_SWITCH_MAX · collecting 수집 상한
 #       starting ROT_START_MAX 7분 · 전환 횟수 ROT_MAX_HOPS 12
 #   그래서 TTL 이 실제로 죽인 것은 ★멀쩡히 오래 도는 순환★ 뿐이었다.
 #
@@ -12130,10 +12151,13 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
 
     # ── ① 사냥 중 — 완주를 기다린다 ────────────────────────────────────────
     if stage == "hunting":
-        if age > ROT_HUNT_MAX:
-            await _rot_stop(tenant, base,
-                            f"⛔ 순환 정지 — 사냥 단계가 {int(age/3600)}시간째입니다. 화면 확인 필요")
-            return
+        # ★★사고 611 (주인님 2026-09-18·19 두 번) — 「아직도 순환 14시간 되면 순환 풀어버리던데
+        #   저번에 그거 없애라 했는데」★★ 사고 522 때 ★18시간 ROT_TTL 만★ 없애고 이 사냥 단계
+        #   상한(ROT_HUNT_MAX 14h)은 남겨 뒀다 — 내가 「단계별 상한은 그대로」 로 좁게 읽었다.
+        #   어비스 무한사냥·긴 사냥은 14시간을 넘기는 게 정상이라 이 상한이 ★멀쩡한 순환을 껐다.★
+        #   → 사냥 단계는 ★완주 신호로만★ 넘어간다. 좀비(매크로 죽음)는 바로 아래
+        #     `if not active: return` 이 이미 다룬다 — 상한 없이도 갈린다.
+        pass
         if not active:
             return                                   # 매크로가 죽음 = 순환이 다룰 일이 아니다
         if str(active.get("status")) != "idle" or not _rot_done(active):

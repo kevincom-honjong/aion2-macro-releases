@@ -1,0 +1,802 @@
+  @keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.5}}
+  .pulse{animation:pulse-badge 1.5s infinite;box-shadow:0 0 9px 1px currentColor}
+  .log-box{font-family:'Consolas','D2Coding',monospace}
+  .scrollbar-thin::-webkit-scrollbar{width:4px}
+  .scrollbar-thin::-webkit-scrollbar-track{background:transparent}
+  .scrollbar-thin::-webkit-scrollbar-thumb{background:linear-gradient(#6366f1,#22d3ee);border-radius:4px}
+  /* ── 카드 선택 표시 v2: 상태 글로우(초록 등)와 확실히 구분 ──
+     ① 시안 이중 링 + 배경 틴트 ② 우상단 "✔ 선택됨" 뱃지 ③ ★선택 중엔 미선택 카드 디밍★ */
+  /* ── 멀티계정 카드 스택(2026-08-15 사용자: "포커 카드 여러장처럼") ── */
+  /* ══════════════════════════════════════════════════════════════════════
+     ★★계정 탭 (2026-08-28 주인님 지시 + 직접 그린 그림)★★
+       "카드형식 이렇게 하는게 좋을거같아 ★버튼 누르기도 좇같고★ 해서 내가 직접그림
+        그리고 ★한개만있어도 1 표시★ 하게끔하면 ★다 카드 높낮이도 같을거고★"
+
+     ★무엇이 문제였나★ 예전 .stack-layer 는 뒤 카드를 18px 짜리 띠로 엿보이게 했다.
+       ① 누를 자리가 ★높이 16px 짜리 가로줄★ 이라 조준이 어렵다(주인님 원문)
+       ② 카드 위쪽 padding 이 18px×(계정수-1) 이라 ★계정 수마다 카드 높이가 달랐다.★
+          계정 1개 PC 와 5개 PC 가 한 격자에 섞이면 줄이 안 맞는다.
+     ★고침★ 브라우저 탭처럼 ★카드 위에 번호 탭★ 을 붙인다.
+       · 탭 줄 높이는 ★계정 수와 무관하게 항상 32px★ → 모든 카드가 같은 높이
+       · ★계정이 1개여도 「1」 탭을 그린다★ (주인님 명시) → 줄이 어긋나지 않는다
+       · 탭 하나가 36×26px(활성 40×29) 이라 예전 16px 띠보다 누르기 쉽다
+       ★숫자는 CSS 와 같이 고쳐야 한다★ — 첫 판이 주석 22px / 실제 30px 로 갈렸다(§A4)
+     ══════════════════════════════════════════════════════════════════════ */
+  /* ★★한 줄 안에서 카드가 같은 높이로 늘어나게 한다 (2026-08-28 적대검증 [높1])★★
+     #grid-online 은 display:grid + align-items:stretch 라 ★직계 자식★ 이 늘어난다.
+     예전엔 카드 자체가 직계 자식이라 자동으로 맞았는데, 탭 때문에 wrapper 를 끼우면서
+     wrapper 만 늘어나고 ★안쪽 카드는 auto 로 남았다★ = 이 수정의 목적과 정반대였다.
+     (적대검증 실측: 단일계정 카드 3장이 194/194/194 → 74/194/74 로 무너졌다)
+     grid-template-rows:auto 1fr 로 둘째 칸을 늘리고, 그 안에서 카드를 늘린다. */
+  /* ★★min-width:0 이 없으면 카드가 옆 카드를 덮는다 (2026-08-28 주인님 스샷)★★
+     grid item 과 flex item 의 기본값은 `min-width:auto` = ★내용 최소폭을 존중★ 이다.
+     #grid-online 은 minmax(285px,1fr) 인데, 카드 안에 긴 것(이메일 주소·계정 칩 줄)이
+     있으면 ★셀보다 넓어져 그대로 옆으로 삐져나간다.★ 예전엔 카드가 grid 직계 자식이라
+     한 겹이었는데, 탭 때문에 wrapper(grid) + .acct-body(flex) 를 끼우면서 ★세 겹★ 이
+     됐고 그만큼 잘 터진다. 세 곳 전부에 min-width:0 을 박는다.
+     ★★내가 세 번 놓친 이유 — 재는 대상이 틀렸다 (2026-08-28)★★
+     겹침을 ★wrapper 좌표★ 로만 쟀다. wrapper 는 셀에 맞아 안 겹치고
+     ★안쪽 카드★ 가 셀 밖으로 나간다. 그래서 「겹침 0」이 세 번 다 거짓이었다.
+     ★프로덕션 실측 (수정 켰다 껐다)★
+       셀 291 → 6장이 최대 39px 넘침 / 수정 적용 0장
+       셀 290 → 6장이 최대 40px 넘침 / 수정 적용 0장
+       셀 289 → 7장이 최대 40px 넘침 / 수정 적용 0장
+     주인님: "확대를 하면 안겹쳐지는데 축소하거나 기본 100%일때 겹쳐보여"
+     — 축소하면 열이 늘어 셀이 285px(최소)에 붙고, 그때 내용이 밀어낸다. */
+  .acct-stack{position:relative;display:grid;grid-template-rows:auto 1fr;min-width:0}
+  .acct-stack > .acct-body{display:flex;min-width:0}
+  .acct-stack > .acct-body > [id^="card-"]{flex:1 1 auto;width:100%;min-width:0}
+  /* ★탭 크기 = 주인님이 지적한 바로 그 문제다★ — "버튼 누르기도 좇같고".
+     예전 띠는 높이 16px. 첫 판에서 26×19px 로 만들었는데 ★실측해보니 여전히 작았다★
+     → 36×26px(활성 29px). 손가락/마우스 조준이 편해지고, 줄 높이는 30px 로 고정이라
+       ★계정 수와 무관하게 모든 카드가 같은 높이★ 라는 요구는 그대로 지킨다. */
+  /* height 는 탭(26)+활성(29)+top(1) 보다 커야 한다 — 30 이면 활성 탭 아랫변이 1px
+     잘리고 '카드에 이어 붙은' box-shadow 2px 가 통째로 클리핑된다(적대검증 [중1]) */
+  /* ★overflow 는 visible 이어야 한다★ — hidden 이면 활성 탭이 카드 쪽으로 1px 겹치는
+     것과 box-shadow 2px(카드와 이어 붙은 효과)가 통째로 잘린다(실측: 활성탭 아랫변 678
+     vs 탭줄 677). 탭은 최대 5개 x 40px + gap = 216px 이고 카드 최소폭이 285px 이라
+     가로로 넘칠 일이 없으므로 hidden 으로 막을 이유가 없다. */
+  .acct-tabs{display:flex;align-items:flex-end;gap:3px;height:32px;padding-left:10px;
+    min-width:0;overflow:visible}
+  .acct-tab{position:relative;top:1px;min-width:36px;height:26px;padding:0 10px;
+    display:inline-flex;align-items:center;justify-content:center;gap:5px;
+    font-size:13px;font-weight:800;line-height:1;letter-spacing:.02em;
+    background:#0d1424;border:1px solid #374151;border-bottom:none;
+    border-radius:9px 9px 0 0;color:#7c8aa0;cursor:pointer;
+    transition:background .15s,border-color .15s,color .15s,height .12s}
+  .acct-tab:hover{background:#16203a;border-color:#6366f1;color:#c7d2fe;height:29px}
+  /* ★지금 보고 있는 계정★ — 카드와 이어 붙은 것처럼 아래를 튼다 */
+  .acct-tab-on{height:29px;top:1px;background:#1e293b;color:#e2e8f0;
+    border-color:#4b5563;cursor:default;z-index:2;box-shadow:0 2px 0 0 #1e293b}
+  .acct-tab-on:hover{background:#1e293b;border-color:#4b5563;color:#e2e8f0;height:29px}
+  /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
+  .acct-tab-none{opacity:.38;cursor:not-allowed}
+  .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
+  /* ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님 그림 + 정정)★★ 탭 줄 ★오른쪽 끝★.
+     margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
+     탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */
+  .acct-total{margin-left:auto;margin-right:2px;flex:none;align-self:flex-end;
+    height:22px;padding:0 9px;display:inline-flex;align-items:center;gap:4px;
+    font-size:11px;font-weight:800;line-height:1;letter-spacing:.02em;white-space:nowrap;
+    background:#0d1424;border:1px solid #2b3648;border-bottom:none;
+    border-radius:9px 9px 0 0;color:#7c8aa0;cursor:default}
+  /* 캐릭 정보가 일부 계정에만 있으면(=합계가 실제보다 작을 수 있으면) 앰버로 알린다 */
+  .acct-total.acct-total-gap{color:#f59e0b;border-color:#78350f}
+  .acct-tab .tdot{width:5px;height:5px;border-radius:50%;background:#22c55e;
+    box-shadow:0 0 5px rgba(34,197,94,.9);flex:none}
+  .acct-tab .tdot-rot{background:#c084fc;box-shadow:0 0 5px rgba(192,132,252,.9)}
+  /* ★사냥 완주한 계정 탭 — 숫자 옆 초록 ✓ (2026-08-29 주인님)★
+     ★:hover / .acct-tab-on 이 color 를 다시 칠하므로 반드시 그 규칙들 ★뒤★ 에 온다.★ */
+  .acct-tab-done{background:#0c1f16;border-color:#166534;color:#4ade80}
+  .acct-tab-done:hover{background:#12301f;border-color:#22c55e;color:#86efac}
+  .acct-tab-on.acct-tab-done{background:#14311f;color:#86efac;border-color:#22c55e;
+    box-shadow:0 2px 0 0 #14311f}
+  .acct-tab-on.acct-tab-done:hover{background:#14311f;color:#86efac;border-color:#22c55e}
+  .acct-tab .tchk{font-style:normal;font-weight:900;font-size:12px;line-height:1;flex:none;
+    color:#22c55e;text-shadow:0 0 6px rgba(34,197,94,.85)}
+  .acct-tab-on .tchk,.acct-tab-done .tchk{color:#4ade80}
+  /* ★진행도·효율이 잘 안 보인다 (2026-08-29 주인님)★ 라벨을 밝히고 값을 키운다.
+     예전: 라벨 #9ca3af 14px / 값 white 14px medium → 라벨이 배경에 묻혔다. */
+  .pv-k{color:#aab6c8;font-size:12px;font-weight:600;letter-spacing:.02em}
+  .pv-v{color:#f8fafc;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+  .pv-bad{color:#f87171;text-shadow:0 0 9px rgba(248,113,113,.5)}
+  /* ★서버 이름이 안 보인다 (2026-08-29 주인님)★ 반투명 글자 → 칩.
+     ★왜 Tailwind 클래스로 안 쓰나 (2026-08-29 정정)★ 이 대시보드는 Tailwind
+     ★Play CDN★(cdn.tailwindcss.com) = 브라우저 안 JIT 다. ★그 페이지에서 처음 쓰는★
+     클래스는 DOM 감시 → 생성 순서라 ★한 프레임 뒤에★ 칠해진다(실측: bg-cyan-900/80 이
+     즉시 rgba(0,0,0,0) → 600ms 뒤 rgba(22,78,99,0.8)). 색이 곧 신호인 칩·배지는
+     그 번쩍임이 그대로 오독이 되므로 ★자기 <style> 의 클래스★ 로 둔다.
+     ※ 처음에 나는 이걸 "번들에 없어서 무시된다" 고 적었는데 ★거짓이었다★ —
+        renderCards() 직후 같은 동기 블록에서 재서 생성 전 상태를 본 것이다. */
+  .srv-chip{padding:1px 7px;border-radius:6px;font-size:11px;font-weight:800;line-height:1.5;
+    letter-spacing:.02em;background:#0e4d5c;color:#a5f3fc;border:1px solid #0e7490}
+  /* 선택 강조가 켜지면 남의 탭줄도 같이 죽인다 — 카드만 흐려지면 탭이 떠 보인다 */
+  main:has(.card-sel) .acct-stack:not(:has(.card-sel)) .acct-tabs{opacity:.45}
+  .card-sel{outline:2.5px solid #22d3ee!important;outline-offset:2px;
+    box-shadow:0 0 0 6px rgba(34,211,238,.16),0 0 28px rgba(34,211,238,.55)!important;
+    background-image:linear-gradient(160deg,rgba(34,211,238,.10),transparent 55%)!important}
+  .card-sel::before{content:'✔ 선택됨';position:absolute;top:-9px;right:10px;z-index:2;
+    padding:1px 8px;border-radius:999px;font-size:10px;font-weight:800;color:#04202a;letter-spacing:.02em;
+    background:linear-gradient(90deg,#22d3ee,#67e8f9);box-shadow:0 0 12px rgba(34,211,238,.85)}
+  main:has(.card-sel) [id^="card-"]:not(.card-sel){opacity:.45;filter:saturate(.5) brightness(.75)}
+  main:has(.card-sel) [id^="card-"]:not(.card-sel):hover{opacity:.95;filter:none}
+  .card-dragging{opacity:.4;outline:2px dashed #6366f1!important}
+  .card-dragover{outline:2px solid #818cf8!important;outline-offset:2px}
+  .menu-item{display:block;width:100%;text-align:left;padding:5px 14px;font-size:.75rem;font-weight:600;transition:background .1s}
+  .menu-item:hover{background:rgba(255,255,255,.08)}
+
+  /* ══ FABULOUS 스킨 v2 — 사이버펑크 사령부 ══
+     별밭 2겹+혜성+신스웨이브 지평선+오로라. 애니메이션은 전부 transform/opacity(GPU)라
+     카드 17장+WS 실시간 갱신에서도 부하 없음. 기능/DOM 무관 — 시각 전용. */
+  body{background:
+    radial-gradient(1400px 900px at 12% -12%,rgba(99,102,241,.30),transparent 55%),
+    radial-gradient(1100px 800px at 88% 5%,rgba(232,121,249,.18),transparent 55%),
+    radial-gradient(1000px 1000px at 50% 115%,rgba(34,211,238,.15),transparent 55%),
+    #04060f!important;background-attachment:fixed}
+  body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:-1;
+    background-image:linear-gradient(rgba(129,140,248,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,.06) 1px,transparent 1px);
+    background-size:44px 44px;
+    -webkit-mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%);
+    mask-image:radial-gradient(1100px 650px at 50% 0%,#000 25%,transparent 75%)}
+  @keyframes aurora{0%,100%{transform:translate3d(-4%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.14)}}
+  body::after{content:'';position:fixed;top:-28vh;left:50%;width:92vw;height:58vh;margin-left:-46vw;pointer-events:none;z-index:-1;
+    background:radial-gradient(closest-side,rgba(99,102,241,.30),rgba(232,121,249,.12) 45%,rgba(34,211,238,.12) 60%,transparent 74%);
+    filter:blur(56px);animation:aurora 14s ease-in-out infinite}
+
+  /* ── 배경 FX: 별밭 2겹(드리프트+트윙클) / 혜성 / 신스웨이브 지평선 그리드 ── */
+  #bg-fx{position:fixed;inset:0;pointer-events:none;z-index:-1;overflow:hidden}
+  #bg-fx .stars{position:absolute;left:0;right:0;top:-100%;height:200%;
+    background-image:
+      radial-gradient(1px 1px at 25px 35px,rgba(255,255,255,.9),transparent 45%),
+      radial-gradient(1px 1px at 125px 90px,rgba(199,210,254,.8),transparent 45%),
+      radial-gradient(1.6px 1.6px at 210px 160px,rgba(165,243,252,.9),transparent 45%),
+      radial-gradient(1px 1px at 80px 225px,rgba(255,255,255,.55),transparent 45%),
+      radial-gradient(1.3px 1.3px at 305px 60px,rgba(240,171,252,.7),transparent 45%),
+      radial-gradient(1px 1px at 170px 250px,rgba(255,255,255,.4),transparent 45%);
+    background-size:340px 290px;animation:star-drift 160s linear infinite}
+  #bg-fx .stars.s2{background-size:560px 470px;opacity:.55;
+    animation:star-drift 260s linear infinite reverse,twinkle 6s ease-in-out infinite}
+  @keyframes star-drift{to{transform:translateY(50%)}}
+  .fx-off #bg-fx *{animation-play-state:paused!important}  /* 탭 백그라운드 시 배경 애니 정지 */
+  @keyframes twinkle{0%,100%{opacity:.55}50%{opacity:.2}}
+  #bg-fx .comet{position:absolute;top:6%;left:-14%;width:190px;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(165,243,252,.85) 65%,#fff);
+    filter:drop-shadow(0 0 8px rgba(103,232,249,.95));opacity:0;
+    animation:comet 12s ease-in 3s infinite}
+  @keyframes comet{0%{transform:translate3d(0,0,0) rotate(16deg);opacity:0}
+    2%{opacity:1}11%{transform:translate3d(135vw,45vh,0) rotate(16deg);opacity:0}100%{opacity:0}}
+  #bg-fx .horizon{position:absolute;left:-25%;right:-25%;bottom:-2px;height:30vh;opacity:.5;
+    transform:perspective(430px) rotateX(63deg);transform-origin:50% 100%;overflow:hidden;
+    -webkit-mask-image:linear-gradient(to top,#000 25%,transparent 96%);
+    mask-image:linear-gradient(to top,#000 25%,transparent 96%)}
+  #bg-fx .horizon::before{content:'';position:absolute;left:0;right:0;top:-88px;bottom:-88px;
+    background:
+      repeating-linear-gradient(90deg,rgba(129,140,248,.42) 0 1px,transparent 1px 64px),
+      repeating-linear-gradient(0deg,rgba(232,121,249,.36) 0 1px,transparent 1px 44px);
+    animation:grid-run 3s linear infinite}
+  @keyframes grid-run{to{transform:translateY(44px)}}
+  #bg-fx .hglow{position:absolute;left:6%;right:6%;bottom:20vh;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(232,121,249,.55) 30%,rgba(34,211,238,.55) 70%,transparent);
+    filter:blur(1.5px);opacity:.55}
+
+  /* ── 헤더/명령바: 유리 패널 + 네온 언더라인 스윕 ── */
+  /* ★성능(2026-07-21): sticky 요소의 backdrop-filter 제거 — 뒤 배경(별밭/오로라)이 상시
+     애니메이션이라 매 프레임 블러 재계산 = 사이트 느려짐의 주범. 불투명도만 올려 동일 룩. */
+  .glass-header{background:rgba(6,9,20,.94)!important;
+    border-bottom:1px solid rgba(99,102,241,.4);box-shadow:0 2px 28px rgba(79,70,229,.22)}
+  .glass-header::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;pointer-events:none;
+    background:linear-gradient(90deg,transparent,#6366f1 25%,#e879f9 50%,#22d3ee 75%,transparent);
+    background-size:220% 100%;animation:shine 6s linear infinite;opacity:.9}
+  .cmd-bar{background:rgba(8,11,24,.92)!important;border-bottom:1px solid rgba(99,102,241,.2);box-shadow:0 6px 24px -12px rgba(0,0,0,.6)}
+
+  /* ── 명령바 콘솔 그룹 + 네온 칩 ── */
+  .cmd-group{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+    padding:8px 10px 6px;border:1px solid rgba(99,102,241,.22);border-radius:12px;
+    background:linear-gradient(160deg,rgba(20,26,48,.55),rgba(10,14,28,.6))}
+  .cmd-group:hover{border-color:rgba(129,140,248,.45)}
+  /* ★2026-08-23 주인님: "위쪽상단에 순환용이랑 선택카드만 하는거 두개로 나눠있는게 낫겟네"★
+     같은 이름의 버튼이 두 줄로 늘어서므로 ★색 테두리로 갈라놔야★ 직원이 안 헷갈린다.
+     순환 = 하늘색(전 계정을 돈다) / 선택 = 회색(그 카드 한 번). */
+  /* 순환 = 하늘색 굵은 테두리(전 계정을 돈다) / 선택 = 회색 점선(그 카드 한 번) */
+  .cmd-rot{border:2px solid rgba(56,189,248,.75);
+    background:linear-gradient(160deg,rgba(8,47,73,.75),rgba(8,20,38,.8));
+    box-shadow:inset 0 0 24px -14px rgba(56,189,248,.9)}
+  .cmd-rot:hover{border-color:rgba(56,189,248,1)}
+  .cmd-rot .cmd-legend{color:#0b0f1f;background:#7dd3fc;border-color:#7dd3fc}
+  .cmd-one{border:1px dashed rgba(148,163,184,.45);background:rgba(255,255,255,.02)}
+  .cmd-one .cmd-legend{color:#cbd5e1;border-color:rgba(148,163,184,.45)}
+  /* ★버튼 자체에도 표식★ — 그룹 테두리를 안 봐도 버튼만으로 갈린다 */
+  .cmd-rot .chip::before{content:'🔁 ';font-size:11px}
+  /* ★★그룹 라벨은 ★읽히라고★ 있는 것이다 (2026-08-24 주인님 지적)★★
+     주인님: "순환용이랑 비순환용 만들어놓으라햇잖아 근데 다 순환용 처럼 보이는데"
+     8px + letter-spacing .24em 은 장식이지 글자가 아니었다. 버튼 이름·색까지 두 그룹이
+     똑같으니 ★무엇으로도 구분이 안 됐다.★ 라벨을 키우고, 아래에서 버튼에도 표식을 단다. */
+  .cmd-legend{position:absolute;top:-10px;left:10px;padding:2px 9px;border-radius:6px;
+    font-size:12px;font-weight:800;letter-spacing:.02em;
+    color:#a5b4fc;background:#0b0f1f;border:1px solid rgba(99,102,241,.35);pointer-events:none}
+  .chip{--c:148,163,184;padding:4px 11px;border-radius:9px;font-size:12px;font-weight:700;line-height:1.25;
+    color:rgb(var(--c));border:1px solid rgba(var(--c),.45);background:rgba(var(--c),.09);
+    box-shadow:inset 0 0 10px -6px rgba(var(--c),.8);white-space:nowrap}
+  .chip:hover{background:rgba(var(--c),.24);color:#fff;border-color:rgba(var(--c),.95);
+    box-shadow:0 0 16px -3px rgba(var(--c),.65),inset 0 0 10px -6px rgba(var(--c),.8)}
+  .chip-indigo{--c:129,140,248} .chip-gray{--c:148,163,184} .chip-green{--c:74,222,128}
+  .chip-red{--c:248,113,113}   .chip-cyan{--c:34,211,238}   .chip-purple{--c:192,132,252}
+  .chip-pink{--c:244,114,182}  .chip-orange{--c:251,146,60} .chip-blue{--c:96,165,250}
+  .chip-sky{--c:56,189,248}    .chip-yellow{--c:250,204,21} .chip-amber{--c:251,191,36}
+  .chip-emerald{--c:52,211,153} .chip-teal{--c:45,212,191} .chip-violet{--c:167,139,250}
+  .sel-badge{font-size:11px;font-weight:800;color:#c7d2fe;padding:3px 11px;border-radius:999px;white-space:nowrap;
+    background:linear-gradient(90deg,rgba(99,102,241,.35),rgba(34,211,238,.22));
+    border:1px solid rgba(129,140,248,.55);box-shadow:0 0 12px -3px rgba(99,102,241,.7)}
+  /* ── 카드 컨텍스트 메뉴 v2 ── */
+  .cm-panel{width:360px;padding:14px;border-radius:16px;
+    background:linear-gradient(165deg,rgba(17,23,45,.97),rgba(8,12,26,.98));
+    border:1px solid rgba(99,102,241,.4);
+    box-shadow:0 18px 50px -12px rgba(0,0,0,.85),0 0 30px -10px rgba(99,102,241,.5);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .cm-head{display:flex;align-items:center;gap:9px;padding:4px 3px 11px;margin-bottom:4px;
+    border-bottom:1px solid rgba(99,102,241,.28);font-size:17px;font-weight:800}
+  /* ★2026-08-23 주인님: "너무 작아보여 눈에도 잘안들어온다" → 전반 확대★ */
+  .cm-sec{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:12px;font-weight:700;letter-spacing:.16em;
+    color:#a5b4fc;opacity:1;margin:13px 2px 8px}
+  .cm-grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .cm-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
+  .cm-grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:7px}
+  .cm-span2{grid-column:span 2}
+  /* ★--c 를 여기서 선언하면 안 된다(2026-08-15 리뷰)★ — .cm-btn 이 .chip-* 팔레트보다 뒤에
+     오는데 특정도가 같아서(둘 다 클래스 1개) 나중 것이 이긴다. 그래서 chip-teal/violet 등을
+     붙여도 전부 회색으로 렌더됐다(파섹 버튼만이 아니라 카드 메뉴 전체가 그랬음).
+     선언 대신 var() 폴백으로 두면 팔레트가 있으면 팔레트, 없으면 회색이 된다. */
+  .cm-btn{padding:12px 6px;border-radius:10px;font-size:17px;font-weight:800;text-align:center;
+    color:rgb(var(--c,148,163,184));border:1px solid rgba(var(--c,148,163,184),.4);
+    background:rgba(var(--c,148,163,184),.08);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ── 계정 세부정보 표 (2026-08-16 재설계) ────────────────────────────────
+     20대×최대4계정 = 80줄이 쌓여도 읽히게: 머리줄 고정 + PC 단위 덩어리 +
+     빈 칸은 조용히. 값 칸은 ★클릭하면 그 값만 복사★(사용자 지시). */
+  .acct-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+  .acct-table thead th{position:sticky;top:0;z-index:2;background:#111827;
+    padding:9px 10px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;
+    letter-spacing:.04em;border-bottom:1px solid #374151}
+  .acct-td{padding:7px 10px;font-size:12.5px;vertical-align:middle;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    border-bottom:1px solid rgba(31,41,55,.55)}
+  /* PC가 바뀌는 첫 줄 위에만 선을 굵게 — 덩어리 경계 */
+  .acct-row.acct-group td{border-top:1px solid #374151}
+  .acct-row:hover td{background:rgba(31,41,55,.35)}
+  .acct-pc{color:#a5b4fc;font-weight:700}
+  .acct-n{text-align:center}
+  .acct-chip{display:inline-block;min-width:19px;padding:1px 6px;border-radius:6px;
+    background:rgba(167,139,250,.14);color:#c4b5fd;font-size:11px;font-weight:700}
+  .acct-plat{color:#5eead4}
+  .acct-id{color:#e5e7eb}
+  .acct-em,.acct-ph{color:#9ca3af}
+  .acct-ph{font-variant-numeric:tabular-nums}
+  /* 클릭 복사 가능한 칸 — 평소엔 조용하고 hover 때만 드러난다 */
+  .acct-cp{cursor:pointer;position:relative}
+  .acct-cp:hover .acct-val{border-bottom:1px dashed rgba(196,181,253,.6)}
+  .acct-cp:hover::after{content:'복사';position:absolute;right:6px;top:50%;
+    transform:translateY(-50%);font-size:9.5px;color:#c4b5fd;
+    background:rgba(17,24,39,.92);padding:1px 5px;border-radius:5px}
+  .acct-cp.acct-hit{background:rgba(52,211,153,.16)!important}
+  .acct-cp.acct-hit .acct-val{color:#6ee7b7}
+  .cm-btn:hover{background:rgba(var(--c,148,163,184),.24);color:#fff;
+    border-color:rgba(var(--c,148,163,184),.95);
+    box-shadow:0 0 12px -3px rgba(var(--c,148,163,184),.65)}
+  .cm-danger{width:100%;margin-top:9px;padding:5px;border-radius:8px;font-size:11px;font-weight:700;color:#f87171;
+    border:1px dashed rgba(248,113,113,.45);background:rgba(248,113,113,.05)}
+  .cm-danger:hover{background:rgba(239,68,68,.22);color:#fecaca;border-style:solid;box-shadow:0 0 14px -4px rgba(239,68,68,.6)}
+
+  .price-wrap{position:relative;display:inline-flex;align-items:center}
+  .price-wrap .price-k{position:absolute;left:9px;font-size:11px;font-weight:800;color:#fde047;opacity:.85;pointer-events:none}
+  #sale-price{width:104px;padding:4px 8px 4px 22px;border-radius:9px;font-size:12px;font-weight:700;color:#fde047;
+    font-family:'Orbitron',ui-sans-serif,sans-serif;background:rgba(250,204,21,.07);
+    border:1px solid rgba(250,204,21,.4);outline:none;transition:border-color .15s,box-shadow .15s}
+  #sale-price:focus{border-color:#facc15;box-shadow:0 0 14px -4px rgba(250,204,21,.75)}
+  #sale-price::placeholder{color:rgba(250,204,21,.45);font-family:ui-sans-serif,system-ui,sans-serif;font-weight:500}
+  #sale-price::-webkit-outer-spin-button,#sale-price::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+  /* ── 브랜드 ── */
+  @keyframes shine{to{background-position:200% center}}
+  .brand-title{background:linear-gradient(90deg,#c7d2fe,#67e8f9 30%,#f0abfc 60%,#fde047 80%,#c7d2fe);background-size:200% auto;
+    -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
+    animation:shine 6s linear infinite}
+  .brand-sub{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:.6rem;letter-spacing:.3em;color:#818cf8;opacity:.9;transform:translateY(1px)}
+  @keyframes floaty{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-3px) rotate(4deg)}}
+  .brand-emblem{display:inline-block;filter:drop-shadow(0 0 10px rgba(129,140,248,1)) drop-shadow(0 0 24px rgba(232,121,249,.7));
+    animation:floaty 3s ease-in-out infinite}
+
+  /* ── 전광판 타일: 흐르는 네온 라인 + 그라데이션 발광 숫자 + 호버 리프트 ── */
+  .stat-tile{position:relative;background:linear-gradient(160deg,rgba(23,29,52,.88),rgba(9,13,28,.94));
+    border:1px solid rgba(99,102,241,.28);border-radius:1rem;padding:1rem;overflow:hidden;
+    transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+  .stat-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--tile) 40%,#fff 50%,var(--tile) 60%,transparent);
+    background-size:220% 100%;animation:shine 4.5s linear infinite;opacity:.95}
+  .stat-tile::after{content:'';position:absolute;top:-42%;left:50%;width:130%;height:85%;transform:translateX(-50%);
+    background:radial-gradient(closest-side,var(--tile-glow),transparent 70%);opacity:.26;pointer-events:none}
+  .stat-tile:hover{transform:translateY(-4px) scale(1.02);border-color:var(--tile);box-shadow:0 14px 40px -10px var(--tile-glow)}
+  .tile-green {--tile:#4ade80;--tile-glow:rgba(74,222,128,.55)}
+  .tile-blue  {--tile:#60a5fa;--tile-glow:rgba(96,165,250,.55)}
+  .tile-yellow{--tile:#facc15;--tile-glow:rgba(250,204,21,.5)}
+  .tile-indigo{--tile:#818cf8;--tile-glow:rgba(129,140,248,.6)}
+  .tile-purple{--tile:#c084fc;--tile-glow:rgba(192,132,252,.55)}
+  .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
+  /* 전광판 그리드: 숫자 긴 타일(오드에너지/거래키나/창고키나)만 넓게, 카운트류는 좁게 */
+  .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
+  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr}}
+  .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
+    white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 0 14px var(--tile-glow))}
+  .stat-tile .stat-label{font-size:.8rem;color:#a5b4c8;margin-top:.3rem;letter-spacing:.08em}
+  .stat-tile .stat-icon{position:absolute;right:.8rem;top:.7rem;font-size:1.2rem;opacity:.5;
+    filter:drop-shadow(0 0 6px var(--tile-glow))}
+
+  /* ── PC 카드: 상태색 글로우 + 호버 리프트 + 회전 네온 보더(호버) ── */
+  div[id^="card-"]{box-shadow:0 6px 22px -10px rgba(0,0,0,.6);
+    transition:transform .18s ease,box-shadow .18s ease,opacity .2s ease,filter .2s ease}
+  div[id^="card-"]:hover{transform:translateY(-3px) scale(1.008)}
+  /* 상태별 은은한 외곽광 (STATUS_CFG border 클래스 기준 — 기능 신호 강화) */
+  div[id^="card-"].border-green-700  {box-shadow:0 0 0 1px rgba(34,197,94,.22), 0 6px 26px -8px rgba(34,197,94,.3)}
+  div[id^="card-"].border-blue-700   {box-shadow:0 0 0 1px rgba(59,130,246,.25),0 6px 26px -8px rgba(59,130,246,.32)}
+  div[id^="card-"].border-indigo-700 {box-shadow:0 0 0 1px rgba(99,102,241,.28),0 6px 26px -8px rgba(99,102,241,.36)}
+  div[id^="card-"].border-fuchsia-700{box-shadow:0 0 0 1px rgba(217,70,239,.25),0 6px 26px -8px rgba(217,70,239,.32)}
+  div[id^="card-"].border-purple-700 {box-shadow:0 0 0 1px rgba(168,85,247,.25),0 6px 26px -8px rgba(168,85,247,.3)}
+  div[id^="card-"].border-orange-700 {box-shadow:0 0 0 1px rgba(249,115,22,.28),0 6px 26px -8px rgba(249,115,22,.34)}
+  div[id^="card-"].border-pink-700   {box-shadow:0 0 0 1px rgba(236,72,153,.28),0 6px 26px -8px rgba(236,72,153,.34)}
+  div[id^="card-"].border-red-700    {box-shadow:0 0 0 1px rgba(239,68,68,.4),  0 6px 30px -8px rgba(239,68,68,.45)}
+  div[id^="card-"].border-cyan-700   {box-shadow:0 0 0 1px rgba(34,211,238,.25),0 6px 26px -8px rgba(34,211,238,.32)}
+  div[id^="card-"].border-amber-700  {box-shadow:0 0 0 1px rgba(245,158,11,.28),0 6px 26px -8px rgba(245,158,11,.34)}
+  div[id^="card-"].border-lime-700   {box-shadow:0 0 0 1px rgba(132,204,22,.25),0 6px 26px -8px rgba(132,204,22,.3)}
+  /* 호버 시 회전하는 네온 테두리 (호버에만 애니 → 평시 부하 0) */
+  @property --spin{syntax:'<angle>';inherits:false;initial-value:0deg}
+  div[id^="card-"]::after{content:'';position:absolute;inset:-1px;border-radius:.85rem;padding:1.5px;
+    background:conic-gradient(from var(--spin),transparent 0deg 120deg,#818cf8 160deg,#e879f9 190deg,#22d3ee 220deg,transparent 260deg 360deg);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;
+    opacity:0;transition:opacity .25s;pointer-events:none}
+  div[id^="card-"]:hover::after{opacity:1;animation:spin-border 2.4s linear infinite}
+  @keyframes spin-border{to{--spin:360deg}}
+
+  /* ── 완료 스탬프 (카드 이름 옆, 이모지만 — 색깔 필이 신호) ── */
+  .done-badge{padding:1px 5px;border-radius:999px;font-size:11px;line-height:1.4;
+    white-space:nowrap;margin-left:4px}
+  .done-hunt{color:#bbf7d0;background:rgba(34,197,94,.18);border:1px solid rgba(74,222,128,.55);
+    box-shadow:0 0 8px -2px rgba(74,222,128,.6)}
+  .done-awaken{color:#c7d2fe;background:rgba(99,102,241,.22);border:1px solid rgba(129,140,248,.6);
+    box-shadow:0 0 8px -2px rgba(129,140,248,.65)}
+  .done-dungeon{color:#e9d5ff;background:rgba(168,85,247,.2);border:1px solid rgba(192,132,252,.6);
+    box-shadow:0 0 8px -2px rgba(192,132,252,.65)}
+  .done-corridor{color:#bae6fd;background:rgba(14,165,233,.2);border:1px solid rgba(56,189,248,.6);
+    box-shadow:0 0 8px -2px rgba(56,189,248,.65)}
+
+  /* ★구독 O/X 뱃지 — PC명 옆 동그라미 (2026-08-29 주인님: "V(체크) 동그라미 / X 동그라미")★
+     판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제. ★계정 단위 속성★.
+     ★모름은 X 가 아니다★ — 회색 ? 로 따로 낸다(사고 219: 모름을 미구독으로 읽지 말 것). */
+  .sub-badge{display:inline-flex;align-items:center;justify-content:center;
+    width:17px;height:17px;border-radius:999px;font-size:11px;line-height:1;
+    font-weight:800;margin-left:6px;flex:0 0 auto;cursor:help}
+  .sub-on {color:#bbf7d0;background:rgba(34,197,94,.20);border:1px solid rgba(74,222,128,.75);
+    box-shadow:0 0 8px -2px rgba(74,222,128,.7)}
+  .sub-off{color:#fecaca;background:rgba(239,68,68,.20);border:1px solid rgba(248,113,113,.8);
+    box-shadow:0 0 8px -2px rgba(248,113,113,.7)}
+  .sub-unk{color:#6b7280;background:rgba(107,114,128,.15);border:1px solid rgba(107,114,128,.5)}
+
+  /* ── 섹션 헤더 네온 라인 / 토스트 ── */
+  main section h2{position:relative}
+  main section h2::after{content:'';position:absolute;left:0;bottom:-5px;width:170px;height:2px;border-radius:2px;
+    background:linear-gradient(90deg,#6366f1,#22d3ee 55%,transparent);opacity:.75}
+  #toast{background:rgba(13,18,38,.92)!important;border:1px solid rgba(129,140,248,.55)!important;
+    box-shadow:0 0 26px rgba(99,102,241,.4);backdrop-filter:blur(8px)}
+
+  /* ── 버튼: 떠오르는 손맛 ── */
+  button{transition:transform .15s ease,box-shadow .15s ease,background-color .15s,color .15s}
+  button:hover{transform:translateY(-1px)}
+  button:active{transform:translateY(0) scale(.97)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★커맨드 덱 테마 (2026-08-16)★ — 마지막에 오므로 위 규칙을 덮는다.
+   ★구조는 하나도 안 건드렸다★ — 카드 HTML에는 주인님이 지적하셨던 사고 수정이
+   여러 겹 들어 있다(이름 짤림·뱃지 두 줄·접미사 노출·드래그·우클릭). 마크업을 새로
+   짜면 그게 다 날아간다. 그래서 ★기존 클래스에 CSS만 입힌다★.
+   되돌리기: 이 블록만 지우면 예전 모습으로 완전 복귀한다.
+
+   언어: 차가운 잉크 바닥 + 따뜻한 앰버 액센트(한난 대비) / 숫자는 Bahnschrift +
+        tabular-nums / 판은 위 1px 하이라이트 + 색조 그림자 / 반경 한 체계.
+   ══════════════════════════════════════════════════════════════════════════ */
+  :root{
+    --dk-ink0:#05070d; --dk-ink1:#0c1120; --dk-ink2:#111829;
+    --dk-line:#1a2237; --dk-line2:#26314b;
+    --dk-t0:#eef2fa; --dk-t1:#9aa7c2; --dk-t2:#5c6b8a; --dk-t3:#3a4762;
+    --dk-gold:#f2b53c; --dk-gold-s:#ffd479;
+    --dk-mint:#3ddc9a; --dk-coral:#ff5d6e; --dk-cyan:#4fd3e8;
+    --dk-disp:"Bahnschrift","DIN Alternate","Segoe UI Variable Display","Pretendard",system-ui,sans-serif;
+  }
+  /* 바닥 — 기존 별밭 FX는 살리되 잉크 그라운드를 깐다 */
+  body.bg-gray-950{
+    background:
+      radial-gradient(1200px 520px at 18% -6%, #16233f 0%, transparent 62%),
+      radial-gradient(900px 420px at 92% -4%, #1d2033 0%, transparent 58%),
+      var(--dk-ink0)!important;
+  }
+  /* 숫자에 성격을 준다 — 값이 바뀌어도 자리가 안 흔들린다 */
+  .stat-num,.dk-num,#cnt-online,#cnt-completed{
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+
+  /* ── 전광판: 타일 박스 → 하이라인 스트립 ───────────────────────────── */
+  .stat-grid{
+    background:linear-gradient(160deg,#0e1526,#0a0f1c 60%,#080c17);
+    border:1px solid var(--dk-line);border-radius:18px;overflow:hidden;
+    box-shadow:0 22px 56px -30px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.05);
+    gap:0!important;position:relative;
+  }
+  .stat-grid::after{content:'';position:absolute;left:6%;top:-72%;width:48%;height:150%;
+    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.13),transparent)}
+  .stat-tile{
+    background:transparent!important;border:0!important;border-right:1px solid var(--dk-line)!important;
+    border-radius:0!important;box-shadow:none!important;padding:14px 16px!important;position:relative;z-index:1}
+  .stat-tile:last-child{border-right:0!important}
+  .stat-tile::before,.stat-tile::after{display:none!important}
+  .stat-icon{opacity:.34;font-size:13px!important}
+  .stat-num{font-size:25px!important;font-weight:700!important;line-height:1.05!important}
+  /* ★라벨 가독성(2026-08-16 사용자 지적: "숫자는 잘 보이는데 밑에 글자가 너무 안 보여")★
+     내가 --dk-t3(#3a4762) 를 10px 에 씌운 게 원인이다. 이 바탕(#0b1120)에서 대비가
+     2:1 남짓이라 사실상 안 읽힌다. --dk-t1 로 올리고 크기·굵기를 키운다(대비 ≈8:1).
+     ★숫자는 건드리지 않는다★ — 잘 보인다고 하셨다. */
+  .stat-label{color:var(--dk-t1)!important;font-size:11.5px!important;
+    letter-spacing:.06em;font-weight:700;margin-top:.35rem!important}
+
+  /* ── 명령 버튼줄: 묶음을 판으로 ─────────────────────────────────────── */
+  .cmd-group{background:rgba(255,255,255,.022)!important;border:1px solid var(--dk-line)!important;
+    border-radius:13px!important;box-shadow:none!important}
+  .cmd-legend{color:var(--dk-t3)!important;letter-spacing:.15em!important;font-weight:700}
+  .cmd-bar button{border-radius:9px!important}
+
+  /* ── 카드: 납작한 사각형 → 빛이 위에서 오는 판 ─────────────────────── */
+  #cards > div, .stack-wrap > div{border-radius:15px}
+  [id^="card-"]{
+    background:linear-gradient(178deg,var(--dk-ink1),#080b14)!important;
+    border-color:var(--dk-line)!important;border-radius:15px!important;
+    box-shadow:0 14px 34px -22px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.045)!important;
+    transition:border-color .18s,box-shadow .18s,transform .18s;
+  }
+  [id^="card-"]:hover{border-color:var(--dk-line2)!important;transform:translateY(-1px)}
+  /* ★이상 상태 = 테두리 대신 윗면에서 빛이 샌다★ — 20장이 액자처럼 안 보인다 */
+  [id^="card-"]::before{content:'';position:absolute;left:0;right:0;top:0;height:86px;
+    pointer-events:none;border-radius:15px 15px 0 0;opacity:0;transition:opacity .2s;
+    background:linear-gradient(180deg,var(--dk-bleed,transparent),transparent)}
+  [id^="card-"].bleed::before{opacity:1}
+  [id^="card-"].bleed::after{content:'';position:absolute;left:15px;right:15px;top:0;height:1px;
+    pointer-events:none;background:linear-gradient(90deg,transparent,var(--dk-edge),transparent);opacity:.9}
+  /* 선택 = 앰버 링 (기존 card-sel 위에 덧씌움) */
+  .card-sel{box-shadow:0 0 0 1px rgba(242,181,60,.55),0 14px 34px -22px rgba(0,0,0,.95),
+    inset 0 1px 0 rgba(255,255,255,.05)!important;border-color:rgba(242,181,60,.45)!important}
+  /* 카드 안 숫자·창고키나 */
+  [id^="card-"] .text-yellow-400{color:var(--dk-gold)!important}
+  /* 슬롯 버튼줄 — 캡슐 */
+  [id^="card-"] .slot-btn,[id^="card-"] [class*="slot"]{border-radius:7px}
+
+  /* ── 스프레드 / 모달 표 ─────────────────────────────────────────────── */
+  table thead th{background:#0d1322!important;color:var(--dk-t3)!important;
+    border-bottom:1px solid var(--dk-line2)!important;letter-spacing:.08em}
+  .acct-table thead th{background:#0d1322!important}
+  .acct-pc{color:var(--dk-t1)!important;font-family:var(--dk-disp)}
+  .acct-chip{background:rgba(242,181,60,.14)!important;color:var(--dk-gold)!important;
+    font-family:var(--dk-disp)}
+  .acct-plat{color:var(--dk-cyan)!important}
+  .acct-cp:hover .acct-val{border-bottom-color:rgba(242,181,60,.6)!important}
+  .acct-cp:hover::after{color:var(--dk-gold)!important;background:rgba(10,15,28,.94)!important}
+  .acct-cp.acct-hit{background:rgba(61,220,154,.16)!important}
+  .acct-cp.acct-hit .acct-val{color:var(--dk-mint)!important}
+
+  /* ── 섹션 헤더: 네온 밑줄 → 잉크 라인 ── */
+  main section h2::after{background:linear-gradient(90deg,var(--dk-line2),transparent)!important;
+    opacity:1!important;width:220px!important}
+
+  /* ── 상단바 버튼 ── */
+  header button,header a{border-radius:9px!important}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★빛샘 3등급 (2026-08-16 사용자 요청 "사냥중도 초록색 느낌")★
+   위 .bleed 규칙은 손대지 않고 변수 두 개만 덧씌운다(원복하기 쉽게).
+   높이·모서리선 세기를 JS(DK_TIER)가 넣어 주고, 없으면 예전 값(86px/.9)으로 돈다.
+   ★알파만 바꾸지 말 것★ — 정상(초록) 카드가 15장이라 높이까지 같이 줄여야
+   빨강 카드가 여전히 먼저 눈에 들어온다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  [id^="card-"].bleed::before{height:var(--dk-bleed-h,86px)}
+  [id^="card-"].bleed::after{opacity:var(--dk-edge-o,.9)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★히어로(2026-08-16)★ — 사용자: "아무리봐도 아까 사진처럼 나온 것 같진 않은데"
+   맞는 지적이었다. 앞 단계는 팔레트·재질만 옮겼고, 미리보기의 인상을 만들던
+   ★큰 요약 한 덩어리★가 빠져 있었다. 전광판을 갈아엎지 않고 그 위에 얹는다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  .dk-hero{
+    position:relative;overflow:hidden;border-radius:18px;
+    border:1px solid var(--dk-line);
+    background:linear-gradient(160deg,#0e1526 0%,#0a0f1c 58%,#080c17 100%);
+    box-shadow:0 24px 60px -30px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.055);
+    padding:26px 24px 24px;display:flex;align-items:center;gap:30px;flex-wrap:wrap}
+  .dk-hero::after{content:'';position:absolute;left:14%;top:-90%;width:56%;height:190%;
+    pointer-events:none;background:radial-gradient(closest-side,rgba(79,211,232,.15),transparent)}
+  /* ★2026-08-16 사용자 지시★ "오른쪽 요약을 제외하고 가운데쯤 위치하게 / 더 크게 /
+     좌우로 길게 / 글씨체 간지나는 걸로 팍팍"
+     → 왼쪽 세로선 인용 표시를 버리고, 남은 폭 전체를 차지하는 ★가운데 정렬 헤드라인★.
+       flex:1 이라 오른쪽 요약(dk-hero-side)이 가져간 폭을 뺀 나머지의 정중앙에 선다. */
+  .dk-hero-main{position:relative;z-index:1;flex:1 1 460px;min-width:280px;max-width:none;
+    text-align:center;padding:2px 4px}
+  .dk-eyebrow{font-size:9.5px;letter-spacing:.24em;color:var(--dk-t3);font-weight:700}
+  /* 눈썹 양옆 실선 — 가운데 정렬이 허전하지 않게 잡아준다 */
+  .dk-eyebrow{display:flex;align-items:center;justify-content:center;gap:12px}
+  .dk-eyebrow::before,.dk-eyebrow::after{content:'';height:1px;width:min(90px,12%);
+    background:linear-gradient(90deg,transparent,var(--dk-line-s,rgba(255,255,255,.16)),transparent)}
+  /* ★오늘의 한마디★ — 이 칸의 주인공. Black Han Sans = 굵고 각진 헤드라인체. */
+  .dk-quote{
+    margin:14px auto 0;font-family:'Black Han Sans',var(--dk-disp),sans-serif;
+    font-size:clamp(30px,3.7vw,56px);font-weight:400;
+    line-height:1.18;letter-spacing:-.012em;color:var(--dk-t0);
+    max-width:30ch;text-wrap:balance;word-break:keep-all;
+    text-shadow:0 3px 30px rgba(79,211,232,.12)}
+  /* 강조 단어 — ★nowrap★ 을 빼면 balance 가 "안 / 되고" 처럼 금색 구절을 반으로 쪼갠다 */
+  .dk-quote em{font-style:normal;color:var(--dk-gold-s);white-space:nowrap;
+    text-shadow:0 3px 26px rgba(242,181,60,.30)}
+  .dk-quote-by{margin-top:13px;font-family:'Nanum Myeongjo',serif;font-size:13px;
+    color:var(--dk-t3);letter-spacing:.03em}
+  .dk-quote-by b{color:var(--dk-t2);font-weight:700}
+  .dk-quote-by:empty{display:none}   /* 출처 없는 문장에서 빈 여백이 안 생기게 */
+  @media(max-width:1100px){.dk-quote{max-width:22ch}}
+  /* ★구독 O/X 칸 (2026-08-29 주인님: "큰글자로 적절하게")★ 명언 ★왼쪽★.
+     flex:none 이라 명언(flex:1)이 남은 폭을 갖는다 — 줄이 밀리지 않는다. */
+  .dk-hero-sub{position:relative;z-index:1;flex:none;display:flex;flex-direction:column;
+    gap:7px;justify-content:center;padding-right:22px;margin-right:2px;
+    border-right:1px solid rgba(255,255,255,.10)}
+  .dk-hero-sub .r{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+  /* ★라벨도 숫자와 같은 크기 (2026-08-29 주인님: "글자크기 숫자랑 같게 맞춰")★ */
+  .dk-hero-sub .l{font-family:var(--dk-disp);font-size:34px;font-weight:800;
+    line-height:1;letter-spacing:.01em}
+  .dk-hero-sub .n{font-family:var(--dk-disp);font-variant-numeric:tabular-nums;
+    font-size:34px;font-weight:800;line-height:1;margin-left:auto}
+  .dk-hero-sub .on  .l{color:#6ee7b7}  .dk-hero-sub .on  .n{color:#34d399}
+  .dk-hero-sub .off .l{color:#fca5a5}  .dk-hero-sub .off .n{color:#f87171}
+  .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
+  .dk-sm{text-align:right}
+  .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
+  .dk-sm .v{font-family:var(--dk-disp);font-variant-numeric:tabular-nums;
+    font-size:24px;font-weight:700;margin-top:3px;line-height:1;color:var(--dk-t0)}
+  .dk-sm .v i{font-size:12px;color:var(--dk-t2);font-style:normal;margin-left:2px}
+  .dk-sm.gold .v{color:var(--dk-gold)}
+  @media(max-width:760px){.dk-hero{gap:16px}.dk-hero-side{margin-left:0;gap:16px}
+    .dk-hero-n{font-size:44px}
+    .dk-hero-sub{padding-right:14px;gap:4px}
+    .dk-hero-sub .n,.dk-hero-sub .l{font-size:26px}}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
+   마크업·onclick·정렬 함수는 하나도 안 건드렸다. 전부 CSS 덮어쓰기다.
+   근거가 되는 마크업(고치면 아래 선택자가 죽는다):
+     · 판  : <section class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+     · 표틀: #char-table-wrap > div.overflow-x-auto > table
+     · PC 그룹 헤더줄 : <tr class="bg-gray-700/80 cursor-pointer" onclick=togglePcGroup>
+       → CSS 에선 슬래시를 이스케이프해서 .bg-gray-700\/80 으로 잡는다.
+     · 그룹마다 반복되는 열이름줄 : <tr data-pc=".."> 안이 <th>
+     · 실제 데이터줄             : <tr data-pc=".."> 안이 <td>
+       (renderCharTable 이 renderRow 결과에 data-pc 를 끼워 넣는다)
+     · 경고줄 = .bg-red-950\/40 / 줄무늬 = .bg-gray-900, .bg-gray-800\/50
+   되돌리기: 이 주석부터 스타일 블록 끝까지만 지우면 어제 모습으로 돌아간다.
+   ★주의★ CSS 주석 안에도 스타일 닫는 태그를 절대 쓰지 말 것 — HTML 파서가 그 자리에서
+   스타일을 끝내 버려서 뒤쪽 CSS 전부가 본문에 글자로 쏟아진다(이 블록 작성 중 실제 발생).
+   ══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── 표를 담은 판 (캐릭터 현황 + 최근 명령 내역 둘 다) ───────────────── */
+  main section.bg-gray-900{
+    background:linear-gradient(178deg,var(--dk-ink1),#080b14)!important;
+    border-color:var(--dk-line)!important;border-radius:15px!important;
+    box-shadow:0 18px 44px -30px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.045)!important}
+  main section.bg-gray-900 h2{color:var(--dk-t2)!important;letter-spacing:.13em}
+  main section.bg-gray-900 h2:hover{color:var(--dk-t1)!important}
+  #char-table-arrow{display:inline-block;width:11px;color:var(--dk-gold);font-size:10px}
+  #char-table-count{color:var(--dk-t3)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+  /* 우상단 도구 버튼(새로고침·전체열기·인쇄) — 무채색, 손대면 앰버 */
+  main section.bg-gray-900 button.bg-gray-800{
+    background:rgba(255,255,255,.04)!important;border:1px solid var(--dk-line);
+    border-radius:8px!important;color:var(--dk-t2)!important;font-weight:600}
+  main section.bg-gray-900 button.bg-gray-800:hover{
+    background:rgba(242,181,60,.10)!important;border-color:rgba(242,181,60,.42);
+    color:var(--dk-gold-s)!important}
+  /* 검색칸 */
+  #char-filter{background:rgba(255,255,255,.035)!important;border:1px solid var(--dk-line)!important;
+    border-radius:9px!important;color:var(--dk-t0)!important}
+  #char-filter::placeholder{color:var(--dk-t3)}
+  #char-filter:focus{border-color:rgba(242,181,60,.55)!important;
+    box-shadow:0 0 0 3px rgba(242,181,60,.10)}
+  #cmd-history{color:var(--dk-t2)!important}
+
+  /* ── 표틀: 잉크 접시 하나로 묶고 세로 스크롤을 준다 ───────────────────
+     ★행동 변화 1건★ — thead 에는 원래 sticky top-0 이 붙어 있었지만 감싼 div 에
+     높이가 없어 실제로는 고정되지 않았다. max-height 를 줘서 표 안에서 스크롤되게
+     하면 비로소 머리줄이 붙는다. 예전처럼 페이지 전체 스크롤로 돌리려면
+     아래 max-height/overflow-y 두 줄만 지우면 된다. */
+  #char-table-wrap > .overflow-x-auto{
+    max-height:min(74vh,900px);overflow-y:auto;
+    border:1px solid var(--dk-line);border-radius:12px;background:var(--dk-ink0);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar{width:9px;height:9px}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-track{background:transparent}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-thumb{
+    background:var(--dk-line2);border-radius:6px;border:2px solid var(--dk-ink0)}
+  #char-table-wrap > .overflow-x-auto::-webkit-scrollbar-thumb:hover{background:#46567a}
+
+  /* ── 머리줄: 잉크 배경 + 실제로 붙는 sticky ── */
+  #char-table-wrap thead th{
+    position:sticky;top:0;z-index:4;
+    background:#0b1018!important;color:var(--dk-t2)!important;
+    font-weight:600;letter-spacing:.05em;
+    border-bottom:1px solid var(--dk-line2)!important;
+    box-shadow:0 1px 0 rgba(0,0,0,.6)}
+  #char-table-wrap thead th[onclick]{cursor:pointer}
+  #char-table-wrap thead th:hover{color:var(--dk-gold-s)!important}
+
+  /* ── PC 그룹 헤더: 덩어리의 뚜껑 ───────────────────────────────────── */
+  #char-tbody tr.bg-gray-700\/80 > td{
+    background:linear-gradient(90deg,#17203a,#121a2c 55%,#0e1424)!important;
+    border-top:1px solid var(--dk-line2)!important;
+    border-bottom:1px solid var(--dk-line)!important;
+    box-shadow:inset 3px 0 0 var(--dk-gold);
+    padding-top:.5rem!important;padding-bottom:.5rem!important;
+    color:var(--dk-t0)!important}
+  #char-tbody tr.bg-gray-700\/80:hover > td{
+    background:linear-gradient(90deg,#1c2748,#141d33 55%,#101728)!important}
+  #char-tbody [id^="pc-arrow-"]{display:inline-block;width:11px;font-size:10px;color:var(--dk-gold)}
+  /* 뚜껑에 달린 꼬리표들 — 버튼(중첩 div 안)은 안 건드리도록 > span 으로만 잡는다 */
+  #char-tbody tr.bg-gray-700\/80 > td > div > span{
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-purple-300{color:var(--dk-t2)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-gray-500{color:var(--dk-t3)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-cyan-400{color:var(--dk-t2)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-yellow-300{color:var(--dk-gold)!important}
+  #char-tbody tr.bg-gray-700\/80 > td > div > span.text-red-400{color:var(--dk-coral)!important;font-weight:700}
+  /* 버튼 묶음 사이의 '|' 구분자 — 버튼 div 안에 있으므로 따로 잡는다 */
+  #char-tbody tr.bg-gray-700\/80 > td > div > div > span.text-gray-600{color:var(--dk-line2)!important}
+  /* ★뚜껑의 명령 버튼 14개 — 바탕만 무채색으로 눕히고 글자색(의미)은 그대로 둔다★
+     20개 그룹이 펼쳐지면 색 버튼 300개가 표를 덮어서 정작 봐야 할 수치가 안 읽혔다. */
+  #char-tbody tr.bg-gray-700\/80 button{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2);
+    border-radius:7px!important;font-weight:600}
+  #char-tbody tr.bg-gray-700\/80 button:hover{
+    background:rgba(255,255,255,.13)!important;border-color:var(--dk-t3)}
+
+  /* ── 그룹마다 반복되는 열이름줄 (tr[data-pc] 안의 th) ── */
+  #char-tbody tr[data-pc] th{
+    background:#0a0f1b!important;color:var(--dk-t3)!important;font-weight:600;
+    letter-spacing:.05em;border-bottom:1px solid var(--dk-line)!important}
+
+  /* ── 데이터줄 ──────────────────────────────────────────────────────── */
+  #char-tbody tr{border-color:var(--dk-line)!important}
+  #char-tbody tr.bg-gray-900{background:transparent!important}
+  #char-tbody tr.bg-gray-800\/50{background:rgba(255,255,255,.022)!important}
+  /* 개입 필요줄 — 빨간 판때기 대신 왼쪽에 코랄 한 줄 + 아주 옅은 틴트 */
+  #char-tbody tr.bg-red-950\/40{background:rgba(255,93,110,.07)!important}
+  #char-tbody tr.bg-red-950\/40 > td:first-child{box-shadow:inset 2px 0 0 var(--dk-coral)}
+  #char-tbody tr[data-pc]:hover > td{background:rgba(242,181,60,.07)}
+  #char-tbody tr[data-pc] > td{border-bottom:1px solid rgba(26,34,55,.5)}
+
+  /* 숫자 열만 표시체 + 자릿수 고정 (이름·직업·정기추출·아르카나·장비는 제외) */
+  #char-tbody tr[data-pc] > td:nth-child(1),#char-tbody tr[data-pc] > td:nth-child(2),
+  #char-tbody tr[data-pc] > td:nth-child(6),#char-tbody tr[data-pc] > td:nth-child(7),
+  #char-tbody tr[data-pc] > td:nth-child(8),#char-tbody tr[data-pc] > td:nth-child(9),
+  #char-tbody tr[data-pc] > td:nth-child(10),#char-tbody tr[data-pc] > td:nth-child(11),
+  #char-tbody tr[data-pc] > td:nth-child(12),#char-tbody tr[data-pc] > td:nth-child(13),
+  #char-tbody tr[data-pc] > td:nth-child(14),#char-tbody tr[data-pc] > td:nth-child(18),
+  #char-tbody tr[data-pc] > td:nth-child(19),#char-tbody tr[data-pc] > td:nth-child(20),
+  #char-tbody tr[data-pc] > td:nth-child(21),#char-tbody tr[data-pc] > td:nth-child(22),
+  #char-tbody tr[data-pc] > td:nth-child(23){
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+  /* 평상시는 무채색 — 색이 정보를 나를 때만 남긴다.
+     ★열 번호로 잡는 이유★ — 4열(직업)의 classColors 가 궁성=green-400 / 검성=orange-400 /
+     마도성=cyan-400 … 로 수치 열과 ★같은 Tailwind 클래스★를 쓴다. .text-cyan-400 처럼
+     클래스만 보고 칠하면 직업 색까지 같이 죽는다(작업 중 실제로 그랬다). 그래서 열 번호로
+     한정하고 4열(직업)·15열(정기추출)은 손대지 않는다. */
+  #char-tbody tr[data-pc] > td:nth-child(2){color:var(--dk-t2)!important}   /* # */
+  #char-tbody tr[data-pc] > td:nth-child(3){color:var(--dk-t0)!important;font-weight:600} /* 이름 */
+  #char-tbody tr[data-pc] > td:nth-child(6){color:var(--dk-t1)!important}   /* 장비전투력 */
+  #char-tbody tr[data-pc] > td:nth-child(7){color:var(--dk-t0)!important}   /* 파워전투력 */
+  #char-tbody tr[data-pc] > td:nth-child(8){color:var(--dk-t1)!important}   /* 오드에너지 */
+  #char-tbody tr[data-pc] > td:nth-child(18),
+  #char-tbody tr[data-pc] > td:nth-child(19){color:var(--dk-t1)!important}  /* 각인·거래키나 */
+  #char-tbody tr[data-pc] > td:nth-child(21),
+  #char-tbody tr[data-pc] > td:nth-child(22){color:var(--dk-t2)!important}  /* 어비스 */
+  /* 돈의 총합 한 줄만 앰버 / 완료는 민트 / 개입은 코랄 */
+  #char-tbody tr[data-pc] > td:nth-child(20){color:var(--dk-gold)!important}          /* 창고키나 */
+  #char-tbody tr[data-pc] > td:nth-child(23).text-sky-300{color:var(--dk-t2)!important}   /* 회랑 미완 */
+  #char-tbody tr[data-pc] > td:nth-child(23).text-green-400{color:var(--dk-mint)!important}/* 회랑 완주 */
+  #char-tbody tr[data-pc] > td .text-red-400{color:var(--dk-coral)!important}
+  #char-tbody tr[data-pc] > td .text-pink-400{color:var(--dk-t2)!important}
+  #char-tbody input[type="checkbox"]{accent-color:var(--dk-mint)}
+  /* 줄 안의 작은 것들: 📡 수집 버튼 / 보기 링크 */
+  #char-tbody tr[data-pc] > td button{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2);
+    border-radius:7px!important;color:var(--dk-t2)!important}
+  #char-tbody tr[data-pc] > td button:hover{
+    background:rgba(79,211,232,.16)!important;color:var(--dk-cyan)!important}
+  #char-tbody tr[data-pc] > td a{color:var(--dk-t2)!important;
+    text-decoration-color:var(--dk-t3)}
+  #char-tbody tr[data-pc] > td a:hover{color:var(--dk-gold-s)!important;
+    text-decoration-color:var(--dk-gold)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ★덱 테마 3단계 — 모달 (2026-08-16)★
+   겉모습만. id·onclick·열고닫는 JS(classList hidden) 전부 그대로다.
+   ══════════════════════════════════════════════════════════════════════════ */
+  /* 마스크: 검은 장막 → 짙은 잉크 + 블러 */
+  #log-modal,#vietnam-modal,#bug-modal,#liveModal,#rental-modal,#acct-modal,#info-modal{
+    background:rgba(4,6,12,.72)!important;
+    -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+  /* 판: 위 1px 하이라이트 + 깊은 그림자 */
+  #log-modal > div,#vietnam-modal > div,#bug-modal > div,#liveModal > div,
+  #rental-modal > div,#acct-modal > div,#info-modal > div,#voice-panel{
+    background:linear-gradient(178deg,var(--dk-ink1),#070a12)!important;
+    border-color:var(--dk-line)!important;
+    box-shadow:0 40px 90px -42px rgba(0,0,0,1),
+               inset 0 1px 0 rgba(255,255,255,.05)!important}
+  /* 가운데 뜨는 판은 카드와 같은 반경 / 옆에서 나오는 서랍은 각지게 둔다 */
+  #vietnam-modal > div,#bug-modal > div,#liveModal > div,
+  #rental-modal > div,#acct-modal > div{border-radius:15px!important}
+  #voice-panel{border-radius:13px!important}
+  /* 머리줄·바닥줄 구분선 */
+  #log-modal .border-b,#vietnam-modal .border-b,#bug-modal .border-b,#liveModal .border-b,
+  #rental-modal .border-b,#acct-modal .border-b,#info-modal .border-b{
+    border-bottom-color:var(--dk-line)!important}
+  #log-modal .border-t,#liveModal .border-t,#info-modal .border-t{
+    border-top-color:var(--dk-line)!important}
+  /* 제목: 알록달록한 색 이름표 → 무채색. 단 버그 모달만 코랄(개입 신호) */
+  #log-modal h2,#vietnam-modal h2,#liveModal h2,#acct-modal h2,#info-modal h2{
+    color:var(--dk-t0)!important;font-weight:700;letter-spacing:.01em}
+  #bug-modal h2,#rental-modal h2{color:var(--dk-coral)!important;font-weight:700}
+  #acct-count{color:var(--dk-t3)!important;font-family:var(--dk-disp)}
+  /* 모달 안 버튼: 반경 한 체계 + 무채색 바탕(글자색=의미는 유지) */
+  #log-modal button,#vietnam-modal button,#bug-modal button,#liveModal button,
+  #rental-modal button,#acct-modal button,#info-modal button,#voice-panel button{
+    border-radius:8px!important}
+  #log-modal [class*="bg-gray-7"],#bug-modal [class*="bg-gray-7"],
+  #acct-modal button[class*="bg-gray-7"],#info-modal button[class*="bg-gray-7"]{
+    background:rgba(255,255,255,.05)!important;border:1px solid var(--dk-line2)}
+
+  /* ── 계정 세부정보 표 ── */
+  .acct-table thead th{color:var(--dk-t3)!important;letter-spacing:.06em;
+    border-bottom:1px solid var(--dk-line2)!important}
+  .acct-td{border-bottom:1px solid rgba(26,34,55,.6)!important}
+  .acct-row.acct-group td{border-top:1px solid var(--dk-line2)!important}
+  .acct-row:hover td{background:rgba(242,181,60,.055)!important}
+  .acct-id{color:var(--dk-t0)!important}
+  .acct-em,.acct-ph{color:var(--dk-t2)!important}
+  .acct-ph,.acct-n{font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+
+  /* ── 캐릭터 세부정보(서랍) ── */
+  #info-content > div{
+    background:linear-gradient(180deg,#101627,#0a0f1a)!important;
+    border-color:var(--dk-line)!important;border-radius:13px!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04)!important}
+  #info-content .bg-gray-750{background:rgba(255,255,255,.035)!important}
+  #info-content .border-gray-700,#info-content .border-gray-800\/60{
+    border-color:var(--dk-line)!important}
+  #info-content .text-indigo-400{color:var(--dk-gold)!important;
+    font-family:var(--dk-disp)}
+  #info-content .text-gray-500{color:var(--dk-t3)!important}
+  #info-content .text-gray-100{color:var(--dk-t0)!important}
+  #info-content .text-gray-200{color:var(--dk-t0)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums}
+  #info-content .text-yellow-300{color:var(--dk-gold)!important;
+    font-family:var(--dk-disp);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  #info-collected-at{color:var(--dk-t3)!important;font-family:var(--dk-disp)}
+
+  /* ── 버그 스크린샷 목록 ── */
+  #bug-list > div{background:rgba(255,255,255,.035)!important;
+    border-color:var(--dk-line)!important;border-radius:11px!important}
+  #bug-list .font-mono{color:var(--dk-t2)!important}
+  #bug-list .text-gray-600{color:var(--dk-t3)!important}
+  #bug-clear-btn{background:rgba(255,93,110,.12)!important;
+    border:1px solid rgba(255,93,110,.35);color:var(--dk-coral)!important}
+  #bug-clear-btn:hover{background:rgba(255,93,110,.22)!important}
