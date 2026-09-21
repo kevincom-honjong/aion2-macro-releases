@@ -8766,10 +8766,18 @@ async def _push_cmd_history(tenant: str):
     await manager.broadcast({"type": "cmd_history", "commands": cmds}, tenant)
 
 
+LOG_READ_MAX = 3500   # 보존(database.LOG_KEEP_PER_PC 3000 + 정리 주기 199)보다 커야 ★전부★ 읽힌다
+
 @app.get("/logs/{pc_id}")
-async def pc_logs(pc_id: str, request: Request):
+async def pc_logs(pc_id: str, request: Request, limit: int = 2000):
+    """limit 기본 2000(화면용). 보존분 전부를 봐야 할 때만 올린다 — 2026-09-21 사고 612
+    감사에서 2000 이 상한이라 ★보존된 줄의 3분의 1을 못 봤다★(없다고 말할 근거가 안 됐다)."""
     tenant = _require_session(request)
-    logs = await get_logs(ns(tenant, pc_id), limit=2000)
+    try:
+        limit = max(1, min(int(limit), LOG_READ_MAX))
+    except Exception:
+        limit = 2000
+    logs = await get_logs(ns(tenant, pc_id), limit=limit)
     return JSONResponse({"logs": logs})
 
 
