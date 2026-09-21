@@ -417,6 +417,19 @@ def _auto_register_loop():
 #   ★못 막는 것★ 상행 대역폭 자체 — 개발컴이 함대 대역 유선에 붙어야 근본 해결(주인님 몫).
 # ══════════════════════════════════════════════════════════════════════════════
 SEED_MAX_CONCURRENT = 2
+# ══════════════════════════════════════════════════════════════════════════
+# ★★사고 618 (2026-09-21) — 시드가 무선을 다 먹어 관제컴 팜뷰가 얼어붙었다★★
+#   팜뷰방 실측: 05:04 시드 13.98MB/s(=112Mbps) 직후 05:09 팜뷰 화면 0/25 ·
+#   관제컴→공유기 핑 2/2 손실. 08:21~08:23 에도 5대에 1.9~4.8MB/s 로 뿌리는 동안
+#   개발컴→관제컴 핑 100% 손실 · 팜뷰 응답 4~8초. 그때 관제컴 무선은 신호 85%,
+#   팜뷰 자체 사용량은 12~16Mbps 뿐이었다 — 남은 큰 덩어리가 이 시드였다.
+#   ★시드·팜 PC·관제컴이 같은 AP 를 쓴다★ — 73MB 를 전속력으로 밀면 관제컴이 굶는다.
+#
+# ★왜 속도 상한이 안전한가★ 업데이터는 ★속도로 시드를 버리지 않는다★(사고 495 로 폐기).
+#   버리는 조건은 ① 20초 무진행 ② 전체 300초 초과 둘뿐이다(updater.py SEED_STALL_S/SEED_MAX_S).
+#   73MB ÷ 2MB/s = 약 37초 → 둘 다 여유롭게 통과한다. 동시 2대라 총 4MB/s(32Mbps).
+SEED_MAX_MBPS = float(os.environ.get("SEED_MAX_MBPS", "2.0"))   # 0 이면 상한 없음
+SEED_PACE_MAX_SLEEP = 0.5    # 한 번에 이보다 오래 자지 않는다 — 20초 「멈춤」 판정과 겹치지 않게
 SEED_WAIT_S = 15.0
 _seed_slots = threading.BoundedSemaphore(SEED_MAX_CONCURRENT)
 _seed_busy = [0]            # 지금 전송 중인 수 (표시용)
@@ -530,6 +543,10 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     self.wfile.write(b)
                     sent += len(b)
+                    if SEED_MAX_MBPS > 0:          # ★사고 618★ 페이싱 — 누적 속도를 상한에 맞춘다
+                        _over = sent / (SEED_MAX_MBPS * 1048576.0) - (time.time() - _t0)
+                        if _over > 0:
+                            time.sleep(min(_over, SEED_PACE_MAX_SLEEP))
         except Exception as e:
             print(f"[시드] {self.client_address[0]} 전송 중 끊김 {sent // (1024*1024)}MB ({type(e).__name__}) "
                   f"{time.strftime('%H:%M:%S')}", flush=True)
