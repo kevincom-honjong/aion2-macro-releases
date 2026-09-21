@@ -258,6 +258,51 @@ async def delete_pc_all_data(pc_id: str) -> None:
         await db.commit()
 
 
+# ★카드 삭제 전 백업용 읽기 전용 덤프 (2026-09-22, 사고 —)★ delete_pc_all_data 가 지우는
+#   7개 표 + 안 지우는 nightmare_progress·slot_filters 까지 그 pc_id 행 전부를 그대로 반환한다.
+#   쓰기 없음 — 삭제 여부와 무관하게 언제나 안전하게 부를 수 있다. logs 는 보존 상한(3000/PC)
+#   보다 넉넉한 5000 으로 잘라 무제한 테이블 사고(2026-09-11류)를 막는다.
+async def get_pc_dump(pc_id: str) -> dict:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        async def _all(sql: str, params: tuple) -> list[dict]:
+            async with db.execute(sql, params) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
+        return {
+            "pc_id": pc_id,
+            "pc_status": await _all(
+                "SELECT pc_id, data, updated_at FROM pc_status WHERE pc_id=?", (pc_id,)),
+            "updater_status": await _all(
+                "SELECT pc_id, data, updated_at FROM updater_status WHERE pc_id=?", (pc_id,)),
+            "commands": await _all(
+                "SELECT id, pc_id, command, args, status, created_at, updated_at "
+                "FROM commands WHERE pc_id=? ORDER BY id", (pc_id,)),
+            "updater_commands": await _all(
+                "SELECT id, pc_id, command, args, status, created_at, updated_at "
+                "FROM updater_commands WHERE pc_id=? ORDER BY id", (pc_id,)),
+            "logs": await _all(
+                "SELECT id, pc_id, level, message, created_at FROM logs "
+                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id,)),
+            # ★업데이터 로그는 ".upd" 접미사 키(delete_pc_all_data 와 짝)★
+            "logs_upd": await _all(
+                "SELECT id, pc_id, level, message, created_at FROM logs "
+                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id + ".upd",)),
+            "char_info": await _all(
+                "SELECT pc_id, total_kina, chars, collected_at FROM char_info WHERE pc_id=?",
+                (pc_id,)),
+            "death_events": await _all(
+                "SELECT id, pc_id, created_at FROM death_events WHERE pc_id=? ORDER BY id",
+                (pc_id,)),
+            "nightmare_progress": await _all(
+                "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress "
+                "WHERE pc_id=? ORDER BY slot", (pc_id,)),
+            "slot_filters": await _all(
+                "SELECT pc_id, filters FROM slot_filters WHERE pc_id=?", (pc_id,)),
+        }
+
+
 async def get_status(pc_id: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, File
 
 from database import (
     init_db, upsert_status, get_all_statuses, get_status, delete_status,
-    delete_pc_all_data, get_death_counts_since, get_all_death_events,
+    delete_pc_all_data, get_pc_dump, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, get_pending_commands,
     ack_command, cancel_command, get_logs,
     insert_log, get_recent_commands, get_command_pc, get_updater_command_pc,
@@ -9191,6 +9191,14 @@ async def remove_pc(pc_id: str, request: Request):
     await delete_pc_all_data(ns(tenant, pc_id))
     await push_state(tenant)
     return JSONResponse({"ok": True})
+
+
+@app.get("/admin/pc_dump/{pc_id}")
+async def admin_pc_dump(pc_id: str, request: Request):
+    """카드 삭제(DELETE /status/{pc_id}) 전 백업용 — 읽기 전용, 쓰기 없음(2026-09-22).
+    remove_pc 가 지우는 7개 표 + 안 지우는 nightmare_progress·slot_filters 까지 그대로 준다."""
+    tenant = _require_session(request)
+    return JSONResponse(await get_pc_dump(ns(tenant, pc_id)))
 
 
 @app.websocket("/ws/macro/{pc_id}")
