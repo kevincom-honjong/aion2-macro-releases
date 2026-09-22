@@ -121,6 +121,25 @@ let pendingCmds = {};   // base(물리 PC) → 진행 표시 1건. 같은 PC 에
                         //   (누적하면 영영 안 지워진다 — 그 PC 의 매크로는 어차피 한 대뿐이다)
 let _pendDupMemo = {cmd:'', at:0, yes:false};   // 일괄 전송(Promise.all) 때 confirm 을 1회로
 
+// ★업데이트/재시작 결과만(2026-09-22, 주인님 지시)★ — pendingCmds 는 건드리지 않는다
+//   (범위가 넓고 손대면 회귀 위험). ★기준은 버전★ — updater.version 이 바뀌면 ✓,
+//   3분 안 안 바뀌면 ✗. 설명 문구는 카드에 안 띄운다(hover title 만).
+let UPD_RESULT = {};   // base → {before, deadline, result: null|'ok'|'fail'}
+function updResultStart(base, beforeVer){
+  UPD_RESULT[base] = {before: beforeVer||'', deadline: Date.now()+180000, result: null};
+}
+function updResultSweep(){
+  let changed = false;
+  Object.keys(UPD_RESULT).forEach(b=>{
+    const e = UPD_RESULT[b];
+    if (e.result) return;   // 이미 확정된 건 재판정 안 한다(다음 시도가 덮어씀)
+    const cur = (state[b]||{})._updater_version || '';
+    if (cur && cur !== e.before) { e.result = 'ok'; changed = true; }
+    else if (Date.now() >= e.deadline) { e.result = 'fail'; changed = true; }
+  });
+  return changed;
+}
+
 // ★빠른 재렌더★ — 기존 scheduleRender 는 700ms 디바운스(WS 폭주용)라 버튼을 누른
 //   사람에게는 늦다. 사람 클릭 경로만 80ms 로 따로 판다(둘이 겹쳐도 렌더가 두 번일 뿐 무해).
 let _renderTimerFast=null;
@@ -1143,8 +1162,15 @@ function buildCard(pc) {
   const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${esc(pc.macro_version)}</span>` : '';
+  // ★업데이트/재시작 결과만(2026-09-22)★ — 버전이 바뀌면 ✓, 3분 안 안 바뀌면 ✗. 설명은 hover 로만.
+  const _ur = UPD_RESULT[baseId(pc.pc_id||'')];
+  const updResultTxt = (_ur && _ur.result)
+    ? (_ur.result === 'ok'
+        ? `<span class="text-green-400" title="버전 바뀜: ${esc(_ur.before)} → ${esc(pc._updater_version||'')}">✓</span>`
+        : `<span class="text-red-400" title="3분 안에 버전이 안 바뀜(${esc(_ur.before)} 그대로)">✗</span>`)
+    : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
-    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}</div>`
+    ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}${updResultTxt}</div>`
     : '';
   const activeSlot = pc.slot||0;
   const isOnline = (STATUS_CFG[st]||STATUS_CFG.offline).online;
@@ -2973,7 +2999,7 @@ function connectWS() {
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();updResultSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -4197,13 +4223,18 @@ async function sendUpdaterCmd(pc_id, command, args={}) {
   //   해제는 ④ttl 과 ①상태 변화에만 기댄다. 그래서 ttl 을 넉넉히 준다.
   const _pendU = pendRegister(pc_id, command, args);
   if (_pendU) scheduleRenderNow();
+  const _base = baseId(pc_id);
   try {
-    const res = await fetch(`/updater/command/${baseId(pc_id)}`, {   // 업데이터=base id (멀티계정)
+    const res = await fetch(`/updater/command/${_base}`, {   // 업데이터=base id (멀티계정)
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({command, args})
     });
     if (_pendU && !res.ok && pendingCmds[_pendU.base] === _pendU) {
       delete pendingCmds[_pendU.base]; scheduleRenderNow();
+    }
+    // ★결과만(2026-09-22)★ — update/restart 만 추적. update_only 는 대상 밖(사람이 안 부른다).
+    if (res.ok && (command === 'update' || command === 'restart')) {
+      updResultStart(_base, (state[_base]||{})._updater_version || '');
     }
     return res.ok;
   } catch (e) {          // ★네트워크 예외도 실패다 (2026-08-22)★ 안 잡으면 호출부가 통째로 죽는다
@@ -5186,7 +5217,7 @@ function handleCharInfoMsg(msg) {
   const res=await fetch('/status');
   if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
-  setInterval(renderCards,60000);
+  setInterval(()=>{ updResultSweep(); renderCards(); },60000);   // ★3분 데드라인의 최소 보장 틱★ — WS state 가 안 와도 1분마다 판정
   // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)
   //   `rot_allow` 가 빈 채로 얼마나 오래 있었는지 아무도 몰랐다. ▶시작은 눌리는데
   //   무장은 매번 조용히 거부됐고(토스트는 몇 초 뒤 사라진다), 주인님은
