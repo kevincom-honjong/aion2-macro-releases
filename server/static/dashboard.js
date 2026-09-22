@@ -19,6 +19,10 @@ function acctNoOfSuf(c){ return isAcctSuf(c) ? ACCT_SUFFIX.indexOf(c) + 2 : 0; }
 let state = {};
 let latestVersions = {macro:'', updater:''};
 let selectedPcs = new Set();
+// ★은퇴 목록(2026-09-22)★ — 서버 RETIRED_PCS 를 그대로 받는다. pc_status 행은 지워도
+//   형제 카드(계정1)가 여전히 acct_ids 카탈로그를 보고해서, 이게 없으면 buildStack 이
+//   "접속한 적 없는 계정" 자리에 회색 탭을 계속 그린다 — 그 탭을 여기서 거른다.
+let RETIRED = new Set();
 let logModalPc = null;
 let logModalSrc = 'both';   // 'both' | 'macro' | 'upd' — 로그 모달이 지금 보고 있는 출처
 let menuPcId = null;
@@ -1454,6 +1458,10 @@ function buildStack(s){
   let tabs = '';
   for (let k = 1; k <= hiNum; k++) {
     const g = byNum[k];
+    // ★은퇴한 카드 번호는 회색 탭조차 안 그린다(2026-09-22, 주인님 「회색 카드 다 없애라」)★
+    //   카드가 없는(g 없는) 자리만 거른다 — 실제로 도는 카드가 있으면(g 있음) 은퇴 대상이
+    //   아닐 것이므로 건드리지 않는다(방어적 스코프).
+    if (!g && RETIRED.has(k === 1 ? s.base : s.base + ACCT_LABELS[k-1])) continue;
     const cur = !!g && g.pc_id === s.top.pc_id;
     const on = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).online) : false;
     // 접미사 pc_id 대신 아이디(전 계정 지도)로 — "20b" 노출 금지(v1.1.424 사용자)
@@ -2957,7 +2965,7 @@ function connectWS() {
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -5168,7 +5176,7 @@ function handleCharInfoMsg(msg) {
 // ─── 초기화 ──────────────────────────────────────────────────────────────────
 (async()=>{
   const res=await fetch('/status');
-  if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
+  if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   setInterval(renderCards,60000);
   // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)

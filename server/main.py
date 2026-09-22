@@ -116,6 +116,30 @@ def _parse_retired(raw: str) -> set:
     return {p.strip() for p in (raw or "").split(",") if p.strip()}
 
 
+def _retired_list(tenant: str) -> list:
+    """이 테넌트의 은퇴 id 목록(원래 이름, ns 벗김) — /status·WS state·push_state 에 실어
+    보낸다(2026-09-22). ★왜 필요한가★ 은퇴로 pc_status 행은 지워도, 형제 카드(예: PC-12)가
+    여전히 acct_ids 카탈로그(info.txt 전 계정 지도)를 보고하고 있어서 대시보드 JS 가
+    「접속한 적 없는 계정」 자리까지 회색 탭으로 계속 그린다 — 그 탭을 JS 쪽에서 걸러야 한다."""
+    return sorted(raw for k in RETIRED_PCS for t, raw in [split_ns(k)] if t == tenant)
+
+
+# ─── 계정 없음 표시 (2026-09-22) — 은퇴(데이터 삭제)와 다르다: 컴퓨터·업데이터는
+#   ★살려두고★ 계정 칸만 강제로 비운다. ★왜 1회성 /report 로는 안 되나★ 매크로가 살아서
+#   계속 실제 상태를 보고하면(예: PC-24 idle) 다음 보고가 그 즉시 덮어써 원상복구된다
+#   (실측: 스푸핑 직후엔 no_account 였는데 몇 분 뒤 다시 idle·acct_id 로 돌아옴).
+#   → 읽을 때마다(_build_full_state_inner) 강제로 덮어써야 한다.
+NO_ACCOUNT_PCS: set = set()
+
+
+def _parse_no_account(raw: str) -> set:
+    return {p.strip() for p in (raw or "").split(",") if p.strip()}
+
+
+def _no_account_list(tenant: str) -> list:
+    return sorted(raw for k in NO_ACCOUNT_PCS for t, raw in [split_ns(k)] if t == tenant)
+
+
 NS_SEP = "::"
 TENANTS: dict = {}
 PW_TO_TENANT: dict = {}
@@ -882,6 +906,13 @@ async def lifespan(app: FastAPI):
             print(f"[은퇴] 목록 복원: {sorted(RETIRED_PCS)}")
     except Exception as e:
         print(f"[은퇴] retired_pcs 로드 실패(무시): {e}")
+    # 계정 없음 목록 복원(2026-09-22)
+    try:
+        NO_ACCOUNT_PCS.update(_parse_no_account(await get_setting("no_account_pcs") or ""))
+        if NO_ACCOUNT_PCS:
+            print(f"[계정없음] 목록 복원: {sorted(NO_ACCOUNT_PCS)}")
+    except Exception as e:
+        print(f"[계정없음] no_account_pcs 로드 실패(무시): {e}")
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
@@ -1342,6 +1373,20 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                     pc["_rot_target"] = acct_no_of_label(_tg)
     except Exception:
         pass
+    # ★계정 없음 강제(2026-09-22) — ★맨 마지막에 덮어쓴다★★
+    #   ★왜 여기인가★ 처음엔 statuses 를 막 읽은 직후에 덮었는데, 그 뒤 신선도 판정
+    #   (offline 강등 세 곳)·2차 패스(other_account 강등)가 ★차례로 status 를 다시 써서★
+    #   결국 원래 값으로 돌아갔다(실측: no_account 로 세팅해도 응답은 offline/idle).
+    #   매크로가 계속 살아 보고해도(=위 로직이 다시 실행돼도) 이 마지막 한 번이 이긴다.
+    #   컴퓨터·업데이터 정보(_updater_state 등, 위에서 이미 붙였다)는 안 건드린다.
+    if NO_ACCOUNT_PCS:
+        for _pc in statuses:
+            if ns(tenant, _pc.get("pc_id") or "") in NO_ACCOUNT_PCS:
+                _pc["status"] = "no_account"
+                _pc["character"] = ""; _pc["class"] = ""; _pc["chars"] = []
+                _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
+                _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
+                _pc["hunt_progress"] = 0.0
     return statuses
 
 
@@ -1450,7 +1495,8 @@ async def push_state(tenant: str = "main"):
             "macro": ver.get("exe", {}).get("version", ""),
             "updater": ver.get("updater", {}).get("version", ""),
         }
-        await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest}, tenant)
+        await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest,
+                                 "retired": _retired_list(tenant)}, tenant)
     except Exception:
         _perf_count("push_state_failed")
         raise
@@ -3556,6 +3602,10 @@ function acctNoOfSuf(c){ return isAcctSuf(c) ? ACCT_SUFFIX.indexOf(c) + 2 : 0; }
 let state = {};
 let latestVersions = {macro:'', updater:''};
 let selectedPcs = new Set();
+// ★은퇴 목록(2026-09-22)★ — 서버 RETIRED_PCS 를 그대로 받는다. pc_status 행은 지워도
+//   형제 카드(계정1)가 여전히 acct_ids 카탈로그를 보고해서, 이게 없으면 buildStack 이
+//   "접속한 적 없는 계정" 자리에 회색 탭을 계속 그린다 — 그 탭을 여기서 거른다.
+let RETIRED = new Set();
 let logModalPc = null;
 let logModalSrc = 'both';   // 'both' | 'macro' | 'upd' — 로그 모달이 지금 보고 있는 출처
 let menuPcId = null;
@@ -4991,6 +5041,10 @@ function buildStack(s){
   let tabs = '';
   for (let k = 1; k <= hiNum; k++) {
     const g = byNum[k];
+    // ★은퇴한 카드 번호는 회색 탭조차 안 그린다(2026-09-22, 주인님 「회색 카드 다 없애라」)★
+    //   카드가 없는(g 없는) 자리만 거른다 — 실제로 도는 카드가 있으면(g 있음) 은퇴 대상이
+    //   아닐 것이므로 건드리지 않는다(방어적 스코프).
+    if (!g && RETIRED.has(k === 1 ? s.base : s.base + ACCT_LABELS[k-1])) continue;
     const cur = !!g && g.pc_id === s.top.pc_id;
     const on = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).online) : false;
     // 접미사 pc_id 대신 아이디(전 계정 지도)로 — "20b" 노출 금지(v1.1.424 사용자)
@@ -6494,7 +6548,7 @@ function connectWS() {
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
+    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -8705,7 +8759,7 @@ function handleCharInfoMsg(msg) {
 // ─── 초기화 ──────────────────────────────────────────────────────────────────
 (async()=>{
   const res=await fetch('/status');
-  if(res.ok)(await res.json()).pcs?.forEach(p=>{state[p.pc_id]=p;});
+  if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   setInterval(renderCards,60000);
   // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)
@@ -8750,7 +8804,7 @@ async def dashboard(request: Request):
 async def all_statuses(request: Request):
     tenant = _require_session(request)
     pcs = await _build_full_state(tenant)
-    return JSONResponse({"pcs": pcs})
+    return JSONResponse({"pcs": pcs, "retired": _retired_list(tenant)})
 
 
 def _public_args(a):
@@ -9237,9 +9291,7 @@ async def admin_pc_dump(pc_id: str, request: Request):
 async def admin_retire_list(request: Request):
     """이 테넌트의 은퇴 PC 목록(검증용, 2026-09-22)."""
     tenant = _require_session(request)
-    mine = sorted(raw for k in RETIRED_PCS
-                 for t, raw in [split_ns(k)] if t == tenant)
-    return JSONResponse({"retired": mine})
+    return JSONResponse({"retired": _retired_list(tenant)})
 
 
 @app.post("/admin/retire/{pc_id}")
@@ -9266,6 +9318,38 @@ async def admin_unretire_pc(pc_id: str, request: Request):
     await set_setting("retired_pcs", ",".join(sorted(RETIRED_PCS)))
     print(f"[은퇴] {nspc} 해제")
     return JSONResponse({"ok": True, "retired": False, "pc_id": pc_id})
+
+
+@app.get("/admin/no_account")
+async def admin_no_account_list(request: Request):
+    """이 테넌트의 「계정 없음」 강제 목록(검증용, 2026-09-22)."""
+    tenant = _require_session(request)
+    return JSONResponse({"no_account": _no_account_list(tenant)})
+
+
+@app.post("/admin/no_account/{pc_id}")
+async def admin_set_no_account(pc_id: str, request: Request):
+    """컴퓨터·업데이터는 살려두고 계정 칸만 강제로 비운다(은퇴와 다름, 2026-09-22).
+    ★_build_full_state_inner 가 읽을 때마다 덮어쓴다★ — 매크로가 계속 살아 보고해도 안 풀린다."""
+    tenant = _require_session(request)
+    nspc = ns(tenant, pc_id)
+    NO_ACCOUNT_PCS.add(nspc)
+    await set_setting("no_account_pcs", ",".join(sorted(NO_ACCOUNT_PCS)))
+    await push_state(tenant)
+    print(f"[계정없음] {nspc} 등록")
+    return JSONResponse({"ok": True, "no_account": True, "pc_id": pc_id})
+
+
+@app.delete("/admin/no_account/{pc_id}")
+async def admin_unset_no_account(pc_id: str, request: Request):
+    """계정 없음 해제 — 다음 실제 보고부터 원래 상태가 다시 보인다."""
+    tenant = _require_session(request)
+    nspc = ns(tenant, pc_id)
+    NO_ACCOUNT_PCS.discard(nspc)
+    await set_setting("no_account_pcs", ",".join(sorted(NO_ACCOUNT_PCS)))
+    await push_state(tenant)
+    print(f"[계정없음] {nspc} 해제")
+    return JSONResponse({"ok": True, "no_account": False, "pc_id": pc_id})
 
 
 @app.websocket("/ws/macro/{pc_id}")
@@ -9470,7 +9554,8 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # 초기 상태 전송 (updater 정보 포함)
         pcs = await _build_full_state(tenant)
-        await websocket.send_text(json.dumps({"type": "state", "pcs": pcs}))
+        await websocket.send_text(json.dumps({"type": "state", "pcs": pcs,
+                                              "retired": _retired_list(tenant)}))
         while True:
             await websocket.receive_text()   # keep alive; client doesn't send
     except WebSocketDisconnect:
