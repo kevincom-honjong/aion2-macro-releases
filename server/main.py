@@ -124,6 +124,24 @@ def _retired_list(tenant: str) -> list:
     return sorted(raw for k in RETIRED_PCS for t, raw in [split_ns(k)] if t == tenant)
 
 
+# ★은퇴 id 가 켜지면 기본 카드에 경고(2026-09-22)★ — 은퇴 보고는 조용히 버리는데,
+#   조용히 버리니 "그 PC 가 왜 오프라인이지"를 아무도 못 본다(실측: PC-20·21·12).
+#   ★영속화 안 한다★ — lan_url 캐시(`_lan_cache_last`)와 같은 급의 정보다: 재배포로
+#   지워져도 다음 보고가 오면 몇 초 안에 다시 채워진다. 설정 테이블에 매 보고마다
+#   쓰면 I/O 만 늘고 얻는 게 없다.
+RETIRED_SEEN: dict = {}   # nspc(은퇴 id) → 마지막 수신 시각(ISO)
+
+
+def _mark_retired_seen(nspc: str) -> None:
+    RETIRED_SEEN[nspc] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+# ★은퇴 id 여도 「빠져나오는」 명령은 허용한다(2026-09-22)★ — 안 그러면 은퇴 계정으로
+#   켜진 걸 봐도 그 계정에서 못 나온다(사람이 직접 그 PC 앞에 가야 함).
+_RETIRED_ESCAPE_CMDS = frozenset(
+    {"switch_launcher", "switch_account", "set_account", "find_host"})
+
+
 # ─── 계정 없음 표시 (2026-09-22) — 은퇴(데이터 삭제)와 다르다: 컴퓨터·업데이터는
 #   ★살려두고★ 계정 칸만 강제로 비운다. ★왜 1회성 /report 로는 안 되나★ 매크로가 살아서
 #   계속 실제 상태를 보고하면(예: PC-24 idle) 다음 보고가 그 즉시 덮어써 원상복구된다
@@ -188,6 +206,11 @@ def acct_no_of_label(lbl) -> int:
     """라벨 → 계정번호. ★모르는 값은 0(없음)★ — 순환 target 판정에 쓰는 쪽 규약."""
     _s = str(lbl or "")
     return (ACCT_LABELS.index(_s) + 1) if (len(_s) == 1 and _s in ACCT_LABELS) else 0
+
+
+def _acct_num_of_pcid(pid: str) -> int:
+    """pc_id 접미사 → 계정번호(계정1은 접미사 없음). JS acctNoOfSuf 와 같은 규칙(2026-09-22)."""
+    return (ACCT_SUFFIX.index(pid[-1]) + 2) if (pid and pid[-1] in ACCT_SUFFIX) else 1
 
 
 def clean_pc_id(pc_id: str) -> str:
@@ -1387,6 +1410,28 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                 _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
                 _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
                 _pc["hunt_progress"] = 0.0
+    # ★은퇴 계정이 켜지면 기본 카드에 경고를 얹는다(2026-09-22)★ — 조용히 버리기만 하면
+    #   "그 PC 가 왜 오프라인이지"를 아무도 못 본다(실측: PC-20·21·12). 그 PC 의 데이터는
+    #   여전히 안 만든다 — 기본 카드(접미사 없는 카드)에 ★표시만★ 덧붙인다.
+    if RETIRED_SEEN:
+        for _rk, _rt in list(RETIRED_SEEN.items()):
+            _rtn, _rraw = split_ns(_rk)
+            if _rtn != tenant:
+                continue
+            _rbase = _base_of(_rraw)
+            # ★서버가 받은 시각으로만 잰다★ — _updater_age_s 와 같은 이유(시계 어긋남 회피).
+            try:
+                _rage = int((datetime.now(timezone.utc)
+                            - datetime.fromisoformat(_rt).replace(tzinfo=timezone.utc)
+                            ).total_seconds())
+            except Exception:
+                _rage = -1
+            for _pc in statuses:
+                if _pc.get("pc_id") == _rbase:
+                    _pc.setdefault("_retired_warn", []).append(
+                        {"pc_id": _rraw, "acct_num": _acct_num_of_pcid(_rraw),
+                         "age_s": _rage})
+                    break
     return statuses
 
 
@@ -4703,6 +4748,13 @@ function buildCard(pc) {
   const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
+  // ★은퇴 계정이 켜져 있다는 경고(2026-09-22)★ — 은퇴 보고는 조용히 버려지므로,
+  //   버려지는 중이라는 사실 자체를 기본 카드에 남긴다(§A2 — 200 은 전달이지 적용이 아니다,
+  //   여기서는 반대로 "적용 안 됐다"를 사람이 볼 수 있게).
+  const retiredWarnHtml = (pc._retired_warn||[]).map(w=>{
+    const ago = (w.age_s>=0) ? (w.age_s<60?'방금':`${Math.floor(w.age_s/60)}분 전`) : '';
+    return `<div class="text-xs text-amber-400 bg-amber-900/30 rounded px-2 py-0.5">⚠ 은퇴 계정(계정${w.acct_num})으로 켜짐 — ${esc(w.pc_id)}${ago?' · '+ago:''}</div>`;
+  }).join('');
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -4786,6 +4838,7 @@ function buildCard(pc) {
     </div>
     ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
+    ${retiredWarnHtml?`<div class="mt-2 space-y-0.5">${retiredWarnHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
     ${acctRow(pc)}
@@ -8867,6 +8920,7 @@ async def receive_logs(pc_id: str, request: Request):
     tenant = _require_api_key(request)
     # ★은퇴 가드(2026-09-22)★ — receive_report 와 같은 자리·같은 이유.
     if ns(tenant, pc_id) in RETIRED_PCS:
+        _mark_retired_seen(ns(tenant, pc_id))
         return JSONResponse({"ok": True, "retired": True})
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
@@ -9258,13 +9312,15 @@ async def send_command(pc_id: str, request: Request):
         raise HTTPException(
             status_code=400,
             detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
-    # ★은퇴 가드(2026-09-22)★ — 은퇴 id 에는 사람 명령도 안 들어간다.
-    if ns(tenant, pc_id) in RETIRED_PCS:
-        raise HTTPException(status_code=410, detail="은퇴한 PC 입니다")
     body = await request.json()
     command = body.get("command")
     if not command:
         raise HTTPException(status_code=400, detail="command 필드 필요")
+    # ★은퇴 가드(2026-09-22)★ — 은퇴 id 에는 사람 명령도 안 들어간다. ★단 빠져나오는
+    #   명령(_RETIRED_ESCAPE_CMDS)은 예외★ — 안 그러면 은퇴 계정으로 켜진 걸 화면에서
+    #   봐도 그 계정에서 못 나온다.
+    if ns(tenant, pc_id) in RETIRED_PCS and command not in _RETIRED_ESCAPE_CMDS:
+        raise HTTPException(status_code=410, detail="은퇴한 PC 입니다")
     # ★몸통은 _dispatch_macro_command 로 옮겼다 (2026-09-08)★ — FarmView API 와
     #   ★같은 코드★ 를 쓰게 하려는 것. 여기서 하는 일은 인증·A7 가드·본문 파싱뿐이다.
     return JSONResponse(await _dispatch_macro_command(tenant, pc_id, command,
@@ -9382,9 +9438,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     #   macro_ws_connections 에 안 넣는다 — push_state·순환이 이 연결을 「살아있다」로 안 본다.
     if nspc in RETIRED_PCS:
         await websocket.accept()
+        _mark_retired_seen(nspc)   # ★연결 자체가 「켜짐」 증거★ — 첫 메시지 전에도 남긴다
         try:
             while True:
                 await websocket.receive_text()   # 받기만 하고 버린다(저장·ack·명령 없음)
+                _mark_retired_seen(nspc)
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -9576,6 +9634,7 @@ async def receive_report(pc_id: str, request: Request):
     # ★은퇴 가드(2026-09-22)★ — 저장 없이 조용히 받아만 준다. INSERT OR REPLACE 로 카드가
     #   되살아나던 것(실측: 삭제 31개 중 5개가 2.5분 뒤 부활)을 막는 자리.
     if ns(tenant, pc_id) in RETIRED_PCS:
+        _mark_retired_seen(ns(tenant, pc_id))
         return JSONResponse({"ok": True, "retired": True})
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
@@ -10485,6 +10544,7 @@ async def receive_char_info(pc_id: str, request: Request):
     pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
     # ★은퇴 가드(2026-09-22)★ — receive_report 와 같은 자리·같은 이유.
     if ns(tenant, pc_id) in RETIRED_PCS:
+        _mark_retired_seen(ns(tenant, pc_id))
         return JSONResponse({"ok": True, "retired": True})
     try:
         data = await request.json()
