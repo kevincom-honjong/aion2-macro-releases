@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.13"
+UPDATER_VERSION  = "3.1.14"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -1496,6 +1496,19 @@ REVIVE_WINDOW   = 3600.0
 REVIVE_DELAY    = 4.0     # 싱글턴 뮤텍스 해제 여유 (매크로 쪽 예약과 같은 취지)
 _revive_times: list = []
 
+# ★사고 629 (2026-09-22, PC-24 실측)★ 「사람이 콘솔 창을 닫았다」를 크래시로 세지 않는다
+#   주인님: 「24번 내가 프로그램 꺼놨는데 업데이터가 다시 켜서 계정접속 시도한다」
+#   PC-24.upd 09:41:00 [크래시감지] returncode=3221225786 → _auto_revive 가 되살림.
+#   3221225786 = 0xC000013A STATUS_CONTROL_C_EXIT — 콘솔 창의 X 를 눌러 닫을 때
+#   Windows 가 파이썬 프로세스에 주는 종료코드다(Ctrl+C 도 같은 경로). NO_RESTART_PATH
+#   는 매크로 ★자신이★ exit 명령/PageDown 으로 끝날 때만 쓰는데, 창을 직접 닫으면
+#   그 코드가 돌 새도 없이 죽는다 — 그래서 표시가 없고, 되살림이 "사람이 끈 걸 도로 켠다"
+#   가 된다(주인님 신고 그대로).
+#   ★함대 전체 크래시로그 실측(2026-09-22)★ 이번 returncode 는 4건 전부 이 코드였고,
+#   다른 진짜 크래시(0xC000041D STATUS_FATAL_APP_EXIT, PC-19 1건)는 ★되살려야 맞다★ —
+#   그래서 ★이 코드 하나만★ 막는다. 실측 없는 다른 코드는 넣지 않는다.
+_USER_CLOSED_CODES = {3221225786}   # 0xC000013A STATUS_CONTROL_C_EXIT
+
 
 def _auto_revive(ret):
     """매크로가 사라졌다 → 되살린다. (사용자가 끈 것/폭주는 제외)"""
@@ -1508,6 +1521,13 @@ def _auto_revive(ret):
             _set_state("stopped", expect="crashed")
             return
     except Exception:
+        pass
+    try:
+        if int(ret) in _USER_CLOSED_CODES:
+            log(f"[되살림] returncode={ret} = 콘솔을 직접 닫음(사람) — 되살리지 않는다 (사고 629)")
+            _set_state("stopped", expect="crashed")
+            return
+    except (TypeError, ValueError):
         pass
     now = time.time()
     _revive_times[:] = [t for t in _revive_times if now - t < REVIVE_WINDOW]
