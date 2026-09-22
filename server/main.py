@@ -4415,6 +4415,18 @@ function isBeforeReset(raw){   // 가장 최근 수요일 05:00(KST) 이전 수�
   const d = collectedAtDate(raw);
   return !!d && d < lastWeeklyReset();
 }
+// ★주간 초기화 티켓 공용 보정(2026-09-23 — 주인님 「각성전은 왜 초기화 안 돼 있냐」)★
+//   각성전(3)·일일던전(14) ★둘 다 확인됨★ 수요일 05시 초기화로 게임이 가득 찬 값으로
+//   돌아간다(각성전: isAwakenDone 주석 · 일일던전: isDungeonDone 주석 "각성전과 같은
+//   주간 리셋"). 리셋 전에 수집한 낮은 값은 다음 정보수집 전까지 옛 값 그대로였다 —
+//   표층(abyss_time)과 ★같은 부류★ 라 같은 판정(isBeforeReset)을 재사용한다.
+//   ★이미 가득 찬 값은 안 건드린다★(정말 그 값일 수도 있으니 굳이 덮어쓸 이유가 없다).
+function resetAwareTicket(collected_at, raw, full){
+  const n = parseInt(raw);
+  if (isNaN(n) || n >= full) return raw;
+  if (!collected_at || !isBeforeReset(collected_at)) return raw;
+  return full;
+}
 // ★2026-09-23 주인님 — 「수요일 새벽 5시 초기화인데 적용된 거지? 아직 빨강 남아있다」★★
 //   원인: abyss_time 「00:00:00」 만 보고 ★언제 읽힌 값인지★ 안 봤다 — 리셋 전에 수집한
 //   0 이 다음 정보수집 전까지 계속 빨갛다. lc/surface_zero.py 의 리셋 규칙(수요일 05시,
@@ -8076,7 +8088,14 @@ async function loadCharTable() {
     const r = await fetch('/characters?t=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
-    charTableData = (d.characters || []).filter(r => !isExcludedPc(r.pc_id));
+    // ★각성전(3)·일일던전(14) 티켓도 리셋 이전 값이면 가득 찬 값으로 보정(2026-09-23)★
+    //   ★한 곳에서 바꾼다★ — 테이블 칸·isAwakenDone·전광판 각성 합계·베트남 표가 전부
+    //   이 charTableData 하나만 보므로, 여기서 고치면 전부 같이 고쳐진다(§A12).
+    charTableData = (d.characters || []).filter(r => !isExcludedPc(r.pc_id)).map(r => ({
+      ...r,
+      daily_ticket: resetAwareTicket(r.collected_at, r.daily_ticket, 14),
+      awakening_ticket: resetAwareTicket(r.collected_at, r.awakening_ticket, 3),
+    }));
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
     renderCards();   // 각성완료 뱃지가 charTableData 기반 — 로드 후 카드 재렌더(내부에서 refreshSummary 호출)
@@ -8132,7 +8151,13 @@ function closeVietnamModal(){ document.getElementById('vietnam-modal').classList
 async function loadVietnam(){
   try{
     const r = await fetch('/characters?t='+Date.now(), {cache:'no-store'});
-    if(r.ok) vietnamData = (await r.json()).characters || [];
+    // ★loadCharTable 과 같은 필터·보정(2026-09-23)★ — 이 뷰가 /characters 를 따로
+    //   불러서 은퇴·계정없음 제외와 각성전/일일던전 리셋 보정을 안 받고 있었다(§A12).
+    if(r.ok) vietnamData = ((await r.json()).characters || []).filter(x => !isExcludedPc(x.pc_id)).map(x => ({
+      ...x,
+      daily_ticket: resetAwareTicket(x.collected_at, x.daily_ticket, 14),
+      awakening_ticket: resetAwareTicket(x.collected_at, x.awakening_ticket, 3),
+    }));
   }catch(e){ console.error('vietnam load', e); }
   renderVietnam();
 }
