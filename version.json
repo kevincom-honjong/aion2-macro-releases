@@ -490,11 +490,11 @@
   },
   "updater": {
     "version": "3.1.13",
-    "sha256": "7da084df9553bf6dd41d892b243383b8bf2ce131dd483751535ea0e8e378a7c6",
+    "sha256": "6088c4395952833e24d05d197bc63f238b7c342864c808e0e9058dcc9fcf7f4e",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
   "images_version": "20260922093108",
-  "updated_at": "2026-09-22T09:31:08",
+  "updated_at": "2026-09-22T09:49:12",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
     "version": "1.1.992",
