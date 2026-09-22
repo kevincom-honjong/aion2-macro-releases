@@ -358,6 +358,10 @@ const STATUS_CFG = {
   //   (아래로 안 내려간다) 죽었다는 걸 ★색으로★ 확실히 알려야 한다. 회색은 안 보인다.
   offline:      {label:'오프라인', vi:'Ngoại tuyến',  bg:'bg-red-950/40',    border:'border-red-800/70', badge:'bg-red-700',    text:'text-red-400',    online:false},
   other_account:{label:'다른 계정', vi:'Tài khoản khác', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-purple-900', text:'text-purple-400/70', online:false},
+  // ★계정 없음(2026-09-22, 주인님 지시)★ — PC-24: 「계정 없으니까 컴퓨터는 띄워 놓고
+  //   계정은 없다고 표시해놔」. other_account 와 같은 처지(순환 제외·집계 제외)지만
+  //   라벨이 달라야 한다("다른 계정" 이 아니라 "계정 없음") — 그래서 항목을 따로 둔다.
+  no_account:   {label:'계정 없음', vi:'Không có tài khoản', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-gray-700', text:'text-gray-400', online:false},
 };
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
@@ -1947,7 +1951,7 @@ async function sendCmd(pc_id, command, args={}) {
     if (_live307 && _live307.pc_id && _live307.pc_id !== pc_id) {
       showToast(`↪ ${pc_id} 는 지금 안 도는 카드라 ★${_live307.pc_id}★ 로 보냅니다`);
       pc_id = _live307.pc_id;
-    } else if (_st307 === 'other_account') {
+    } else if (_st307 === 'other_account' || _st307 === 'no_account') {
       showToast(`⚠️ ${_base307} 에 도는 매크로가 없습니다 — 먼저 켜 주세요`);
       return false;
     }
@@ -2206,9 +2210,10 @@ function autoIdleTargets(){
     if (picked && !selBases.has(b)) continue;             // 고른 것만
     const live = liveCardOf(b);
     // 판정 카드 = 온라인 카드, 없으면 ★가장 최근에 살아 있던★ 카드.
-    //   other_account 카드는 뒤로 민다 — sendCmd 가 그 카드를 거부한다.
+    //   other_account/no_account 카드는 뒤로 민다 — sendCmd 가 그 카드를 거부한다.
     const cur = live || cards.slice().sort((x,y) =>
-        ((x.status === 'other_account') - (y.status === 'other_account')) ||
+        ((x.status === 'other_account' || x.status === 'no_account') -
+         (y.status === 'other_account' || y.status === 'no_account')) ||
         String(y.last_active||'').localeCompare(String(x.last_active||'')))[0];
     if (!cur) continue;
     const dp = cur.daily_progress || [];
