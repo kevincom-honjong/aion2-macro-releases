@@ -787,11 +787,29 @@ function isSurfaceZero(v){
   if (!t || t === '–' || t === '-') return false;
   return t.includes(':') && /^[0:]+$/.test(t);
 }
-function surfaceZeroSlots(pc_id){
+// ★2026-09-23 주인님 — 「수요일 새벽 5시 초기화인데 적용된 거지? 아직 빨강 남아있다」★★
+//   원인: abyss_time 「00:00:00」 만 보고 ★언제 읽힌 값인지★ 안 봤다 — 리셋 전에 수집한
+//   0 이 다음 정보수집 전까지 계속 빨갛다. lc/surface_zero.py 의 리셋 규칙(수요일 05시,
+//   RESET_WEEKDAY=2·RESET_HOUR=5)과 ★같은 경계★ 를 여기서도 쓴다 — isDungeonDone 이
+//   이미 쓰는 lastWeeklyReset() 그대로(규칙이 둘로 갈리면 화면끼리 싸운다, §A12).
+//   ★collected_at 은 서버 UTC naive 문자열이다★(lc/report_module._now = datetime.now(utc)) —
+//   fmtTs 문자열 비교(isDungeonDone 방식)를 그대로 베끼면 ★KST 와 9시간 어긋난다★
+//   (실측: 로그 원문 12:52 vs DB created_at 03:52). 그래서 여기는 Date 객체로 잰다
+//   ('Z' 를 붙여 UTC 로 파싱 — 안 붙이면 브라우저가 로컬로 오해한다).
+//   ★행 자체에 수집 시각이 있으면 그걸 쓰고, 없으면 카드의 _char_collected_at 으로★.
+function surfaceZeroSlots(pc){
   const out = new Set();
+  const pc_id = pc && pc.pc_id;
   if (!pc_id) return out;
+  const resetAt = lastWeeklyReset();   // Date(KST 로컬)
   for (const r of charTableData) {
-    if (r.pc_id === pc_id && isSurfaceZero(r.abyss_time)) out.add(Number(r.slot));
+    if (r.pc_id !== pc_id || !isSurfaceZero(r.abyss_time)) continue;
+    const raw = String(r.collected_at || (pc && pc._char_collected_at) || '').trim();
+    if (!raw) continue;                // 수집 시각 없음 = 빨강 아님
+    const iso = raw.replace(' ', 'T');
+    const at = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+    if (isNaN(at.getTime()) || at < resetAt) continue;   // 파싱 실패·리셋 이전 값 = 빨강 아님
+    out.add(Number(r.slot));
   }
   return out;
 }
@@ -908,7 +926,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   //   완료는 아래 슬롯 칸(✓ 초록)과 계정 탭의 ✓ 가 이미 말하고,
   //   순환은 상태 옆 칩이 이미 말한다 — 같은 말을 세 번 하면 아무것도 안 읽힌다.
   const total = dp.length;
-  const zeroSlots = surfaceZeroSlots(pc && pc.pc_id);   // ★사고 610★ 표층 시간 0 인 슬롯
+  const zeroSlots = surfaceZeroSlots(pc);   // ★사고 610★ 표층 시간 0 인 슬롯(★리셋 이후 값만★ 2026-09-23)
   const slots = dp.map(c => {
     const done = dpDone(c);
     const sZero = zeroSlots.has(Number(c.slot));        // ★사고 610★
