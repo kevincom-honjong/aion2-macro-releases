@@ -4617,14 +4617,22 @@ function acctIdTag(pcid){
 // 보고(acct_ids/acct_servers, 키="1".."4")하므로, 접속한 적 없는 계정 카드도 표기 가능
 // (사용자: "계정1에 아이디가 안 나오네 / 계정2 서버를 못 읽는 것 같네").
 function groupAcctMaps(base){
-  const ids = {}, servers = {}, plats = {};
+  // ★합집합 금지(2026-09-22, 주인님 「12번 3·4 아직도 있다」)★ — 예전엔 형제 카드
+  //   전부의 acct_ids 를 Object.assign 으로 ★합쳤다★. info.txt 에서 계정을 지워도
+  //   ★옛 카드의 스냅샷★(아직 안 갱신된 형제)이 지워진 번호를 계속 들고 있어서
+  //   합집합에 그 번호가 되살아났다(실측: PC-12 07:26 스냅샷=1~4, PC-12b 10:57=1~2인데
+  //   합치면 여전히 1~4). ★가장 최근에 보고한 카드 하나★ 의 지도만 쓴다 — 서버
+  //   _build_full_state_inner 2차 패스(현역 선택)와 같은 규칙(last_active 최신).
+  let latest = null;
   Object.values(state).forEach(p=>{
     if (baseId(p.pc_id||'') !== base) return;
-    Object.assign(ids, p.acct_ids||{});
-    Object.assign(servers, p.acct_servers||{});
-    Object.assign(plats, p.acct_platforms||{});   // ★카드 계정줄의 '구글' 표기용 (2026-08-21)★
+    if (!latest || String(p.last_active||'') > String(latest.last_active||'')) latest = p;
   });
-  return {ids, servers, plats};
+  return {
+    ids:     (latest && latest.acct_ids) || {},
+    servers: (latest && latest.acct_servers) || {},
+    plats:   (latest && latest.acct_platforms) || {},   // ★카드 계정줄의 '구글' 표기용 (2026-08-21)★
+  };
 }
 // ★플랫폼이 구글이면 카드에 아이디 대신 '구글' 을 적는다 (2026-08-21 주인님 지시)★
 //   원문: "각 카드에 맨밑에 계정1 해서 아이디 나와있는 플랫폼이 구글인 경우에는
