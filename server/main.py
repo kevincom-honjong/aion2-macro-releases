@@ -102,6 +102,20 @@ def tenant_blocked(tenant: str) -> bool:
     return tenant_expired(tenant) or (tenant in KILLED_TENANTS)
 
 
+# ─── 은퇴 PC 목록 (2026-09-22) — 카드 삭제(DELETE /status)만으론 안 끝난다.
+#   ★INSERT OR REPLACE★ 라 매크로/업데이터가 그 id 로 다시 보고하면 카드가 바로 되살아난다
+#   (실측: 삭제 31개 중 5개가 2.5분 뒤 부활). 은퇴 목록에 있으면 보고를 ★저장하지 않고★
+#   조용히 200 으로 받아서 매크로가 에러로 재시도 폭주하지 않게 한다.
+#   저장: main 테넌트 설정 "retired_pcs" (KILLED_TENANTS 와 같은 콤마 목록 방식).
+#   ★네임스페이스 키(nspc) 그대로 저장한다★ — pc_id 단독이 아니라 "PC-02c"/"친구A::PC-02c".
+RETIRED_PCS: set = set()
+
+
+def _parse_retired(raw: str) -> set:
+    """콤마로만 구분(테넌트명에 공백이 있을 수 있어 _parse_killed 와 같은 규칙)."""
+    return {p.strip() for p in (raw or "").split(",") if p.strip()}
+
+
 NS_SEP = "::"
 TENANTS: dict = {}
 PW_TO_TENANT: dict = {}
@@ -861,6 +875,13 @@ async def lifespan(app: FastAPI):
             print(f"[KILL] 렌탈 킬스위치 복원: {sorted(KILLED_TENANTS)}")
     except Exception as e:
         print(f"[KILL] rental_kill 로드 실패(무시): {e}")
+    # 은퇴 PC 목록 복원(2026-09-22) — 볼륨 DB의 설정을 부팅 시 메모리로
+    try:
+        RETIRED_PCS.update(_parse_retired(await get_setting("retired_pcs") or ""))
+        if RETIRED_PCS:
+            print(f"[은퇴] 목록 복원: {sorted(RETIRED_PCS)}")
+    except Exception as e:
+        print(f"[은퇴] retired_pcs 로드 실패(무시): {e}")
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
@@ -8785,6 +8806,9 @@ async def pc_logs(pc_id: str, request: Request, limit: int = 2000):
 async def receive_logs(pc_id: str, request: Request):
     """매크로가 보내는 로그 배치 수신"""
     tenant = _require_api_key(request)
+    # ★은퇴 가드(2026-09-22)★ — receive_report 와 같은 자리·같은 이유.
+    if ns(tenant, pc_id) in RETIRED_PCS:
+        return JSONResponse({"ok": True, "retired": True})
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
@@ -9175,6 +9199,9 @@ async def send_command(pc_id: str, request: Request):
         raise HTTPException(
             status_code=400,
             detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
+    # ★은퇴 가드(2026-09-22)★ — 은퇴 id 에는 사람 명령도 안 들어간다.
+    if ns(tenant, pc_id) in RETIRED_PCS:
+        raise HTTPException(status_code=410, detail="은퇴한 PC 입니다")
     body = await request.json()
     command = body.get("command")
     if not command:
@@ -9199,6 +9226,41 @@ async def admin_pc_dump(pc_id: str, request: Request):
     remove_pc 가 지우는 7개 표 + 안 지우는 nightmare_progress·slot_filters 까지 그대로 준다."""
     tenant = _require_session(request)
     return JSONResponse(await get_pc_dump(ns(tenant, pc_id)))
+
+
+@app.get("/admin/retire")
+async def admin_retire_list(request: Request):
+    """이 테넌트의 은퇴 PC 목록(검증용, 2026-09-22)."""
+    tenant = _require_session(request)
+    mine = sorted(raw for k in RETIRED_PCS
+                 for t, raw in [split_ns(k)] if t == tenant)
+    return JSONResponse({"retired": mine})
+
+
+@app.post("/admin/retire/{pc_id}")
+async def admin_retire_pc(pc_id: str, request: Request):
+    """카드 삭제 + 은퇴 등록을 한 번에(2026-09-22) — delete_pc_all_data 로 7개 표를 지우고
+    RETIRED_PCS 에 넣어 그 뒤로 오는 /report·/log·/char_info·WS status·/command 를 조용히 막는다.
+    ★백업은 미리★(ops/pc_backup.py) — 여기선 안 만든다."""
+    tenant = _require_session(request)
+    nspc = ns(tenant, pc_id)
+    await delete_pc_all_data(nspc)
+    RETIRED_PCS.add(nspc)
+    await set_setting("retired_pcs", ",".join(sorted(RETIRED_PCS)))
+    await push_state(tenant)
+    print(f"[은퇴] {nspc} 등록")
+    return JSONResponse({"ok": True, "retired": True, "pc_id": pc_id})
+
+
+@app.delete("/admin/retire/{pc_id}")
+async def admin_unretire_pc(pc_id: str, request: Request):
+    """은퇴 해제 — ★데이터는 안 돌아온다★(삭제된 7개 표는 그대로 빈 채). 그 뒤 보고부터 다시 쌓인다."""
+    tenant = _require_session(request)
+    nspc = ns(tenant, pc_id)
+    RETIRED_PCS.discard(nspc)
+    await set_setting("retired_pcs", ",".join(sorted(RETIRED_PCS)))
+    print(f"[은퇴] {nspc} 해제")
+    return JSONResponse({"ok": True, "retired": False, "pc_id": pc_id})
 
 
 @app.websocket("/ws/macro/{pc_id}")
@@ -9226,6 +9288,19 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         return
     pc_id = clean_pc_id(pc_id)   # 에코 일관성(저장 키 소독과 동일)
     nspc = ns(tenant, pc_id)
+    # ★은퇴 가드(2026-09-22)★ — 줄기(자리 넘김·큐 배달)에 안 들어간다. 연결은 받아주되
+    #   (거절하면 매크로가 에러로 재시도 폭주) status/log/ack 를 전부 버리고 명령도 안 보낸다.
+    #   macro_ws_connections 에 안 넣는다 — push_state·순환이 이 연결을 「살아있다」로 안 본다.
+    if nspc in RETIRED_PCS:
+        await websocket.accept()
+        try:
+            while True:
+                await websocket.receive_text()   # 받기만 하고 버린다(저장·ack·명령 없음)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        return
     await websocket.accept()
     # ══════════════════════════════════════════════════════════════════════
     # ★★한 PC = 한 매크로 = 한 연결 (2026-09-10)★★
@@ -9408,6 +9483,10 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/report/{pc_id}")
 async def receive_report(pc_id: str, request: Request):
     tenant = _require_api_key(request)
+    # ★은퇴 가드(2026-09-22)★ — 저장 없이 조용히 받아만 준다. INSERT OR REPLACE 로 카드가
+    #   되살아나던 것(실측: 삭제 31개 중 5개가 2.5분 뒤 부활)을 막는 자리.
+    if ns(tenant, pc_id) in RETIRED_PCS:
+        return JSONResponse({"ok": True, "retired": True})
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     try:
         data = await request.json()
@@ -10314,6 +10393,9 @@ async def receive_char_info(pc_id: str, request: Request):
     """매크로가 수집한 캐릭터 세부정보 저장"""
     tenant = _require_api_key(request)
     pc_id = clean_pc_id(pc_id)   # 브로드캐스트 에코도 저장 키 소독과 일관
+    # ★은퇴 가드(2026-09-22)★ — receive_report 와 같은 자리·같은 이유.
+    if ns(tenant, pc_id) in RETIRED_PCS:
+        return JSONResponse({"ok": True, "retired": True})
     try:
         data = await request.json()
     except Exception:
@@ -11457,6 +11539,12 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
     ★성공/실패를 반환한다 [S13]★ — 호출부는 성공했을 때만 단계를 넘긴다."""
     args = dict(args or {})
     nspc = ns(tenant, pc_id)
+    # ★은퇴 가드(2026-09-22)★ — 순환 엔진이 은퇴 id 를 목표로 골랐어도 여기서 막는다.
+    #   (_build_full_state 가 pc_status 없는 id 를 후보에서 이미 빼지만, 무장 상태(_ROT)는
+    #   별도 저장이라 base 가 armed 로 남아 있으면 여기까지 올 수 있다 — 그물을 하나 더 둔다.)
+    if nspc in RETIRED_PCS:
+        print(f"[은퇴] {nspc} ▶ {command} 거부(은퇴 목록)")
+        return False
     try:
         send_args = await enrich_cmd_args(tenant, pc_id, command, args)
         db_args = args
