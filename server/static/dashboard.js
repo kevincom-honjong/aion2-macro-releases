@@ -1128,13 +1128,6 @@ function buildCard(pc) {
   const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
-  // ★은퇴 계정이 켜져 있다는 경고(2026-09-22)★ — 은퇴 보고는 조용히 버려지므로,
-  //   버려지는 중이라는 사실 자체를 기본 카드에 남긴다(§A2 — 200 은 전달이지 적용이 아니다,
-  //   여기서는 반대로 "적용 안 됐다"를 사람이 볼 수 있게).
-  const retiredWarnHtml = (pc._retired_warn||[]).map(w=>{
-    const ago = (w.age_s>=0) ? (w.age_s<60?'방금':`${Math.floor(w.age_s/60)}분 전`) : '';
-    return `<div class="text-xs text-amber-400 bg-amber-900/30 rounded px-2 py-0.5">⚠ 은퇴 계정(계정${w.acct_num})으로 켜짐 — ${esc(w.pc_id)}${ago?' · '+ago:''}</div>`;
-  }).join('');
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -1218,7 +1211,6 @@ function buildCard(pc) {
     </div>
     ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
-    ${retiredWarnHtml?`<div class="mt-2 space-y-0.5">${retiredWarnHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
     ${acctRow(pc)}

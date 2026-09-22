@@ -124,16 +124,20 @@ def _retired_list(tenant: str) -> list:
     return sorted(raw for k in RETIRED_PCS for t, raw in [split_ns(k)] if t == tenant)
 
 
-# ★은퇴 id 가 켜지면 기본 카드에 경고(2026-09-22)★ — 은퇴 보고는 조용히 버리는데,
-#   조용히 버리니 "그 PC 가 왜 오프라인이지"를 아무도 못 본다(실측: PC-20·21·12).
-#   ★영속화 안 한다★ — lan_url 캐시(`_lan_cache_last`)와 같은 급의 정보다: 재배포로
-#   지워져도 다음 보고가 오면 몇 초 안에 다시 채워진다. 설정 테이블에 매 보고마다
-#   쓰면 I/O 만 늘고 얻는 게 없다.
-RETIRED_SEEN: dict = {}   # nspc(은퇴 id) → 마지막 수신 시각(ISO)
+# ★은퇴 id 수신은 서버 로그 한 줄만(2026-09-22, 주인님 정정)★ — 처음엔 대시보드에
+#   경고 배지를 띄웠는데 ★도움이 안 됐고 오탐이었다★: PC-21 은 계정1(abyss)인데
+#   매크로가 부팅/WS재연결 때 「형제 계정 char_info 재전송」으로 PC-21d/21e 를
+#   실제로 찔러서 뜬 것 — 사람이 할 행동이 없는 신호였다. UI 에는 다시 안 띄운다
+#   (buildCard 의 retiredWarnHtml 은 제거). 콘솔 로그만 남기고, ★같은 id 는 한 번만★
+#   찍는다(부팅/재연결마다 여러 건 오므로 매번 찍으면 콘솔 스팸).
+RETIRED_SEEN: dict = {}   # nspc(은퇴 id) → 마지막 수신 시각(ISO, 로그 중복 억제용)
 
 
 def _mark_retired_seen(nspc: str) -> None:
+    _new = nspc not in RETIRED_SEEN
     RETIRED_SEEN[nspc] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    if _new:
+        print(f"[은퇴] {nspc} 로 보고/연결 수신(버림) — 카드는 안 만듦")
 
 
 # ★은퇴 id 여도 「빠져나오는」 명령은 허용한다(2026-09-22)★ — 안 그러면 은퇴 계정으로
@@ -206,11 +210,6 @@ def acct_no_of_label(lbl) -> int:
     """라벨 → 계정번호. ★모르는 값은 0(없음)★ — 순환 target 판정에 쓰는 쪽 규약."""
     _s = str(lbl or "")
     return (ACCT_LABELS.index(_s) + 1) if (len(_s) == 1 and _s in ACCT_LABELS) else 0
-
-
-def _acct_num_of_pcid(pid: str) -> int:
-    """pc_id 접미사 → 계정번호(계정1은 접미사 없음). JS acctNoOfSuf 와 같은 규칙(2026-09-22)."""
-    return (ACCT_SUFFIX.index(pid[-1]) + 2) if (pid and pid[-1] in ACCT_SUFFIX) else 1
 
 
 def clean_pc_id(pc_id: str) -> str:
@@ -1410,28 +1409,6 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                 _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
                 _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
                 _pc["hunt_progress"] = 0.0
-    # ★은퇴 계정이 켜지면 기본 카드에 경고를 얹는다(2026-09-22)★ — 조용히 버리기만 하면
-    #   "그 PC 가 왜 오프라인이지"를 아무도 못 본다(실측: PC-20·21·12). 그 PC 의 데이터는
-    #   여전히 안 만든다 — 기본 카드(접미사 없는 카드)에 ★표시만★ 덧붙인다.
-    if RETIRED_SEEN:
-        for _rk, _rt in list(RETIRED_SEEN.items()):
-            _rtn, _rraw = split_ns(_rk)
-            if _rtn != tenant:
-                continue
-            _rbase = _base_of(_rraw)
-            # ★서버가 받은 시각으로만 잰다★ — _updater_age_s 와 같은 이유(시계 어긋남 회피).
-            try:
-                _rage = int((datetime.now(timezone.utc)
-                            - datetime.fromisoformat(_rt).replace(tzinfo=timezone.utc)
-                            ).total_seconds())
-            except Exception:
-                _rage = -1
-            for _pc in statuses:
-                if _pc.get("pc_id") == _rbase:
-                    _pc.setdefault("_retired_warn", []).append(
-                        {"pc_id": _rraw, "acct_num": _acct_num_of_pcid(_rraw),
-                         "age_s": _rage})
-                    break
     return statuses
 
 
@@ -4756,13 +4733,6 @@ function buildCard(pc) {
   const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
-  // ★은퇴 계정이 켜져 있다는 경고(2026-09-22)★ — 은퇴 보고는 조용히 버려지므로,
-  //   버려지는 중이라는 사실 자체를 기본 카드에 남긴다(§A2 — 200 은 전달이지 적용이 아니다,
-  //   여기서는 반대로 "적용 안 됐다"를 사람이 볼 수 있게).
-  const retiredWarnHtml = (pc._retired_warn||[]).map(w=>{
-    const ago = (w.age_s>=0) ? (w.age_s<60?'방금':`${Math.floor(w.age_s/60)}분 전`) : '';
-    return `<div class="text-xs text-amber-400 bg-amber-900/30 rounded px-2 py-0.5">⚠ 은퇴 계정(계정${w.acct_num})으로 켜짐 — ${esc(w.pc_id)}${ago?' · '+ago:''}</div>`;
-  }).join('');
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -4846,7 +4816,6 @@ function buildCard(pc) {
     </div>
     ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
-    ${retiredWarnHtml?`<div class="mt-2 space-y-0.5">${retiredWarnHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
     ${acctRow(pc)}
