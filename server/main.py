@@ -1409,6 +1409,13 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                 _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
                 _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
                 _pc["hunt_progress"] = 0.0
+                # ★2026-09-23 주인님 — 「24번이 구독으로 표시돼서 구독 자료 자체를 흐린다」★
+                #   위 필드는 pc_status 쪽이라 여기서 비워지는데, 이 둘은 ★다른 표(char_info)★
+                #   에서 위 _attach_char_info 가 이미 붙여놨다(계정 없어져도 char_info 행은
+                #   안 지운다 — 업데이터 생존은 살려야 하니까). 전광판 합계(창고키나·완주 PC 수)
+                #   가 이 옛 값을 그대로 더해 숫자를 흐렸다. 여기서 같이 비운다.
+                _pc["_total_kina"] = 0
+                _pc["dungeon_done_at"] = ""
     return statuses
 
 
@@ -4293,6 +4300,7 @@ function dkSubCount(){
   Object.keys(state || {}).forEach(id => {
     const b = baseId(id || '').toUpperCase();
     if (b === 'PC-TEST' || b === 'PC-DEMO') return;
+    if (isExcludedPc(id)) return;   // ★계정없음·은퇴는 분모에서도 뺀다(2026-09-23)★ — unknown 도 아니다
     const v = subState(id);
     if (v === 'on') sub++; else if (v === 'off') nosub++; else unknown++;
   });
@@ -4392,31 +4400,48 @@ function isSurfaceZero(v){
   if (!t || t === '–' || t === '-') return false;
   return t.includes(':') && /^[0:]+$/.test(t);
 }
+// ★공용: UTC naive 문자열 → Date (2026-09-23)★ — collected_at 은 lc/report_module._now()
+//   (datetime.now(utc)) 문자열이라 ★'Z' 를 붙여야 UTC 로 정확히 파싱된다★(안 붙이면
+//   브라우저가 로컬로 오해해 9시간 어긋난다 — 실측: 로그 원문 12:52 vs DB created_at 03:52).
+//   isSurfaceZero·displayAbyssTime 이 이 하나만 쓴다(규칙이 둘로 갈리면 화면끼리 싸운다, §A12).
+function collectedAtDate(raw){
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  const iso = t.replace(' ', 'T');
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+  return isNaN(d.getTime()) ? null : d;
+}
+function isBeforeReset(raw){   // 가장 최근 수요일 05:00(KST) 이전 수집인가 — 모르면 false(모름≠이전)
+  const d = collectedAtDate(raw);
+  return !!d && d < lastWeeklyReset();
+}
 // ★2026-09-23 주인님 — 「수요일 새벽 5시 초기화인데 적용된 거지? 아직 빨강 남아있다」★★
 //   원인: abyss_time 「00:00:00」 만 보고 ★언제 읽힌 값인지★ 안 봤다 — 리셋 전에 수집한
 //   0 이 다음 정보수집 전까지 계속 빨갛다. lc/surface_zero.py 의 리셋 규칙(수요일 05시,
 //   RESET_WEEKDAY=2·RESET_HOUR=5)과 ★같은 경계★ 를 여기서도 쓴다 — isDungeonDone 이
 //   이미 쓰는 lastWeeklyReset() 그대로(규칙이 둘로 갈리면 화면끼리 싸운다, §A12).
-//   ★collected_at 은 서버 UTC naive 문자열이다★(lc/report_module._now = datetime.now(utc)) —
-//   fmtTs 문자열 비교(isDungeonDone 방식)를 그대로 베끼면 ★KST 와 9시간 어긋난다★
-//   (실측: 로그 원문 12:52 vs DB created_at 03:52). 그래서 여기는 Date 객체로 잰다
-//   ('Z' 를 붙여 UTC 로 파싱 — 안 붙이면 브라우저가 로컬로 오해한다).
 //   ★행 자체에 수집 시각이 있으면 그걸 쓰고, 없으면 카드의 _char_collected_at 으로★.
 function surfaceZeroSlots(pc){
   const out = new Set();
   const pc_id = pc && pc.pc_id;
   if (!pc_id) return out;
-  const resetAt = lastWeeklyReset();   // Date(KST 로컬)
   for (const r of charTableData) {
     if (r.pc_id !== pc_id || !isSurfaceZero(r.abyss_time)) continue;
-    const raw = String(r.collected_at || (pc && pc._char_collected_at) || '').trim();
-    if (!raw) continue;                // 수집 시각 없음 = 빨강 아님
-    const iso = raw.replace(' ', 'T');
-    const at = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
-    if (isNaN(at.getTime()) || at < resetAt) continue;   // 파싱 실패·리셋 이전 값 = 빨강 아님
+    const raw = r.collected_at || (pc && pc._char_collected_at) || '';
+    if (!raw || isBeforeReset(raw)) continue;   // 수집 시각 없음·리셋 이전 값 = 빨강 아님
     out.add(Number(r.slot));
   }
   return out;
+}
+// ★표시값도 14:00:00 으로(2026-09-23 주인님 게임 규칙)★
+//   「초기화라서 정보수집 없이도 표층 남은 시간이 14:00:00 이 된다고 생각하면 된다」.
+//   ★DB 원본(r.abyss_time)은 안 건드린다★ — 캐릭터 테이블의 화면 표시만 바꾼다.
+//   수집 시각을 모르면(collected_at 없음) 원본 그대로 — 모름을 14 로 단정하지 않는다(사고 464).
+function displayAbyssTime(r){
+  const v = r.abyss_time || '';
+  if (!isSurfaceZero(v)) return v || '–';
+  if (!r.collected_at || !isBeforeReset(r.collected_at)) return v;
+  return '14:00:00';
 }
 // ★구독 O/X — PC명 옆 동그라미 뱃지 (2026-08-29 주인님 요청)★
 //   판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제.
@@ -4443,6 +4468,10 @@ function subState(pc_id){
   return max >= SUB_DEN_MIN ? 'on' : 'off';
 }
 function subBadge(pc_id){
+  // ★은퇴·계정없음은 뱃지 자체를 안 그린다(2026-09-23)★ — "?"(모름)도 아니고 완전히 없음.
+  //   charTableData 가 이미 걸러져 subState 는 'unknown' 을 주겠지만, 뱃지를 아예 숨기는
+  //   것과 "?" 를 보여주는 것은 다른 신호라 여기서 명시적으로 가른다.
+  if (isExcludedPc(pc_id)) return '';
   const s = subState(pc_id);
   const a = esc(pc_id || '');
   if (s === 'on')  return `<span class="sub-badge sub-on" title="구독 O — ${a} · 오드에너지 분모 840 (던전 한 판 80 = 2배 효율, 거래소·원격창고 사용 가능)">✓</span>`;
@@ -5272,7 +5301,10 @@ function refreshSummary(pcs) {
     const s=p.status||'offline';
     const isOnline = (STATUS_CFG[s]||STATUS_CFG.offline).online;
     if(isOnline) c.online++; else c.offline++;
-    if(!isDungeonDone(p)) dungeonLeft.add(p.pc_id);
+    // ★계정 없음은 「안 끝남」 집계에도 안 넣는다(2026-09-23)★ — 할 계정이 없으므로
+    //   '아직 못 끝냄'이 아니다. isDungeonDone 이 false(dungeon_done_at 비움)라고 넣으면
+    //   완주 집계가 흐려진다(오늘 처음 화면과 같은 부류의 사고).
+    if(!isDungeonDone(p) && s !== 'no_account') dungeonLeft.add(p.pc_id);
     const dp = p.daily_progress||[];
     if(dp.length>0 && dp.every(dpDone)) c.completedPcs++;
     // ★캐릭터 수 집계(2026-08-07)★ — 전광판은 대수가 아니라 캐릭터 수를 보여준다.
@@ -8018,6 +8050,17 @@ function fmtAt(iso) {
 let charTableData = [];
 let charTableSort = {key:'pc_id', asc:true};
 let charTableVisible = false;
+// ★은퇴·계정없음 PC 는 여기서 한 번에 뺀다(2026-09-23 주인님)★ — 「24번이 구독으로
+//   표시돼서 구독 자료 자체를 흐린다」. char_info 옛 행은 no_account 로 바뀌어도 안 지운다
+//   (업데이터 생존은 살려야 하니까) — 그래서 /characters 는 여전히 옛 캐릭을 준다.
+//   ★소스에서 뺀다★ — subState·dkSubCount·isAwakenDone·surfaceZeroSlots·전광판 오드에너지
+//   합계까지 전부 charTableData 하나만 보므로, 여기 한 곳만 고치면 전부 같이 빠진다(§A12).
+//   은퇴 id 는 사실 char_info 자체가 삭제돼 애초에 안 실려 오지만, 타이밍 방어로 같이 거른다.
+function isExcludedPc(pc_id){
+  if (!pc_id) return true;
+  if (RETIRED.has(pc_id)) return true;
+  return (state[pc_id]||{}).status === 'no_account';
+}
 
 function toggleCharTable() {
   charTableVisible = !charTableVisible;
@@ -8033,7 +8076,7 @@ async function loadCharTable() {
     const r = await fetch('/characters?t=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
-    charTableData = d.characters || [];
+    charTableData = (d.characters || []).filter(r => !isExcludedPc(r.pc_id));
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
     renderCards();   // 각성완료 뱃지가 charTableData 기반 — 로드 후 카드 재렌더(내부에서 refreshSummary 호출)
@@ -8221,7 +8264,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-orange-400">${trade}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
-      <td class="px-3 py-1.5 text-center text-fuchsia-300">${esc(r.abyss_time || '–')}</td>
+      <td class="px-3 py-1.5 text-center text-fuchsia-300">${esc(displayAbyssTime(r))}</td>
       <td class="px-3 py-1.5 text-right text-fuchsia-200">${r.abyss_point ? Number(r.abyss_point).toLocaleString() : '–'}</td>
       <td class="px-3 py-1.5 text-center ${r.corridor_full ? 'text-green-400 font-medium' : 'text-sky-300'}">${esc(r.corridor_progress || '–')}</td>
     </tr>`;
