@@ -4504,6 +4504,9 @@ function isCorridorDone(pc_id){
   // corridorRemaining은 /corridor/progress + WS로 채워진다. 보고가 없으면 뱃지 없음.
   // ★stale 이면 그 0 은 ★지난 판★ 의 0 이다 — 뱃지를 달면 2026-08-05 사고 재발.
   //   (서버가 만료본도 보내기 시작했으므로 여기서 명시적으로 막는다 — 2026-08-24)
+  // ★은퇴·계정없음은 옛 스냅샷이 영영 안 지워진다(2026-09-23)★ — corridorRemaining 은
+  //   pc_id 키의 클라이언트 캐시라 그 PC 가 다시는 안 돌아도 마지막 값이 그대로 남는다.
+  if (isExcludedPc(pc_id)) return false;
   const v = corridorRemaining[pc_id];
   return !!v && !v.stale && typeof v.remaining === 'number' && v.remaining === 0;
 }
@@ -6704,8 +6707,15 @@ let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
 //   숫자가 또 이상해 보이면 마우스만 올리면 어느 쪽이 부풀었는지 바로 갈린다.
 function updateCorridorTile(){
   let rem=0,has=false,nFresh=0,nStale=0,remStale=0;
-  Object.values(corridorRemaining).forEach(v=>{
+  // ★은퇴·계정없음은 「회랑 남음」에서도 뺀다(2026-09-23, 주인님 —
+  //   「회랑 계정들 전부 뱃지 달려 있는데 남음 31 은 뭐냐」)★
+  //   corridorRemaining 은 pc_id 키 클라이언트 캐시라, 그 PC 가 은퇴·계정없음으로
+  //   바뀌어도 마지막 스냅샷이 영영 안 지워진다 — stale 이면 ★total 전체★ 를 "안 돈
+  //   것"으로 다시 더해서(위 주석 참고) 다시는 안 돌 PC 의 옛 정원이 매번 쌓였다.
+  //   isCorridorDone(뱃지)과 ★같은 규칙★(isExcludedPc) 을 쓴다(§A12).
+  Object.entries(corridorRemaining).forEach(([pc,v])=>{
     if(!v) return;
+    if(isExcludedPc(pc)) return;
     if(v.stale){
       if(typeof v.total==='number'){has=true;nStale++;remStale+=v.total;rem+=v.total;}
     } else if(typeof v.remaining==='number'){has=true;nFresh++;rem+=v.remaining;}
