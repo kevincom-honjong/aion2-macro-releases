@@ -364,7 +364,7 @@ async def t_lan_cache():
     await main._lan_cache_restore()
     ok("S25 저장한 내부망 주소가 복원된다", main._lan_cache_last.get("PC-L1", "").endswith("k=abc"))
     main._lan_cache_dirty[0] = False
-    await db.upsert_status("PC-L2", {"pc_id": "PC-L2", "status": "hunting", "lan_url": "http://x/1"})
+    await db.upsert_status("PC-L2", {"pc_id": "PC-L2", "status": "hunting", "lan_url": "http://172.30.1.10:8765/?k=def"})   # 실제 모양(B2-7 입구 검사, 2026-09-23)
     await main._build_full_state("main")
     ok("S25-b 새 주소가 오면 저장 표시가 켜진다", main._lan_cache_dirty[0] is True)
 

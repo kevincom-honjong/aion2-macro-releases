@@ -13,7 +13,7 @@
 | 인증 | 헤더 **`X-FV-Token`** 하나. 환경변수 `FV_TOKEN` 과 상수시간 비교 |
 | 세션·쿠키·429 | **전부 안 본다.** 폴링해도 락아웃에 안 걸린다 |
 | `FV_TOKEN` 미설정 | **`/api/fv/*` 전체가 404** 로 숨는다 |
-| 에러 | 항상 `{"error": "...", "code": <HTTP 코드>}` |
+| 에러 | 항상 `{"ok": false, "error": "...", "err": "...", "code": <HTTP 코드>}` — `err` 는 `error` 와 같은 글. ★배포된 팜뷰(5.54 `ui/index.html` dashCmd)는 `j.ok===false` 일 때만 실패로 그리고 문구는 `j.err` 에서 읽는다★ (2026-09-24 v3 델타 반증 #1 — 그 전엔 `{error, code}` 뿐이라 함대 창 400 이 «보냈습니다»+성공음이었다). 옛 칸 `error`·`code` 는 그대로(더하기만) |
 | gzip | `Accept-Encoding: gzip` 이고 본문 1KB 초과면 압축. **실측 51,488 B → 1,448 B** |
 | 스냅샷 캐시 | **3초**. 응답에 `cached`/`cache_age_s` 가 실린다 |
 | 시각 형식 | `YYYY-MM-DDTHH:MM:SS` **UTC naive** (DB 형식 그대로). `since` 는 `Z`·오프셋도 받는다 |
@@ -83,7 +83,8 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
         "trade_kina": 12345678,
         "gakin_kina": 23456789,
         "odd_energy": 1495,
-        "awakening_ticket": 3
+        "awakening_ticket": 3,
+        "subscribed": true
       },
       "today": {
         "slots_done": 1,
@@ -137,8 +138,10 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
     "totals": {
       "total_kina": 130801794,
       "bugs": 0,
-      "corridor_remaining": 0,
-      "subscribed": {"sub": 1, "nosub": 0, "unknown": 0}
+      "corridor_remaining": null,
+      "corridor_detail": {"fresh_n": 0, "fresh_left": 0, "stale_n": 0, "stale_left": 0},
+      "subscribed": {"sub": 1, "nosub": 0, "unknown": 0},
+      "trade_kina": 12345678, "gakin_kina": 0, "odd_energy": 1495, "awakening_ticket": null
     },
     "versions": {"1.1.926": 1, "1.1.923": 1},
     "rotate_armed": [],
@@ -461,6 +464,8 @@ while True:
 | `kina_adjust` 카드는 있는데 창고 기록이 없음 | 404 | `{"error": "카드 'PC-07' 의 창고 키나 기록(char_info)이 없습니다", "code": 404}` |
 | `kina_adjust` 본문 오류 | 400 | `{"error": "why.tid 가 필요합니다(거래 id — 같은 tid 는 두 번 빼지 않습니다)", "code": 400}` 등 |
 
+(위 본문은 줄여 적었다 — 실제로는 전부 `"ok": false` 와 `"err"`(= `error`) 가 같이 온다, 2026-09-24.)
+
 **`FV_TOKEN` 미설정(404) 과 토큰 오류(401) 를 갈라 보라** — 404 면 서버에 환경변수를 안 넣은 것이다.
 
 ---
@@ -496,7 +501,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
 ```
   **200** 이면 됐다. **404** 면 변수가 아직 안 붙은 것(재배포 대기), **401** 이면 값이 다른 것.
 - `FV_TENANT` 는 여러 고객을 나눠 쓰는 게 아니면 **넣지 마라**(기본 `main`).
-- ★토큰은 대시보드 비번과 다른 값으로★ — 이 토큰은 락아웃이 없다.
+- ★토큰은 대시보드 비번과 다른 값으로★ — 틀림 잠금은 대시보드 비번과 칸이 따로다(아래 «토큰 틀림 잠금»).
 
 ---
 
@@ -577,7 +582,7 @@ asyncio.run(main())
 |---|---|---|
 | 1 | `pcs[].silent_s` · `pcs[].updater.age_s` | **항상 정수.** 모르면 `1000000000`(10^9). 예전엔 `-1` / `null` 이 나가 팜뷰 대표 카드(`silent_s` 최소)가 «모름» 카드에 뺏겼다 |
 | 2 | `raw` | 기본 없음. `?raw=1` 일 때만 |
-| 3 | `POST /api/fv/command` | `pc:"all"` 은 **400** — 목록을 펼쳐 보내고 8대 이상이면 `confirm_fleet:true` 를 같이. 응답 `ok` 는 전부 성공일 때만, 일부는 `partial:true` |
+| 3 | `POST /api/fv/command` | `pc:"all"` 은 **400** — 목록을 펼쳐 보내고 ★물리 PC★ 8대 이상이면 `confirm_fleet:true` 를 같이(요청 하나의 셈도 물리 PC — 카드 8장·물리 2대는 함대가 아니다, v4 반증 B3). ★8대는 요청 하나가 아니라 최근 15분 합★(2026-09-24 — 7대+7대로 지나가던 것): 15분 안에 ★확인 없이★ 명령을 받은 PC 에 이번 요청의 ★새★ PC 를 더해 8대 이상이면 (★PC 는 물리 PC 로 센다★ — 계정 카드 `PC-20b`·`PC-20c` 는 `PC-20` 한 대. A7 의 «대» 는 기계 수이고, 카드 셋을 따로 세면 물리 3대에 8번째 카드로 막혔다 — v3 델타 반증 X7. 창 시계는 그 PC 에 ★처음★ 보낸 시각이라 다시 보내도 15분이 늘지 않는다) `confirm_fleet:true` 없이 400(이미 창에 있는 PC 에 다시 보내는 것은 통과). 거부된 요청은 합에 안 센다. `confirm_fleet:true` 로 보낸 PC 는 15분 동안 창에 안 센다(뒤이은 한 대 명령 통과) — ★단, 창 면제 명령(아래 정지·보기 전용)에 붙은 확인은 치지 않는다★(8대↑ `get_logs` 에 팜뷰가 자동으로 붙인 확인 하나로 그 PC 들의 start 가 15분 창을 빠져나갔다, v4 반증 B2). 정지 쪽(`stop`·`stop_tour`·`stop_nightmare`·`stop_corridor`·`stop_surface`)과 보기 전용(`chrome_view`·`live_on`·`live_off`·`get_logs`·`request_logs`·`netprobe`)은 세지도 막지도 않는다. ★팜뷰 할 일★: 한 대씩 눌러 8대째에서 이 400 이 오면 사람에게 확인을 받아 `confirm_fleet:true` 로 다시 보낸다(지금 `fvdash` 는 한 요청이 8대 이상일 때만 붙인다). 이 400 본문도 `ok:false`·`err` 를 실어 5.54 는 실패 토스트로 그린다. 응답 `ok` 는 전부 성공일 때만, 일부는 `partial:true` |
 | 4 | `GET /api/fv/events` | `truncated:true` 면 `next_since` 로 **쉬지 않고 다음 장**(팜뷰 `pull_events` 최대 5장). 같은 초 유실 없음(서버가 경계 초를 다음 장으로 미룬다) |
 | 5 | `today.slots_done` · `global.totals.bugs` | 서버 값이 정본 — `slots_done` 은 `completed && today!==false`, `totals.bugs` 는 물리 PC 단위 합. 팜뷰의 자체 재계산(`slots_today`)은 같은 규칙이라 그대로 둔다 |
 
@@ -602,10 +607,13 @@ asyncio.run(main())
 - **같은 `why.tid` 는 두 번 빼지 않는다** → `{"ok": true, "dup": true, "before": <지금>, "after": <지금>}`, 값 그대로. 재시도는 안전하다.
 - 기록 표 `kina_adjust(tid PK, pc_id, delta, before, after, why, at)`. Railway 재배포로 SQLite 가 비면 기록도 사라진다(팜뷰가 감수하기로 함).
 - 거부: `delta_kina` 정수 아님(bool 포함)·상한 ±1조 초과·`why.tid` 없음·`pc_id` 가 `all` → 400. 카드/창고 기록 없음 → 404. 토큰 → 401.
+  - (2026-09-23 밤 반증 D) **`tid` 는 카드 하나에만** — 다른 카드에서 이미 쓴 `tid` 면 409 `{"error":"tid '…' 는 이미 다른 카드(PC-..)에서 뺐습니다 …"}`, 아무것도 안 뺀다(예전엔 `dup:true, ok:true` 로 «뺐다» 고 답했다). 결과가 상한(`KINA_MAX` = 10^15)을 넘으면 400.
+  - 토큰 틀림 잠금(5분 429)은 **팜뷰 칸이 따로다** — 같은 IP 에서 API 키를 30번 틀려도 팜뷰 토큰은 안 잠긴다. 토큰 헤더가 ★비어 있으면★ 401 이지만 잠금 횟수엔 안 센다. ★칸은 IP + 보낸 토큰★(2026-09-24): 같은 틀린 토큰 30번은 ★그 토큰만★ 잠그고 올바른 토큰은 계속 통과(낡은 토큰을 든 다른 팜뷰가 진짜를 멈추지 않게). 한 IP 에서 서로 다른 틀린 토큰이 5분에 300번(`FV_IP_MAX_FAILS`)이면 그 IP 전체(올바른 토큰도) 5분 429.
+  - 모든 엔드포인트: 문자열에 짝 없는 UTF-16 대리 문자(`\ud800`~`\udfff`)가 있으면 400 `{ok:false, error, err, code:400, detail}`(예전 500 · `ok`·`err` 는 2026-09-24 v4 반증 B5).
 - 차감 1건마다 그 PC 로그에 `[팜뷰] 창고 키나 -210,000,000 (챈가룽 21000만 → 84000원, tid …) 500,000,000 → 290,000,000` 한 줄이 남는다 — `/api/fv/events` 의 `log` 로도 보인다. 스냅샷 캐시(3초)는 즉시 비운다.
 
 ## 2026-09-09 추가 — 캐릭터 합 4종
-`progress.trade_kina`(거래키나) · `progress.gakin_kina`(각인키나) · `progress.odd_energy`(오드에너지, `"300(+1,195)/840"` → 300+1195 규칙) · `progress.awakening_ticket`(각성전 티켓) — 그 카드(pc_id) 캐릭터들의 **합**, 없으면 0. `global.totals` 에도 같은 이름으로 전체 합. `total_kina` 는 그대로(계정 창고값, 캐릭마다 중복이라 합치지 않는다). 서버 `main.py _fv_char_agg`.
+`progress.trade_kina`(거래키나) · `progress.gakin_kina`(각인키나) · `progress.odd_energy`(오드에너지, `"300(+1,195)/840"` → 300+1195 규칙) · `progress.awakening_ticket`(각성전 티켓) — 그 카드(pc_id) 캐릭터들의 **합**, 없으면 0. `global.totals` 에도 같은 이름으로 전체 합 — ★단 `global.totals` 쪽은 합산 대상 카드 중 그 칸을 한 번이라도 읽은 캐릭이 없으면 `null`(모름)★(2026-09-23, 0 = 「읽었는데 0」 만). `total_kina` 는 그대로(계정 창고값, 캐릭마다 중복이라 합치지 않는다). 서버 `main.py _fv_char_agg`.
 
 ## 2026-09-23 추가 — `global.totals` 계산을 대시보드 화면과 한 곳으로 모았다
 주인님: 「팜뷰 전광판은 대시보드 전광판이 반영 안 되냐, 숫자가 왜 이렇게 다르냐」.
@@ -619,11 +627,28 @@ asyncio.run(main())
 - **`global.totals.subscribed`**(신설) — `{"sub": N, "nosub": N, "unknown": N}`. 대시보드
   구독 O/X 집계(`dkSubCount`)와 같은 값. 은퇴·계정없음 PC 는 어느 쪽에도 안 세진다
   (예전엔 `subscribed` 총계 자체가 없었다 — 카드별 `progress.subscribed` 만 있었다).
-- **은퇴·계정없음 PC 제외** — `total_kina`·`corridor_remaining`·`subscribed`·캐릭터 합
-  4종(`trade_kina`·`gakin_kina`·`odd_energy`·`awakening_ticket`) 전부 은퇴(카드 삭제)·
-  계정없음(no_account) PC 를 뺀다. ★카드 자체(`pcs[pid]`)는 그대로 남는다★ — 합계에서만
-  빠진다. 판정은 서버 `RETIRED_PCS`/`NO_ACCOUNT_PCS`(대시보드 `/admin/retire`·
-  `/admin/no_account` 로 관리).
+- **은퇴·계정없음·검증용 가짜 PC 제외** — `total_kina`·`corridor_remaining`(+`corridor_detail`)·
+  `subscribed`·캐릭터 합 4종(`trade_kina`·`gakin_kina`·`odd_energy`·`awakening_ticket`) 전부
+  은퇴(카드 삭제)·계정없음(no_account)·`PC-TEST`/`PC-DEMO`(배포 검증용, 대시보드가 카드로 안
+  그림) 를 뺀다. 판정은 서버 `_fv_pc_excluded` — `RETIRED_PCS`/`NO_ACCOUNT_PCS`(대시보드
+  `/admin/retire`·`/admin/no_account` 로 관리) + 가짜 PC 이름.
+  - **제외 PC 의 카드 `pcs[pid]` 는 스냅샷에 남되, 캐릭터 합은 비운다** — 그 카드의
+    `progress.trade_kina`·`gakin_kina`·`odd_energy`·`awakening_ticket` 은 `0`,
+    `progress.subscribed` 는 `null` 이다(`_fv_char_agg` 가 제외 PC 를 아예 안 모은다 —
+    계정없음 카드는 옛 계정의 캐릭터 값을 보여 주면 안 되므로). 계정없음 카드는 추가로
+    `total_kina`·캐릭터·맵·진행도도 비운다(`status: "no_account"`). 은퇴 PC 는
+    `/admin/retire` 가 카드 데이터를 지우고 이후 보고도 버리므로 보통 `pcs` 에 아예 없다.
+  - **`global.counts` 는 제외를 안 한다** — `total`·`online`·`offline`·`by_status` 는 `pcs`
+    전부(가짜 PC·계정없음 카드 포함)를 센다. `online` 은 `status != "offline"` 이라
+    `no_account`·`other_account` 카드도 온라인으로 센다(대시보드 화면의 온라인 수와 다르다).
+- **모름은 `null`** — `global.totals` 의 캐릭터 합 4종은 합산 대상 카드 중 그 칸을 한 번도
+  못 읽었으면 `null`(대시보드 「–」). `corridor_remaining` 도 회랑 스냅샷이 하나도 없으면
+  `null`. `total_kina`·`bugs` 는 여전히 정수. ★카드별 `progress.*` 4종은 여전히 「없으면 0」★
+  이다 — 팜뷰가 카드 값을 다시 더해 전광판을 만들면 모름이 0 으로 보인다(`global.totals` 를 읽을 것).
+- **`global.totals.corridor_detail`**(신설) — `{"fresh_n", "fresh_left", "stale_n", "stale_left"}`.
+  `corridor_remaining = fresh_left + stale_left`. 이번 판에 보고한 PC 수·남은 수 / 리셋 뒤
+  아직 시작 안 한(낡은 스냅샷) PC 수·지난 판 정원. 대시보드 회랑 타일 툴팁이 숫자와 같은
+  출처를 쓰게 넣었다.
 - **각성전 티켓 주간 리셋 보정** — `progress.awakening_ticket`·`global.totals.awakening_ticket`
   둘 다, 그 캐릭터 정보수집 시각이 가장 최근 수요일 05:00(KST) 이전이면 raw 값 대신
   ★3(가득 참)★ 을 합산한다(게임이 리셋으로 3/3 이 됐는데 다음 정보수집 전까지 옛 낮은
@@ -632,3 +657,109 @@ asyncio.run(main())
   화면에서만 같은 규칙으로 보정).
 - 악몽 티켓(`nightmare_ticket`)은 리셋 주기가 아직 실측 확정 전이라 이 보정 대상이
   ★아니다★ — 값을 그대로 준다.
+
+
+---
+
+## 2026-09-23 (밤) 추가 — 명령 시간 상한 · 업데이트 큐 «한 길» · OCR 라벨 (대시보드 세션, 아이온2 요청)
+
+### A. `POST /api/fv/command` — 8초 안에 답한다 (더하기만, 옛 모양 그대로)
+서버는 **`FV_CMD_DEADLINE_S` = 8초** 안에 답한다(팜뷰 12초 끊김보다 짧게). ★팜뷰 끊김은 관제컴 `dashapi.json` 의 `timeout` 으로 사람이 바꿀 수 있다(최소 1)★ — 11초(= 8 + 3) 아래로 두면 서버가 답하기 전에 끊겨 «실패» 로 보이고 사람이 다시 누른다(이미 나간 PC 에 두 번). 팜뷰는 11초 아래 값을 11초로 올려 쓸 것(SHARED_ISSUES FC1-4 ⑧). 서버 시험(M16)은 `fvdash.py` 기본값만 본다. 그 안에 못 끝난 만큼은:
+
+| 칸 | 뜻 |
+|---|---|
+| `timeout` (bool, 늘 있음) | 상한에 걸렸나 |
+| `partial` (bool) | 일부만 됐거나 `timeout` |
+| `err` (문자열, **실패일 때만**) | 사람에게 보일 한 줄. 옛 팜뷰 토스트가 `j.err` 만 쓴다. 예: `"8초 초과 — 1대는 닿았는지 모름, 다시 누르지 마십시오 (0/1대 확인)"` · `"8초 초과 — 2대는 보내지 않았습니다(그 PC 만 다시 보내도 됩니다)"` · `"3대 중 1대 실패"` |
+| `results[].sent:false` | 시작도 못 했다 — **그 PC 는 다시 보내도 된다** |
+| `results[].ok:null` + `unknown:true` | 시작했는데 안 끝났다 — 서버 뒤에서 끝까지 넣는다. **닿았는지 모름, 다시 누르지 말 것** |
+| 카드 목록 만들기에서 시간초과 | `{"ok":false,"timeout":true,"targets":0,"sent":0,"results":[],"err":"…아무 PC 에도 보내지 않았습니다…"}` |
+
+같은 PC 로 가는 명령은 서버가 **도착 순서대로** 넣는다(시간초과로 뒤에서 도는 stop 을 다음 start 가 앞지르지 않는다).
+성공 응답엔 `err` 가 없다.
+
+### B. §4-3 업데이트/재시작 큐 — «한 명령은 한 길로만» (대시보드 업데이터 큐와의 관계)
+`/api/fv/updcmd` 에 나온 명령은 짝이 되는 업데이터 큐 행(`/updater/command`)과 묶여 있다. **먼저 집은 쪽만 실행한다.**
+- 팜뷰 목록에 나오는 순간 그 행은 `fv_claimed` — 업데이터 폴링에 안 나간다. 업데이터가 먼저 집었으면 팜뷰 목록에서 빠진다.
+- **업데이터가 같은 PC·같은 종류를 방금(90초 안, `UPDCMD_UP_BUSY_SEC`) 받아 갔으면** 그 사이 다시 누른 같은 종류 명령은 팜뷰 목록에 안 나오고 업데이터가 차례로 받는다(두 길이 겹쳐 돌지 않게). 90초가 지나 다시 누른 것은 팜뷰가 받는다(멈춘 업데이터를 에이전트로 살리는 길). 다른 종류(`update` 중 `restart`)는 막지 않는다.
+  - 90초 안에 거절된 명령은 **버리지 않고 미룬다** — 업데이터가 그 사이 안 가져가면 90초 뒤 팜뷰 목록에 나온다(반증 3차 H1).
+  - 이 규칙은 **재배포 뒤에도 산다** — DB 에서 «같은 PC·같은 종류가 90초(`UPDATER_BUSY_SEC`) 안에 `acked`, 또는 업데이터에 내준 지(`handed_at`) 90초 안인데 아직 ack 전» 을 본다(H5, 2026-09-24 v2 반증 1부).
+  - ★업데이터에 내준 명령은 `superseded` 로 안 바뀐다★(2026-09-24) — ack 가 사라진 사이 같은 종류를 다시 눌러도 앞 것은 대기로 남아 늦은 ack 가 `acked` 로 적고, 새로 누른 것은 그 뒤에 차례로 돈다(예전: 돈 명령이 «안 돎» 으로 적혔다). 팜뷰도 업데이터에 내준 행은 집지 않는다(거절하면 그 행의 팜뷰 소유도 푼다 — 업데이터 큐가 막히지 않는다, v3 델타 반증 #4). 내준 뒤 ack 없이 치워지는 행(더 새 같은 종류가 먼저 가거나 10분 만료)은 `superseded`/`expired` 가 아니라 `handed_noack`(«받아감 — ack 없음, 돌았을 수 있음») 이고, 늦은 ack 는 그래도 `acked` 로 적는다(v3 델타 반증 #3).
+- **거꾸로도 같다 (H8)** — 팜뷰가 같은 PC·같은 종류를 집고 아직 ack 전(`fv_claimed`)이면, 그 뒤 다시 누른 같은 종류 명령은 **업데이터가 안 가져간다**. 팜뷰가 ack 한 뒤 다음 목록에서 팜뷰가 받는다(두 길 겹침 방지). 팜뷰가 조용해 앞 것이 `fv_unknown` 이 되면 그때는 업데이터가 받는다.
+- **ack 는 팜뷰 `id` 로 짝 행을 찾는다** — 서버가 집을 때 `팜뷰 id → 업데이터 행` 을 DB 에 적어 둔다. 그래서 ack 전에 사람이 같은 PC 를 다시 눌러 칸이 덮였거나, 서버가 재배포돼 메모리가 비었어도 ack 는 제 명령에 닿는다.
+- **재배포 뒤 목록 복구** — 서버가 새로 뜨면 첫 목록 요청 때 «팜뷰가 집었는데 ack 가 안 온»(10분 안) 명령을 DB 에서 다시 세운다. **같은 팜뷰 `id` 그대로**라 팜뷰는 기억한 결과(`UPD_DONE`)로 ack 만 다시 보내면 된다(다시 실행하지 말 것). 같은 PC 칸이 새 명령으로 차 있으면 둘 다 목록에 나온다(PC 당 1건이 아닐 수 있다 — `id` 로 구분). 재건이 한 번 실패(DB 잠김 등)하면 다음 목록에서 다시 한다(H3), 재건 도중 ack 된 명령은 되살리지 않는다(H4).
+- **집힌(ack 전) 명령은 `since` 와 무관하게 매번 나온다 (H6, 2026-09-23 밤)** — 팜뷰 커서는 «ack 성공한 가장 큰 id» 라, 더 작은 id 의 ack 가 재배포 중 사라지면 예전엔 커서 아래로 숨어 영영 안 닫혔다. 이제 `since` 는 **아직 안 집힌** 명령만 거른다. 팜뷰는 이미 실행한 id(`UPD_DONE`)면 다시 실행하지 말고 기억한 결과로 ack 만 보낸다. ⚠ 팜뷰 `UPD_DONE` 을 500개에서 통째로 비우면 다시 나온 집힌 명령이 두 번 실행될 수 있다 — SHARED_ISSUES_대시보드 FC1-4.
+- **같은 PC 에 새 명령이 와도 집힌 명령은 목록에서 안 사라진다 (H2)** — 팜뷰가 집었는데 응답이 전선에서 사라진 판에 다른 종류가 눌려도 둘 다 나온다(곁칸, `id` 로 구분).
+- **ack 규칙** (`POST /api/fv/updcmd/ack {id, pc, ok, why, reached?}`):
+  - `ok:true` → `fv_done`. 업데이터는 절대 안 받는다.
+  - `ok:false` 이고 **명령이 PC 에 안 간 게 확실할 때만** → 업데이터 큐로 되돌린다(`pending`, 업데이터가 정확히 한 번 받는다). «확실» = `reached:false` 이거나, `reached` 가 없고 `why` 에 팜뷰 `macro_act` 의 안-감 문구가 있을 때: `없는 PC` · `이 PC 는 매크로 대상이 아닙니다`(nobulk) · `에이전트 없음` · `act 는` · `Cannot connect to host` · `Connect call failed` · `Connection refused`.
+  - 그 밖의 `ok:false`(읽기 시간초과 `Timeout on reading…`, 빈 예외 `실패`, `결과 기록 없음`, `reached:true`) → `fv_failed`. 에이전트가 이미 받았을 수 있어 되돌리면 재시작이 두 번 난다. 대시보드 «업데이터 명령» 내역에 `팜뷰 실패` 로 보인다(조용히 사라지지 않는다).
+  - **팜뷰 요청(선택, 더하기만)**: ack 에 `reached` 를 명시해 주면 문구 추측 대신 그걸 쓴다 — 연결조차 못 했으면 `false`, 에이전트에 요청을 보냈으면(응답이 실패·시간초과여도) `true`.
+  - 되돌릴 때 같은 PC·같은 종류의 **더 새 명령**이 이미 대기·실행 중이거나 끝났으면 옛 것은 되살리지 않고 `superseded`(옛 restart 가 새 restart 뒤에 도는 일 없음).
+- **팜뷰가 집고 ack 가 안 올 때 — 업데이터에 넘기지 않는다** (2026-09-23 배포 반증 3차 #1). 팜뷰가 에이전트로 이미 실행하고 인터넷만 끊겼을 수 있어, 넘기면 재시작이 두 번 난다. 팜뷰가 목록·ack 를 **60초(`FV_QUIET_SEC`) 동안 한 번도 안 불렀고** 집은 지 90초(`FV_CLAIM_ACK_SEC`)가 넘었거나, 집은 채 10분이 지나면 → `fv_unknown`(«실행됐는지 모름») + 그 PC 로그에 WARNING 한 줄. 필요하면 사람이 다시 누른다. ★그 순간 팜뷰 목록에서도 빠진다★(반증 v2 #2 — 재시작한 팜뷰가 옛 것과 다시 누른 것을 둘 다 돌리지 않게). 목록에 없어도 돌아온 팜뷰의 늦은 ack 는 `id` 로 짝 행을 찾아 닫는다: `ok:true` → `fv_done` · 안-감 확실한 실패 → 업데이터가 한 번 받음 · 그 밖의 실패 → `fv_failed`. 팜뷰가 살아서 차례로 돌리는 중이면(60초 안에 목록·ack) 90초가 넘어도 그대로 둔다.
+  - 이 판정은 **30초마다 서버가 스스로** 돈다(H7) — 업데이터가 죽어 폴링이 없어도 `fv_claimed` 가 영영 남지 않는다. `fv_unknown` 은 재배포 뒤에도 다시 세우지 않는다(«다시 보내지 않았습니다» 그대로). 안전망: 집은 지 11분이 넘은 항목은 청소가 못 돌았어도 목록에 다시 안 나온다.
+- 대기(`pending`) 명령은 유효기간 10분(`UPDATER_COMMAND_MAX_AGE_SEC`)이 지나면 `expired`(되살리지 않는다).
+- **덮어쓰기는 같은 종류만** — `update` 두 번 → 앞 것 `superseded`(앞 것을 업데이터가 아직 안 받았을 때만 — 받았으면 둘 다 차례로). `update` 뒤 `restart` 는 **둘 다** 실행된다(팜뷰 큐는 PC 당 최신 1건이라 `restart` 는 팜뷰가, `update` 는 업데이터가 받는다).
+- 업데이터 큐 행의 상태는 대시보드 «최근 명령 내역 › 업데이터 명령» 과 `GET /updater/commands/recent` 에 보인다:
+  `pending`(대기) · `acked`(업데이터 받음) · `fv_claimed`(팜뷰 처리 중) · `fv_done` · `fv_failed` · `fv_unknown`(팜뷰 응답 없음 — 실행됐는지 모름) · `superseded`(같은 명령 다시 누름 — 업데이터가 안 받아 간 것만) · `expired`(10분 — 안 받아 간 것만) · `handed_noack`(업데이터가 받아 갔는데 ack 없이 치워짐 — 돌았을 수 있음).
+- 응답 모양 `{id,pc,act,at}` 은 그대로. `id` 는 벽시계 ms 기반 정수(≈1.79×10^12, 재배포 뒤에도 커진다).
+- **`redeliver: true` (2026-09-23 밤, 더하기만)** — 이미 한 번 준(집힌, ack 전) 항목을 다시 줄 때만 붙는다. 팜뷰 규칙: 그 `id` 를 기억(`UPD_DONE`)하면 기억한 결과로 ack 만 · ★기억이 없으면 실행하지 말고★ `{ok:false, reached:true, why:"재시작해 결과 모름"}` 으로 ack(→ `fv_failed`, 사람이 본다). 처음 주는 항목엔 이 칸이 없다 — 옛 팜뷰는 무시해도 지금처럼 돈다.
+
+### C. 알아둘 것 — `global.totals.corridor_remaining` 은 `null` 일 수 있다
+회랑 스냅샷이 하나도 없으면 `null`(모름). 옛 팜뷰(fvdash-1.20 이하)는 이걸 `0` 으로 보인다 — 1.21 부터 `null` 을 통과시킨다.
+
+### D. OCR 라벨 — `/api/fv/ocr/*` (주인님 장부 #125 · 팜뷰 «OCR» 탭)
+> ⚠ **코드에 넣었다(미배포, 2026-09-24 `server/ocr_label.py`) — 배포 전엔 404.** 배포되면 이 줄을 지운다. 에러 모양은 다른 `/api/fv/*` 와 같다(`{ok:false, error, err, code}`).
+대시보드 `/ocr/label` 화면(세션 로그인, 관제컴 브라우저·폰)과 **같은 저장소**를 쓴다 — 어느 쪽에서 라벨을 달아도 같이 세진다.
+인증은 다른 `/api/fv/*` 와 같다(`X-FV-Token`, 테넌트 = `FV_TENANT`). 캡차 이미지는 저장소에 아예 없다(서버가 `site=captcha*` 제출을 거절).
+
+**묶음(cluster)** — 같은 사이트에서 거의 같은 이미지(dhash 해밍 ≤ 4)는 한 묶음이다. 라벨·나쁨·건너뛰기는 **묶음 id** 에 건다. `count` 는 그 묶음에 들어온 제출 수(×N 표시용), `members` 는 서로 다른 이미지 수.
+
+| 메서드 · 경로 | 본문 / 쿼리 | 응답 |
+|---|---|---|
+| `GET /api/fv/ocr/queue?limit=30` (1~100) | — | `{"pending": 57, "items": [Item…], "suggest": {"<site>": ["라벨", …]}, "now": 1790164002.4}` — 대기 묶음을 처리할 순서대로 |
+| `GET /api/fv/ocr/img/<img_id>` | — | 이미지 바이트(`image/png` 등). 없으면 404 |
+| `POST /api/fv/ocr/label` | `{"id": <묶음 id>, "text": "라벨"}` | `{"ok": true, "id", "status": "labeled", "label", "prev_status", "prev_label", "members", "pending"}` — 이미 라벨 된 묶음에 다시 보내면 **고치기** |
+| `POST /api/fv/ocr/bad` | `{"id": <묶음 id>}` | 같은 모양, `status: "bad"`, `label: null` («잘못된 이미지») |
+| `POST /api/fv/ocr/skip` | `{"id": <묶음 id>}` | `{"ok": true, "id"}` — 대기열 맨 뒤로. 대기 아닌 묶음이면 409 |
+| `POST /api/fv/ocr/undo` | `{}` | `{"ok": true, "id", "status", "label"}` — **이 테넌트의** 마지막 저장/나쁨/고치기 하나를 되돌린다(웹 화면에서 한 것도 포함). 되돌려 대기가 되면 대기열 맨 앞. 되돌릴 게 없으면 404 |
+| `GET /api/fv/ocr/history?limit=30` (1~200) | — | `{"items": [Item…]}` — 최근 라벨/나쁨, 새것부터 |
+| `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `*_rate` 는 비교한 게 없으면 `null` |
+
+`Item`:
+```json
+{"id": 41, "img": 188, "site": "odd_energy", "status": "pending", "label": null,
+ "created": 1790160000.1, "at": null, "count": 7, "members": 3,
+ "prompt": "숫자만 읽어라", "gemini": "1,234/840", "local": "1234/840", "pc": "PC-07",
+ "thumbs": [187, 181]}
+```
+- `img`·`thumbs` 는 이미지 id — `GET /api/fv/ocr/img/<id>` 로 받는다. 대표 이미지 파일이 디스크 상한으로 지워졌으면 `img: null`.
+- 시각(`created`·`at`)은 유닉스 초(UTC).
+- `label` 은 앞뒤 공백을 걷고 NFC 로 맞춘 글자(최대 200자). 빈 `text` 는 400.
+- 에러 모양은 다른 `/api/fv/*` 와 같다: `{"ok": false, "error": "...", "err": "...", "code": N}` — 400(본문·id)·404(없는 묶음·이미지)·409(skip 대상 아님).
+- 실시간: 대시보드 화면은 `queue` 를 2초마다 다시 읽는다. 팜뷰도 같은 폴링이면 된다(`pending` 이 줄면 다른 쪽에서 단 것).
+
+## 2026-09-23 (밤3) 추가 — `[알람]` 이벤트 (주인님 #128 팜뷰 알람 목소리, 대시보드 세션)
+매크로가 `/telegram/send/{pc}`·`/telegram/photo/{pc}` 로 알람을 보내면, 서버가 ★텔레그램으로 실제로 내보내는 순간★ 그 PC 로그에 한 줄을 쓴다 → `/api/fv/events` 에 `type:"log"` 로 나온다(더하기만, 새 엔드포인트 없음).
+```json
+{"type": "log", "at": "2026-09-23T14:57:00", "pc": "PC-14b", "level": "info",
+ "message": "[알람] PC-14b | 🚨 캡차 자동해결 실패(3회) — 코드를 답장해 주세요", "id": 12345}
+```
+- 모양: `[알람] <pc> | <본문 300자까지>` — 본문의 줄바꿈(CR·LF)은 빈칸 하나로(한 줄) · 사진은 `[알람] <pc> | <캡션> (사진)`(캡션이 없으면 `(사진)`). 머리 상수는 서버 `main.ALARM_EVENT_PREFIX`.
+- ★음소거로 생략한 알림은 안 쓴다★(안 나간 알람을 말하지 않게). `⛔`·`🚨` 로 시작해 음소거를 뚫는 것은 쓴다. 텔레그램 전송 ★뒤★ 에 쓴다 — 전송이 실패(502)해도 쓰되 끝에 ` (텔레그램 실패)` 를 붙인다(2026-09-24 아이온2 반증: 목소리가 텔레그램보다 조용히 더 많이 말하지 않게). 팜뷰 `summarize` 는 «(» 에서 자르므로 말은 같고, 로그·events 에서 실패가 보인다.
+- 늦음: 서버가 텔레그램에 보낸 즉시(보통 1초 안) DB → events 정착 2초(`FV_EVENT_SETTLE_S`) + 팜뷰 폴링 5초 = 보통 5초 안, 최악 ~8초. 예전 길(매크로 `[텔레그램] 중계 전송:` info 줄, 하트비트 30초)은 ~35초였다 — 그 줄도 계속 온다. 팜뷰 `alarmvoice.py` 는 둘 다 받고 2분 중복 억제로 한 번만 말한다.
+- 텔레그램이 꺼진 테넌트(봇 토큰·chat_id 없음, 503)는 안 쓴다.
+- 시험: 서버 `tests/test_alarm_event.py`(11건 — 모양·줄바꿈·음소거·실패 표시·사진·events 로 나옴).
+
+## 2026-09-24 추가 — 어비스 수익 (주인님 장부 #104·#297·#302, 대시보드 세션 · 더하기만)
+> **코드에 넣었다(미배포).** 매크로 1.1.1004 와 같은 날 배포. 기존 키는 그대로 — 옛 팜뷰는 무시해도 지금처럼 돈다.
+- `snapshot.pcs[].progress` 에 다섯 칸: `abyss_kina_state` (`"ok"`|`"waiting"`|null) · `abyss_kina_gain`(이 구간 번 키나) ·
+  `abyss_kina_rate`(시간당 키나) · `abyss_kina_since`(구간 시작 epoch 초 — ★바뀌면 새 측정★) · `abyss_kina_mins`(잰 분). 전부 정수 또는 null
+  (옛 매크로·이상값 = null). `waiting` = 매크로가 아직 10분 안 쟀다 → 시간당을 믿지 말 것.
+- `snapshot.global.totals.abyss` = `{"day", "today", "today_pcs", "rate_sum", "rate_avg", "rate_n", "wait_n", "red", "red_rate", "min_mins", …}`
+  - `today` = 함대 KST 하루 누적(★구간이 바뀌거나 매크로가 재시작해도 줄지 않는다★ — 앞 구간 몫을 서버가 적립). `null` = 측정 대기(0 과 다르다).
+  - `error: true` (있을 때만) = 서버가 전광판 계산에 실패했다(저장본 손상 등) — `today`·`rate_*` 는 `null`, `red:false`. 스냅샷 나머지는 그대로 온다(v4 반증 3차, 코드에 넣었다·미배포).
+  - `rate_sum` = 함대 시간당 합 · `rate_avg` = 대당 시간당 평균(`rate_n` 대) · `wait_n` = 아직 재는 중인 대수.
+  - `red` = `rate_avg < red_rate`(기본 1,000,000, 설정 `abyss_red_rate`). 카드 빨강은 그 PC `abyss_kina_rate < red_rate` 이고
+    `abyss_kina_mins >= min_mins`(기본 5, 설정 `abyss_min_mins`) 일 때만 — `since` 가 바뀌면 새 구간은 `waiting` 으로 시작해 빨강이 풀린다.
+- 시험: 서버 `tests/test_abyss_kina.py`(A8-e·A8-e2 = 이 칸들, S2-a·S2-a2 = 오늘 누적 안 줄어듦, S2-b·S2-b2 = since 바뀌면 빨강 해제).

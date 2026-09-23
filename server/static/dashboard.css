@@ -324,7 +324,12 @@
   .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
   /* 전광판 그리드: 숫자 긴 타일(오드에너지/거래키나/창고키나)만 넓게, 카운트류는 좁게 */
   .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
-  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr}}
+  /* ★어비스 수익 두 칸(2026-09-23 장부 #104)★ — 10칸. 좁은 화면(640~1279)은 5칸 두 줄로 */
+  @media (min-width:640px){.stat-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+  @media (min-width:1280px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr 3fr 3fr}}
+  /* 대당 평균 시간당이 문턱(abyss_red_rate) 아래면 숫자를 빨강으로 — 타일 색 변수만 바꾼다 */
+  .stat-tile[data-red="1"]{--tile:#f87171;--tile-glow:rgba(248,113,113,.6)}
+  .stat-tile .stat-sub{font-size:10.5px;color:#94a3b8;margin-top:.15rem;line-height:1.3}   /* 좁으면 두 줄로(잘리면 대수가 안 보인다) */
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
     white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;

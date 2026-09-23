@@ -14,7 +14,7 @@ import sys
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 16
+MIN_CHECKS = 17
 
 
 async def t_ack_cancelled():
@@ -30,11 +30,22 @@ async def t_ack_cancelled():
     rows = await db.get_recent_commands(50)
     row2 = next((x for x in rows if x.get("id") == cid2), None)
     ok("I1 본문 없는 ack 는 예전처럼 acked", row2 is not None and row2.get("status") == "acked", str(row2))
-    # 이미 acked 인 것을 뒤늦게 cancelled 로 못 뒤집는다(§A12 — cancel_command 와 같은 규칙)
-    r3 = await main.ack_cmd("PC-I1", cid2, Req({"status": "cancelled", "why": "늦은 취소"}))
+    # ★B-CQ2 (2026-09-23) 계약대로 뒤집었다★ — 초판은 「acked 뒤의 cancelled 는 무시」 를 못 박았는데 그게
+    #   버그를 잠근 시험이었다. 매크로는 받자마자 ack 하고(report_module on_message) 그 ★뒤에★ 버리거나
+    #   거부하면 cancelled/rejected 를 보낸다 — pending 만 받으면 CONTRACTS_대시보드 #1 의 ⛔ 가 한 번도 안 뜬다.
+    #   이제: 매크로 통지는 acked 에서도 cancelled 로 · 대시보드 ✕(cancel_cmd) 는 여전히 pending 만.
+    r3 = await main.ack_cmd("PC-I1", cid2, Req({"status": "cancelled", "why": "받은 뒤 버림(시험)"}))
     rows = await db.get_recent_commands(50)
     row3 = next((x for x in rows if x.get("id") == cid2), None)
-    ok("I1 acked 뒤의 cancelled 는 무시된다(pending 일 때만)", row3 is not None and row3.get("status") == "acked", str(row3))
+    ok("I1 acked 뒤 매크로의 cancelled 통지는 cancelled 로 남는다(계약 #1)",
+       row3 is not None and row3.get("status") == "cancelled", str(row3))
+    cid3 = await db.insert_command("PC-I1", "start", {})
+    await main.ack_cmd("PC-I1", cid3, Req({}))
+    await main.cancel_cmd(cid3, Req(api_key=None, session=main.new_session("main")))
+    rows = await db.get_recent_commands(50)
+    row4 = next((x for x in rows if x.get("id") == cid3), None)
+    ok("I1 대시보드 ✕ 취소는 acked 를 못 뒤집는다(pending 일 때만)",
+       row4 is not None and row4.get("status") == "acked", str(row4))
 
 
 def t_fv_ints():

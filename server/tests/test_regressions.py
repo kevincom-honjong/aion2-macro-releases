@@ -184,12 +184,25 @@ async def t_state_and_ws():
 
     async def _boom(t="main"):
         raise RuntimeError("일부러")
+    # 2026-09-23: 초기 상태도 방송 일꾼이 만든다(상태 펌프 한 길). 조립이 터지면 그 판만 버리고
+    #   연결은 산다(다음 판에서 전량을 받는다) — 그래도 ★끊기면 반드시 목록에서 빠진다★.
     main._build_full_state_inner = _boom
     ws2 = FakeWS()
     ws2.cookies = {"session": tok}
-    await main.websocket_endpoint(ws2)
+    _f0 = main._PERF.get("push_state_failed", {}).get("n", 0)
+    t2 = asyncio.create_task(main.websocket_endpoint(ws2))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if main._PERF.get("push_state_failed", {}).get("n", 0) > _f0:
+            break
+    await main._push_drain("main")
+    stayed = any(c is ws2 for c, _t in main.manager.active)
+    failed = main._PERF.get("push_state_failed", {}).get("n", 0) > _f0
+    ws2.die()
+    await asyncio.wait_for(t2, timeout=5)
     main._build_full_state_inner = _real
-    ok("⑩-b 초기 조립이 터져도 목록에 안 남는다", len(main.manager.active) == 0)
+    ok("⑩-b 초기 조립이 터져도(센다) 연결은 살고, 끊기면 목록에 안 남는다",
+       stayed and failed and len(main.manager.active) == 0, "stayed=%s failed=%s" % (stayed, failed))
 
     # push_state — 보는 사람 없으면 안 만들고, 예외 판도 계측에 남는다
     main._PERF.clear()
@@ -201,6 +214,7 @@ async def t_state_and_ws():
     main._build_full_state_inner = _boom
     try:
         await main.push_state("main")
+        await main._push_drain("main")     # 2026-09-23: 방송은 뒤에서 도는 일꾼이 한다 — 끝날 때까지 기다려 본다
     except RuntimeError:
         pass
     main._build_full_state_inner = _real

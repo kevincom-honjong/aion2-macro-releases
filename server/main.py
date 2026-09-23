@@ -22,12 +22,16 @@ from database import (
     delete_pc_all_data, get_pc_dump, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, get_pending_commands,
     ack_command, cancel_command, get_logs,
-    insert_log, get_recent_commands, get_command_pc, get_updater_command_pc,
+    insert_log, get_recent_commands, get_command_pc, get_updater_command_pc, latest_command_after,
     set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
+    claim_updater_command_for_fv, finish_updater_command_fv, updater_command_for_fv_id, supersede_updater_command,
+    open_fv_claims, maintain_command_tables, heal_reverted_kina, sweep_fv_claims,
+    release_updater_command_from_fv, updater_command_status,
     recent_updater_commands,
-    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina,
+    pc_clock_get, pc_clock_put, mark_updater_handed,
+    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
     tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
@@ -292,10 +296,13 @@ def _perf_note(name: str, ms: float) -> None:
     d["ms_last"] = ms
     if ms > d["ms_max"]:
         d["ms_max"] = ms
+        # ★최대가 ★언제★ 났는지(2026-09-23)★ — 운영 push_state 최대 11,734ms 가 한 번 찍혔는데
+        #   시각이 없어 재배포·GitHub 지연·느린 소켓 중 무엇과 겹쳤는지 대조할 수 없었다.
+        d["ms_max_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + "Z"
 
 
-def _perf_count(name: str) -> None:
-    _perf_slot(name)["n"] += 1
+def _perf_count(name: str, n: int = 1) -> None:
+    _perf_slot(name)["n"] += n
 
 
 # ==============================================================================
@@ -328,6 +335,36 @@ def _ws_life_bucket(sec: float) -> str:
         if sec < lim:
             return name
     return ">300s"
+
+
+# ★느린 대시보드 전송·대시보드 WS 끊김을 따로 남긴다(2026-09-23 반응속도 조사)★ — 운영 push_state
+#   최대 11,734ms 는 「느린 대시보드 소켓 하나」 로 재현됐지만(로컬: 4KB/s 로 읽는 소켓 → 9,219ms)
+#   운영에서 ★어느 소켓이·언제★ 였는지는 남은 게 없었다. 매크로 끊김(_WS_CLOSES)과 섞으면
+#   매크로 끊김 통계(ws_why·left)가 흐려지므로 링을 따로 둔다. 개인정보는 안 남긴다(브라우저 종류만).
+SLOW_SEND_MS = 1000
+_SLOW_SENDS: list = []
+_DASH_CLOSES: list = []
+
+
+def _ua_of(ws) -> str:
+    try:
+        return str((ws.headers or {}).get("user-agent") or "")[:60]
+    except Exception:
+        return ""
+
+
+def _note_slow_send(ws, ms: float, nbytes: int, kind: str) -> None:
+    if ms < SLOW_SEND_MS:
+        return
+    _SLOW_SENDS.append({"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                        "ms": round(ms), "bytes": nbytes, "kind": kind, "ua": _ua_of(ws)})
+    del _SLOW_SENDS[:-40]
+
+
+def _note_dash_close(tenant: str, secs: float, why: str, ws=None) -> None:
+    _DASH_CLOSES.append({"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                         "tenant": tenant, "secs": round(secs, 1), "why": why, "ua": _ua_of(ws)})
+    del _DASH_CLOSES[:-40]
 
 
 def _ws_note_close(nspc: str, secs: float, why: str) -> None:
@@ -511,11 +548,24 @@ def _key_probe_failed(ip: str):
             _KEY_FAILS.pop(kk, None)
 
 
+def _ct_eq(supplied, secret) -> bool:
+    """★상수시간 비교는 바이트로 (2026-09-23)★ — str 끼리 compare_digest 는 비ASCII 한 글자에
+    TypeError(=500)였다(로그인·키·/license·WS·/check). str 이 아니면(숫자·목록) 그냥 불일치."""
+    if not isinstance(supplied, str) or not isinstance(secret, str):
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8", "replace"), secret.encode("utf-8", "replace"))
+
+
 def check_api_key(request: Request) -> Optional[str]:
     """키가 유효하면 소속 테넌트명 반환(truthy), 아니면 None. 만료 테넌트 키는 전면 차단.
     ★키 추측 시도 완화(2026-07-27): 상수시간 비교 + IP별 실패 상한. 이 키가 뚫리면
       남의 PC에 원격명령을 넣을 수 있으므로 로그인만큼 중요하다.★"""
     supplied = request.headers.get("X-Api-Key", "")
+    if not supplied:
+        # ★키를 안 보낸 요청은 추측이 아니다 (2026-09-23)★ — `check_api_key(...) or check_session(...)`
+        #   자리(/setting·/parsec/map)에서 대시보드 새로고침이 실패로 세어져 관제컴 IP 가 잠기고
+        #   같은 공인 IP 의 매크로까지 /check·WS 가 막혔다.
+        return None
     ip = _client_ip(request)
     now = time.time()
     rec = _KEY_FAILS.get(ip)
@@ -523,7 +573,7 @@ def check_api_key(request: Request) -> Optional[str]:
         return None            # 실패 폭주 IP는 정답 키여도 창이 끝날 때까지 거부
     tenant = None
     for k, tn in KEY_TO_TENANT.items():
-        if hmac.compare_digest(supplied, k):
+        if _ct_eq(supplied, k):
             tenant = tn
     if tenant and tenant_blocked(tenant):
         # ★킬스위치/만료(2026-08-06): 유효한 키의 '차단'은 추측 실패가 아니다 — 여기서
@@ -548,9 +598,18 @@ def check_api_key(request: Request) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 # WebSocket manager
 # ─────────────────────────────────────────────────────────────────────────────
+BROADCAST_SEND_TIMEOUT_S = 5.0   # 대시보드 한 소켓에 한 메시지를 넘기는 상한(넘으면 그 소켓만 끊는다)
+BROADCAST_WAIT_S = 0.5           # 방송을 부른 쪽이 기다리는 상한 — 나머지 전송은 소켓별로 뒤에서 이어간다
+BROADCAST_BACKLOG_MAX = 8        # 한 소켓에 밀린 전송이 이만큼이면 그 소켓은 못 따라오는 것 — 끊는다
+
+
 class ConnectionManager:
     def __init__(self):
         self.active: list["tuple[WebSocket, str]"] = []   # (대시보드 ws, 테넌트)
+        self._locks: dict = {}      # id(ws) → asyncio.Lock — 한 소켓에 동시에 두 번 안 쓰고 순서를 지킨다
+        self._backlog: dict = {}    # id(ws) → 아직 안 끝난 전송 수
+        self._sent_ver: dict = {}   # id(ws) → 그 소켓에 마지막으로 보낸 상태 판 번호(_FEED ver)
+        self._pump: dict = {}       # id(ws) → 상태 펌프 작업(소켓당 하나)
 
     async def connect(self, ws: WebSocket, tenant: str = "main"):
         await ws.accept()
@@ -558,6 +617,44 @@ class ConnectionManager:
 
     def disconnect(self, ws: WebSocket):
         self.active = [(c, t) for c, t in self.active if c is not ws]
+        self._locks.pop(id(ws), None)
+        self._backlog.pop(id(ws), None)
+        self._sent_ver.pop(id(ws), None)
+        self._pump.pop(id(ws), None)
+
+    def _is_active(self, ws: WebSocket) -> bool:
+        return any(c is ws for c, _t in self.active)
+
+    async def _drop(self, ws: WebSocket):
+        if not any(c is ws for c, _t in self.active):
+            return
+        self.disconnect(ws)
+        _perf_count("broadcast_dropped")
+        ws._dash_drop_why = "dropped(1013 느림)"
+        try:
+            await asyncio.wait_for(ws.close(code=1013), 1.0)   # 1013 = 잠시 뒤 다시(화면은 3초 뒤 재접속)
+        except Exception:
+            pass
+
+    async def _send_one(self, ws: WebSocket, msg: str):
+        k = id(ws)
+        # ★끊긴 소켓엔 자물쇠를 새로 만들지 않는다(2026-09-23 반증 #3 — 누수)★
+        if not self._is_active(ws):
+            self._backlog.pop(k, None)
+            return
+        lock = self._locks.setdefault(k, asyncio.Lock())
+        try:
+            async with lock:
+                if not self._is_active(ws):
+                    return                                   # 기다리는 사이 이미 끊겼다
+                _t0 = time.monotonic()
+                await asyncio.wait_for(ws.send_text(msg), BROADCAST_SEND_TIMEOUT_S)
+                _note_slow_send(ws, (time.monotonic() - _t0) * 1000, len(msg), "event")
+        except Exception:
+            await self._drop(ws)
+        finally:
+            if k in self._backlog:
+                self._backlog[k] = max(0, self._backlog[k] - 1)
 
     async def broadcast(self, data: dict, tenant: str = "main"):
         """해당 테넌트의 대시보드에게만 전송 (테넌트 격리).
@@ -574,16 +671,89 @@ class ConnectionManager:
                         pass
             return
         msg = json.dumps(data, ensure_ascii=False)
-        dead = []
-        for ws, t in self.active:
+        # ★느린 대시보드 하나가 전체를 붙잡지 않게 (2026-09-23 반응속도 실측)★
+        #   예전엔 한 소켓씩 ★제한 없이★ 차례로 기다렸다 — 휴대폰·백그라운드 탭처럼 받는 쪽이
+        #   느리면 그 await 가 끝날 때까지 다음 대시보드도, 이 방송을 부른 요청(매크로 보고)도
+        #   멈췄다(운영 /diag/perf push_state 최대 11,734ms · 로컬 재현 3초 소켓 1개 → 보고 1건 3,016ms).
+        #   → 소켓마다 따로(자물쇠로 순서 유지) 보내고, 부른 쪽은 BROADCAST_WAIT_S 까지만 기다린다.
+        #     한 통에 BROADCAST_SEND_TIMEOUT_S 를 넘기거나 밀린 게 BROADCAST_BACKLOG_MAX 에 닿은
+        #     소켓은 끊는다(화면은 3초 뒤 스스로 재접속해 /ws 초기 상태를 새로 받는다).
+        tasks, stuck = [], []
+        # ★도는 동안엔 await 하지 않는다(2026-09-23 반증 #3)★ — 중간에 _drop 을 기다리면 그사이
+        #   끊긴 다른 소켓의 밀림·자물쇠 기록을 다시 만들어 남겼다. 끊을 것은 모아 뒤에서 끊는다.
+        for ws, t in list(self.active):
             if t != tenant:
                 continue
-            try:
-                await ws.send_text(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+            k = id(ws)
+            if self._backlog.get(k, 0) >= BROADCAST_BACKLOG_MAX:
+                stuck.append(ws)
+                continue
+            self._backlog[k] = self._backlog.get(k, 0) + 1
+            tasks.append(asyncio.create_task(self._send_one(ws, msg)))
+        for ws in stuck:
+            await self._drop(ws)
+        if tasks:
+            await asyncio.wait(tasks, timeout=BROADCAST_WAIT_S)
+
+    # ── 카드 상태 방송(2026-09-23 반응속도 2단계, 아이온2 승인) ─────────────────────
+    #   ★상태는 「판」 이다★ — 소켓마다 마지막으로 보낸 판(_sent_ver)만 기억하고, 새 판이 나오면
+    #   바로 앞 판을 가진 소켓엔 바뀐 카드만(state_diff), 그 밖(새로 붙음·밀림·재요청)엔 전량(state)을
+    #   보낸다. 느린 소켓은 중간 판을 건너뛰고 최신 전량 하나만 받으므로 밀림이 쌓이지 않는다
+    #   (예전 방식은 낡은 전량이 줄줄이 쌓여 8통에서 끊겼다 — 반증 #2, 폰에서 45초마다 끊김).
+    #   같은 소켓 자물쇠를 쓰므로 로그·알림 방송과 동시에 쓰지 않는다.
+    async def publish_state(self, tenant: str = "main"):
+        if tenant_blocked(tenant):
+            await self.broadcast({"type": "ping"}, tenant)   # 차단 소켓 닫기는 broadcast 한 곳에서
+            return
+        for ws, t in list(self.active):
+            if t != tenant:
+                continue
+            k = id(ws)
+            task = self._pump.get(k)
+            if task is None or task.done():
+                self._pump[k] = asyncio.create_task(self._state_pump(ws, tenant))
+
+    def resync(self, ws: WebSocket, tenant: str = "main"):
+        """화면이 판 번호가 어긋났다고 알리면 다음엔 전량을 보낸다."""
+        if self._is_active(ws):
+            self._sent_ver[id(ws)] = -1
+
+    async def _state_pump(self, ws: WebSocket, tenant: str):
+        k = id(ws)
+        try:
+            while True:
+                if not self._is_active(ws):
+                    return
+                f = _FEED.get(tenant)
+                if not f or f.get("full") is None:
+                    return
+                v = f["ver"]
+                sent = self._sent_ver.get(k, -1)
+                if sent >= v:
+                    return
+                # 판 번호와 본문을 ★같은 순간★ 에 읽는다(사이에 await 없음)
+                is_diff = (sent == v - 1 and f.get("diff") is not None)
+                msg = f["diff"] if is_diff else f["full"]
+                lock = self._locks.setdefault(k, asyncio.Lock())
+                async with lock:
+                    if not self._is_active(ws):
+                        return
+                    _t0 = time.monotonic()
+                    await asyncio.wait_for(ws.send_text(msg), BROADCAST_SEND_TIMEOUT_S)
+                    _ms = (time.monotonic() - _t0) * 1000
+                    _perf_note("state_send", _ms)
+                    _note_slow_send(ws, _ms, len(msg), "diff" if is_diff else "full")
+                # ★끊긴 소켓엔 적지 않는다(2026-09-23 반증 B2-1)★ — broadcast 가 자물쇠 없이 _drop 하면
+                #   disconnect 가 _sent_ver 를 지운 ★뒤에★ 이 줄이 돌아 판 번호가 되살아났다(샘 + id() 재사용 시
+                #   새 소켓이 전량 없이 조각부터 받음). 보내는 사이 resync 가 왔으면 전량부터 다시.
+                if not self._is_active(ws):
+                    return
+                if self._sent_ver.get(k, -1) == sent:
+                    self._sent_ver[k] = v
+                _perf_count("state_diff" if is_diff else "state_full")
+                _perf_count("state_bytes_diff" if is_diff else "state_bytes_full", len(msg))
+        except Exception:
+            await self._drop(ws)
 
 
 manager = ConnectionManager()
@@ -609,12 +779,34 @@ LOG_BATCH_MAX = 50           # POST /log 한 배치에 저장하는 상한 — �
 _last_seen: dict[str, datetime] = {}          # nspc → 마지막으로 그 PC에서 뭐라도 온 시각
 
 
+_LAST_SEEN_MAX = 4000                  # 이만큼 넘으면 정리를 한 번 돈다
+_LAST_SEEN_TENANT_MAX = 1000           # 한 테넌트가 차지할 수 있는 최대 칸
+_LAST_SEEN_TTL_S = 3600                # seen_fresh 가 묻는 최대 창(900초)보다 넉넉히
+
+
+def _tenant_cap(d: dict, tenant: str, cap: int, age_key) -> None:
+    """★테넌트별 상한 (2026-09-23 B2)★ — 그 테넌트 칸이 cap 을 넘으면 age_key 가 작은(오래된) 것부터 버린다.
+    남의 테넌트 칸은 절대 안 건드린다(§A11 — 자원 쪽에서 가른다)."""
+    mine = [k for k in d if ns_of(k) == tenant]
+    if len(mine) <= cap:
+        return
+    mine.sort(key=age_key)
+    for k in mine[:len(mine) - cap]:
+        d.pop(k, None)
+
+
 def mark_seen(nspc: str) -> None:
     """그 PC에서 어떤 요청이든 왔다 = 살아있다. 오프라인 판정에 쓴다."""
     try:
+        _new = nspc not in _last_seen
         _last_seen[nspc] = datetime.now(timezone.utc)
-        if len(_last_seen) > 4000:            # 무한 증식 방지(테넌트 오염 대비)
-            _last_seen.clear()
+        # ★통째로 clear() 하지 않는다 (2026-09-23 B2-11)★ — 한 테넌트의 id 폭주가 주인 함대의
+        #   생존 기록까지 지워 멀쩡한 PC 가 offline 으로 칠해졌다. 만료분 → 그 테넌트 오래된 것 순.
+        if _new and len(_last_seen) > _LAST_SEEN_MAX:
+            _cut = _last_seen[nspc] - timedelta(seconds=_LAST_SEEN_TTL_S)
+            for k in [k for k, v in _last_seen.items() if v < _cut]:
+                _last_seen.pop(k, None)
+            _tenant_cap(_last_seen, ns_of(nspc), _LAST_SEEN_TENANT_MAX, lambda k: _last_seen[k])
     except Exception:
         pass
 
@@ -622,6 +814,16 @@ def mark_seen(nspc: str) -> None:
 _lan_cache_last: dict[str, str] = {}   # nspc → 마지막으로 받은 내부망 주소
 LAN_CACHE_KEY = "lan_cache_last"
 _lan_cache_dirty = [False]
+
+
+_LAN_URL_RE = re.compile(r"^http://[\d.]+:\d+/(\?k=[\w-]+)?$", re.ASCII)   # 화면 JS 와 같은 규칙
+_LAN_URL_MAX = 200
+_LAN_CACHE_TENANT_MAX = 300
+
+
+def _lan_url_ok(u) -> bool:
+    """★내부망 주소 검사 (2026-09-23 B2-7)★ — 매크로는 `http://ip:port/?k=토큰` 만 보낸다(lc/live.py lan_url)."""
+    return isinstance(u, str) and len(u) <= _LAN_URL_MAX and bool(_LAN_URL_RE.match(u))
 
 
 async def _lan_cache_restore() -> None:
@@ -633,7 +835,7 @@ async def _lan_cache_restore() -> None:
         if raw:
             d = json.loads(raw)
             if isinstance(d, dict):
-                _lan_cache_last.update({str(k): str(v) for k, v in d.items() if v})
+                _lan_cache_last.update({str(k): v for k, v in d.items() if _lan_url_ok(v)})
                 print(f"[lan] 내부망 주소 캐시 복원: {len(_lan_cache_last)}건")
     except Exception as e:
         print(f"[lan] 캐시 복원 실패(무시): {e}")
@@ -649,7 +851,9 @@ async def _lan_cache_saver() -> None:
         if not _lan_cache_dirty[0]:
             continue
         try:
-            await set_setting(LAN_CACHE_KEY, json.dumps(_lan_cache_last, ensure_ascii=False)[:200000])
+            # ★직렬화본을 자르지 않는다 (2026-09-23 B2-7)★ — [:200000] 은 깨진 JSON 을 남겨 재기동 때
+            #   전 함대 주소가 통째로 사라졌다. 크기는 입구(_lan_url_ok)·테넌트별 상한이 막는다.
+            await set_setting(LAN_CACHE_KEY, json.dumps(_lan_cache_last, ensure_ascii=False))
             _lan_cache_dirty[0] = False
         except Exception as e:
             print(f"[lan] 캐시 저장 실패(다음 바퀴에 다시): {e}")
@@ -662,12 +866,44 @@ def seen_fresh(nspc: str, secs: int) -> bool:
     return (datetime.now(timezone.utc) - t).total_seconds() < secs
 
 
+# ★B-CQ10 (2026-09-23) WS 로 보낸 명령 id★ — 취소 버튼이 「이미 전달됨」 을 가르는 근거(메모리, 상한 있음).
+#   서버 재기동이면 비지만 그땐 예전 동작(pending 이면 취소)으로 돌아갈 뿐이다.
+_CMD_DELIVERED: dict = {}
+_CMD_DELIVERED_MAX = 4000
+# ★B-CQ11 (2026-09-23) 재접속 드레인 상한을 넘는 밀린 명령이 남은 PC★ — 여기 있으면 새 명령을
+#   WS 로 새치기 전송하지 않는다(더 오래된 것이 DB 에 남아 있는 동안). 폴링이 오래된 순으로 준다.
+_WS_BACKLOG: set = set()
+# ★B-CQ11★ 드레인 중인(아직 자리에 안 앉은) 소켓 — 더 새 연결이 오면 이것도 닫아 자리 넘김 규칙을 지킨다.
+_WS_DRAINING: dict = {}
+
+
+def _cmd_mark_delivered(cmd_id) -> None:
+    try:
+        _CMD_DELIVERED[int(cmd_id)] = time.time()
+    except Exception:
+        return
+    if len(_CMD_DELIVERED) > _CMD_DELIVERED_MAX:
+        for _k in list(_CMD_DELIVERED)[:len(_CMD_DELIVERED) // 4]:
+            _CMD_DELIVERED.pop(_k, None)
+
+
 async def send_command_to_macro(pc_id: str, command: str, args: dict, cmd_id: int) -> bool:
     """매크로에 WS로 명령 즉시 전송. 실패 시 False (HTTP fallback 필요)."""
     ws = macro_ws_connections.get(pc_id)
+    if ws and pc_id in _WS_BACKLOG:
+        # ★B-CQ11★ 더 오래된 pending 이 있으면 새치기하지 않는다 — 없어졌으면 표시를 풀고 보낸다.
+        try:
+            _old = await get_pending_command(pc_id, all_key=ns(ns_of(pc_id), "all"))
+        except Exception:
+            _old = None
+        if _old is not None and int(_old["id"]) < int(cmd_id):
+            return False
+        _WS_BACKLOG.discard(pc_id)
+        ws = macro_ws_connections.get(pc_id)
     if ws:
         try:
             await ws.send_text(json.dumps({"type": "command", "id": cmd_id, "command": command, "args": args}))
+            _cmd_mark_delivered(cmd_id)
             return True
         except Exception:
             # ══════════════════════════════════════════════════════════════
@@ -709,8 +945,28 @@ async def _tg_call(method: str, data: dict | None = None,
     import httpx
     url = f"{TG_API}{TELEGRAM_BOT_TOKEN}/{method}"
     try:
-        async with httpx.AsyncClient(timeout=timeout) as cli:
-            r = await cli.post(url, data=data or {}, files=files)
+        # ★B-TG4 (2026-09-23) 429 는 딱 한 번 기다렸다 다시★ — 텔레그램이 retry_after 를 주는데
+        #   예전엔 None 으로 버려 알람이 조용히 사라졌다. 기다림은 min(retry_after, 5)초 상한.
+        #   ★timeout 은 두 번을 합친 전체 예산★ — 다시 보내도 매크로 제한시간(B-TG3)을 못 넘게
+        #   남은 시간으로만 보내고, 기다린 뒤 2초도 안 남으면 다시 안 보낸다. 두 번째도 429 면 None.
+        _t_end = time.monotonic() + float(timeout)
+        _left = float(timeout)
+        for _try in range(2):
+            async with httpx.AsyncClient(timeout=_left) as cli:
+                r = await cli.post(url, data=data or {}, files=files)
+            if r.status_code == 429 and _try == 0:
+                try:
+                    _ra = float(((r.json() or {}).get("parameters") or {}).get("retry_after") or 1)
+                except Exception:
+                    _ra = 1.0
+                _ra = max(0.0, min(_ra, 5.0))
+                _left = _t_end - time.monotonic() - _ra     # 기다린 뒤 남는 예산(기다림을 미리 뺀다)
+                if _left < 2.0:
+                    break
+                print(f"[TG] {method} 429 — {_ra:.0f}초 뒤 한 번 더")
+                await asyncio.sleep(_ra)
+                continue
+            break
         if r.status_code != 200:
             print(f"[TG] {method} HTTP {r.status_code}: {r.text[:200]}")
             return None
@@ -724,14 +980,23 @@ async def _tg_call(method: str, data: dict | None = None,
         return None
 
 
+# ★B-TG3 (2026-09-23) 서버 제한시간 < 매크로 제한시간★ — 매크로는 /telegram/send 를 15초,
+#   /telegram/photo 를 40초 기다린다. 서버가 텔레그램을 20·40초 기다리면 매크로가 먼저 포기하고
+#   ★자기 봇으로 한 번 더 보내 중복★ 이 된다(서버 것도 늦게 도착). 429 한 번 대기(≤5초)를 더해도
+#   매크로보다 짧게 — 10·25초.
+TG_TEXT_TIMEOUT  = 10.0
+TG_PHOTO_TIMEOUT = 25.0
+
+
 async def tg_send_text(chat_id: str, text: str) -> int | None:
-    res = await _tg_call("sendMessage", {"chat_id": chat_id, "text": text[:3500]})
+    res = await _tg_call("sendMessage", {"chat_id": chat_id, "text": text[:3500]},
+                         timeout=TG_TEXT_TIMEOUT)
     return (res or {}).get("message_id")
 
 
 async def tg_send_photo(chat_id: str, caption: str, photo: bytes, filename: str = "shot.png") -> int | None:
     res = await _tg_call("sendPhoto", {"chat_id": chat_id, "caption": caption[:900]},
-                         files={"photo": (filename, photo, "image/png")}, timeout=40.0)
+                         files={"photo": (filename, photo, "image/png")}, timeout=TG_PHOTO_TIMEOUT)
     return (res or {}).get("message_id")
 
 
@@ -748,7 +1013,9 @@ async def _tg_route_code(nspc: str, code: str) -> bool:
 
 
 async def _tg_handle_update(u: dict) -> None:
-    msg = u.get("message") or u.get("edited_message") or {}
+    # ★B-TG1/N2 (2026-09-23) 고친 메시지(edited_message)는 안 받는다★ — 이미 라우팅된 코드를
+    #   고치면 그 사이 매핑이 지워져 아래 「대기 PC 하나」 추론이 ★다른 PC★ 로 보낼 수 있다.
+    msg = u.get("message") or {}
     chat_id = str(((msg.get("chat") or {}).get("id")) or "")
     text = (msg.get("text") or "").strip()
     if not chat_id or not text:
@@ -772,11 +1039,14 @@ async def _tg_handle_update(u: dict) -> None:
 
     # ① 답장이면 그 메시지의 주인 PC로
     target = None
+    reply_known = False     # ★B-TG1 보강★ 답장한 메시지가 ★PC 요청이었던★ 메시지인가(처리됨·남의 테넌트 포함)
     reply_id = ((msg.get("reply_to_message") or {}).get("message_id"))
     if reply_id:
         row = await tg_map_get(int(reply_id))
+        reply_known = row is not None
         # ★테넌트 교차 차단: 남의 PC 메시지 id를 알아내 답장해도 라우팅되면 안 된다.★
-        if row and ns_of(row["pc_id"]) == tenant:
+        # ★kind='done' = 이미 코드를 받아 처리된 사진(tg_map_delete_pc) — 그 PC 로도 다시 안 보낸다.★
+        if row and ns_of(row["pc_id"]) == tenant and (row.get("kind") or "captcha") != "done":
             target = row["pc_id"]
 
     code_ok = bool(TG_CODE_RE.match(text))
@@ -786,6 +1056,20 @@ async def _tg_handle_update(u: dict) -> None:
     #    ★행 수가 아니라 PC 수로 센다 — 오답 재전송 때 같은 PC의 사진이 여러 장 쌓이는데,
     #      행 수로 세면 그 흔한 경우에 추론이 죽어버린다.★
     waiting_pcs = {p["pc_id"] for p in pending}
+    # ★B-TG1 (2026-09-23) 답장인데 주인을 못 찾으면 추론하지 않는다★ — 예전엔 아래 「하나뿐」
+    #   추론으로 떨어져, A 사진에 답장한 정정 코드(A 행은 이미 지워짐)가 ★기다리던 B 로★ 갔다.
+    #   사람이 사진을 골라 답장했다는 건 「그 PC」라는 뜻이다 — 다른 PC 로 보내면 안 된다.
+    # ★B-TG1 보강 (2026-09-23 병합 반증) 거절은 ★PC 요청이었던 메시지★ 에 단 답장만★ — 초판은 매핑에
+    #   없는 답장을 전부 거절해, 봇의 「다시 보내주세요」·expect_reply 없는 알림에 답장한 코드까지
+    #   (기다리는 PC 가 하나뿐인데도) 버렸다. 처리된 사진은 이제 행이 kind='done' 으로 남으므로
+    #   (tg_map_delete_pc) 「처리된 사진」 과 「처음부터 모르는 메시지」 를 가를 수 있다. 모르는 메시지에 단
+    #   답장은 답장 아닌 코드와 같이 아래 「대기 PC 하나」 추론을 탄다.
+    if reply_id and target is None and reply_known:
+        _names = ", ".join(sorted({split_ns(p)[1] for p in waiting_pcs}))
+        await tg_send_text(chat_id, "그 사진은 이미 처리됐거나 만료됐습니다"
+                           + (f"\n대기 중: {_names} — 그 PC 의 가장 최근 사진에 답장해 주세요"
+                              if _names else ""))
+        return
     if target is None and code_ok and len(waiting_pcs) == 1:
         target = next(iter(waiting_pcs))
 
@@ -796,13 +1080,20 @@ async def _tg_handle_update(u: dict) -> None:
         await tg_send_text(chat_id, f"어느 PC인지 알 수 없습니다. 캡차 사진에 '답장'으로 보내주세요.\n대기 중: {names}")
         return
     if not code_ok:
-        await tg_send_text(chat_id, "코드는 영문/숫자 3~16자만 됩니다. 다시 보내주세요.")
+        _mid = await tg_send_text(chat_id, "코드는 영문/숫자 3~16자만 됩니다. 다시 보내주세요.")
+        # ★B-TG1 보강 (2026-09-23)★ 이 안내문에 단 답장은 ★그 PC★ 로 — 대기 PC 가 여럿이어도 추론 없이 간다.
+        if _mid:
+            await tg_map_put(int(_mid), target, chat_id)
         return
 
     pc_name = split_ns(target)[1]
     await _tg_route_code(target, text)
     await tg_map_delete_pc(target)      # 처리했으니 후보에서 제거 (다음 코드가 오라우팅되지 않게)
-    await tg_send_text(chat_id, f"{pc_name} → 코드 '{text}' 전달했습니다")
+    _mid = await tg_send_text(chat_id, f"{pc_name} → 코드 '{text}' 전달했습니다")
+    # ★B-TG1 보강 (2026-09-23)★ 「전달했습니다」 에 단 정정 답장은 그 PC 에 대한 것이다 — 처리됨(done)으로
+    #   적어 둬야 「모르는 메시지」 로 보고 ★다른★ 대기 PC 하나로 추론하지 않는다(TG1 과 같은 사고).
+    if _mid:
+        await tg_map_put(int(_mid), target, chat_id, kind="done")
     print(f"[TG] 코드 라우팅: {target} ← {text}")
 
 
@@ -910,10 +1201,53 @@ def _probe_volume() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Lifespan
 # ─────────────────────────────────────────────────────────────────────────────
+async def _cmd_table_maint() -> None:
+    await asyncio.sleep(20)            # 헬스체크·첫 보고가 먼저
+    try:
+        r = await maintain_command_tables()
+        print(f"[DB] 명령 표 정리 commands -{r['commands']} updater_commands -{r['updater_commands']} 인덱스 {r['index']}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print(f"[DB] 명령 표 정리 실패(무시, 다음 부팅에 다시): {e}")
+    while True:          # ★팜뷰 claim «모름» 판정을 모든 PC 에 (배포 반증 3차 H7 — 업데이터가 죽은 PC 도)★
+        await asyncio.sleep(30)
+        try:
+            await _fv_claim_sweep_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[FV] claim 정리 실패(다음 30초에 다시): {e}")
+
+
+async def _fv_claim_sweep_once() -> list:
+    _quiet = (time.monotonic() - _FV_LAST_SEEN[0]) > FV_QUIET_SEC
+    rows = await sweep_fv_claims(_quiet)
+    for _x in rows:
+        _fv_q_drop_ucmd(_x["id"])
+        try:
+            await insert_log(_x["pc_id"], "WARNING",
+                             f"[팜뷰] 업데이터 명령 {_x['command']}(#{_x['id']}) — 팜뷰가 집었는데 결과가 안 왔습니다. "
+                             f"실행됐는지 모름 → 다시 보내지 않았습니다(필요하면 다시 누르십시오)")
+        except Exception:
+            pass
+    return rows
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _probe_volume()
     await init_db()
+    # ★되돌려진 창고키나 부팅 복구 (2026-09-23 P0 v3)★ — 옛 서버가 재전송으로 되살린 판매를 다음 재전송까지
+    #   기다리지 않고 지금 고친다. 카드마다 로그 한 줄(A2). 실패해도 부팅은 계속.
+    try:
+        for _h in await heal_reverted_kina():
+            print(f"[팜뷰] 창고 키나 부팅 복구 {_h['pc_id']} {_h['before']:,} → {_h['after']:,} tid={_h['tids']}")
+            await insert_log(_h["pc_id"], "info",
+                             f"[팜뷰] 창고 키나 부팅 복구 {_h['before']:,} → 장부 다시 적용 {_h['after']:,} "
+                             f"(tid {', '.join(_h['tids'])})")
+    except Exception as _he:
+        print(f"[팜뷰] 창고 키나 부팅 복구 실패(무시): {_he}")
     # 렌탈 킬스위치 복원(2026-08-06) — 볼륨 DB의 설정을 부팅 시 메모리로
     try:
         KILLED_TENANTS.update(_parse_killed(await get_setting(ns("main", "rental_kill")) or ""))
@@ -937,6 +1271,7 @@ async def lifespan(app: FastAPI):
         print(f"[계정없음] no_account_pcs 로드 실패(무시): {e}")
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
+    await _abyss_restore()             # 어비스 수익 오늘 합계 복원(2026-09-23 장부 #104)
     tg_task = asyncio.create_task(_tg_poller()) if tg_enabled() else None
     # ★계정 자동순환 엔진 (2026-08-20)★ — 무장된 PC 가 하나도 없으면 아무 일도 안 한다.
     rot_task = asyncio.create_task(_rot_engine())
@@ -945,19 +1280,100 @@ async def lifespan(app: FastAPI):
     # ★루프 굳음 감시 (2026-09-10 주인님 지시)★ - 재기만 한다, 아무것도 안 고친다.
     wd_task = asyncio.create_task(_loop_watchdog())
     lan_task = asyncio.create_task(_lan_cache_saver())
+    # ★명령 표 정리·인덱스는 부팅 ★뒤★ 백그라운드로 (2026-09-23 배포 반증 #6)★ — init_db 안에서 하면 큰 표에서
+    #   Railway healthcheckTimeout(10초)을 넘긴다. 나눠 지우고 사이사이 쉰다.
+    maint_task = asyncio.create_task(_cmd_table_maint())
+    abyss_task = asyncio.create_task(_abyss_saver())
     try:
         yield
     finally:
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task):
+        # ★재배포 순간을 로그에 남긴다(2026-09-23)★ — uvicorn 이 SIGTERM 에 모든 WS 를 1012 로
+        #   닫는다. Railway 로그에서 이 줄과 화면·매크로의 1012 시각을 대조하면 재배포인지 가른다.
+        try:
+            print(f"[shutdown] boot={SERVER_BOOT_ID[:8]} uptime={int(time.time() - SERVER_BOOT_TS)}s "
+                  f"macro_ws={len(macro_ws_connections)} dash_ws={len(manager.active)}", flush=True)
+        except Exception:
+            pass
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task):
             if _t:
                 _t.cancel()
                 try:
                     await _t
                 except (asyncio.CancelledError, Exception):
                     pass
+        if _abyss_dirty[0]:                # 모아 두던 gain 을 재배포 전에 한 번 더 저장
+            await _abyss_persist()
 
 
 app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
+
+
+@app.exception_handler(UnicodeEncodeError)
+async def _unicode_400(request: Request, exc: UnicodeEncodeError):
+    """★짝 없는 UTF-16 대리 문자(\\ud800 등) = 400 (반증 v2 #4)★ — JSON 은 받아 주지만 SQLite 에 쓰는 순간
+    UnicodeEncodeError 로 500 이었다(kina_adjust tid·why, char_info 캐릭 이름 …). 트랜잭션은 되돌려진다 — 모양만 400.
+    팜뷰 에러 모양(ok:false·error·err·code — _fv_err 와 같다, v4 반증 B5)과 대시보드 모양(detail)을 같이 싣는다."""
+    _m = "문자열에 짝 없는 대리 문자(\\ud800~\\udfff)가 있습니다"
+    return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 400, "detail": _m}, status_code=400)
+
+
+# ★요청 본문 크기 상한 (2026-09-23)★ — 상한이 핸들러 안(★다 읽은 뒤★)에만 있어서 무인증 /check 에
+#   300MB 를 보내면 통째로 RAM 에 올렸다. 자원(본문) 쪽에서 막는다(§A11) — Content-Length 로 먼저,
+#   청크 전송은 읽으면서 센다. 정상 최대: 스크린샷 JSON(base64 12MB 상한)·버그/텔레그램 PNG 8MB.
+BODY_CAP_DEFAULT = 16 * 1024 * 1024
+BODY_CAP_SMALL = 1024 * 1024       # 무인증 입구 — /check(이미지 해시 484개 ≈ 50KB 실측)·/license·/auth/login
+BODY_CAP_SMALL_PATHS = ("/check", "/license", "/auth/login")
+
+
+class _BodyTooLarge(Exception):
+    pass
+
+
+class _BodyCapMiddleware:
+    def __init__(self, app):                # starlette 가 app= 키워드로 넘긴다
+        self.app = app
+
+    @staticmethod
+    async def _reject(send):
+        body = b'{"detail":"request body too large"}'
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        cap = BODY_CAP_SMALL if scope.get("path") in BODY_CAP_SMALL_PATHS else BODY_CAP_DEFAULT
+        for k, v in scope.get("headers") or ():
+            if k == b"content-length":
+                try:
+                    if int(v) > cap:
+                        return await self._reject(send)
+                except ValueError:
+                    pass
+        seen, started = [0], [False]
+
+        async def _recv():
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                seen[0] += len(msg.get("body") or b"")
+                if seen[0] > cap:
+                    raise _BodyTooLarge()
+            return msg
+
+        async def _send(m):
+            if m.get("type") == "http.response.start":
+                started[0] = True
+            await send(m)
+        try:
+            await self.app(scope, _recv, _send)
+        except _BodyTooLarge:
+            if not started[0]:
+                await self._reject(send)
+
+
+app.add_middleware(_BodyCapMiddleware)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1270,9 +1686,15 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
         #   최근에 안 받은 것뿐이다.★ 마지막으로 받은 값을 기억했다가 채워 준다.
         #   (토큰은 매크로 재기동 때 바뀌므로, 재기동하면 다음 push 가 새 값으로 덮는다)
         _lk = ns(tenant, pid)
+        if pc.get("lan_url") and not _lan_url_ok(pc["lan_url"]):
+            pc["lan_url"] = ""                 # ★DB 에 남은 옛 이상값도 여기서 거른다 (2026-09-23 B2-7)★
         if pc.get("lan_url"):
             if _lan_cache_last.get(_lk) != pc["lan_url"]:
                 _lan_cache_dirty[0] = True
+                if _lk not in _lan_cache_last:
+                    _lan_cache_last[_lk] = pc["lan_url"]
+                    _tenant_cap(_lan_cache_last, tenant, _LAN_CACHE_TENANT_MAX,
+                                lambda k: 1 if k == _lk else 0)   # 새 칸은 남기고 먼저 들어온 것부터
             _lan_cache_last[_lk] = pc["lan_url"]
         elif _lan_cache_last.get(_lk):
             pc["lan_url"] = _lan_cache_last[_lk]
@@ -1285,6 +1707,10 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
         if pid not in seen:
             # setup_complete=False (pc_id 미설정 or token 없음)이면 카드 표시 안 함
             if not u.get("setup_complete", True):
+                continue
+            # ★B-DB5 (2026-09-23)★ 은퇴한 id 는 업데이터 보고만으로 카드를 되살리지 않는다
+            #   (/updater/status 는 은퇴 가드가 없어 은퇴한 base 카드가 offline 으로 부활했다).
+            if ns(tenant, pid) in RETIRED_PCS:
                 continue
             row = {
                 "pc_id":            pid,
@@ -1354,12 +1780,18 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
     #   → 대시보드 숫자·감시기 미완 판정·계정 순환이 전부 이 값을 보므로 여기서 한 번에 고친다.
     #   ★completed 자체는 지우지 않는다★ — 매크로가 보낸 사실은 보존하고, 판정용
     #     today 플래그만 얹는다(되돌릴 수 있고, 옛 소비자도 안 깨진다).
-    try:
-        for pc in statuses:
+    # ★PC 마다 따로 try + 모양 검사 (2026-09-23 B2-10)★ — 한 대가 [null] 을 보내면 루프 전체가
+    #   멈춰 ★뒤 PC 들★ 의 today 가 안 붙었고(어제 완주가 오늘로), /summary·FV 스냅샷이 500 이었다.
+    #   객체가 아닌 칸은 버린다(A2 계약: daily_progress[{slot,completed,completed_time,today}]).
+    for pc in statuses:
+        try:
+            _dp = pc.get("daily_progress")
+            if _dp and not (isinstance(_dp, list) and all(isinstance(_e, dict) for _e in _dp)):
+                pc["daily_progress"] = [_e for _e in (_dp if isinstance(_dp, list) else []) if isinstance(_e, dict)]
             for _e in (pc.get("daily_progress") or []):
                 _e["today"] = bool(_e.get("completed")) and _rot_is_today(_e.get("completed_time"))
-    except Exception:
-        pass
+        except Exception:
+            pass
     # ★순환 무장 상태를 카드에 싣는다 (2026-08-20 감사)★ — 무장됐는지 화면에서 볼 수
     #   없으면 "▶시작을 눌렀는데 계정이 안 넘어간다"를 아무도 진단할 수 없다.
     try:
@@ -1510,6 +1942,138 @@ async def push_state(tenant: str = "main"):
     #     · /status 도 직접 만든다.
     #   즉 ★이 브로드캐스트를 기다리는 것은 '지금 열려 있는 대시보드' 뿐★ 이다.
     # ======================================================================
+    # ★★부른 쪽은 기다리지 않는다 (2026-09-23 반응속도 실측)★★
+    #   예전엔 여기서 카드 조립 + 방송을 ★끝까지 await★ 했다 — 매크로 보고(/report·WS)
+    #   14곳이 이 함수를 기다리므로, 대시보드 하나가 느리거나 version.json 캐시가 만료돼
+    #   GitHub 을 기다리면(최악 14초) ★매크로 보고 응답이 그만큼 늦었다★
+    #   (운영 /diag/perf push_state 최대 11,734ms · 로컬 재현: 3초 소켓 1개 → 보고 1건 3,016ms).
+    #   게다가 보고마다(초당 ~1.7회) 72장 조립을 한 벌씩 새로 시작해 겹쳤다.
+    #   → 「더러움」 표시만 하고 테넌트당 ★작업 하나★(_push_loop)가 모아서 방송한다.
+    #     첫 변화는 바로(앞 방송에서 PUSH_MIN_GAP_S 가 지났으면), 이어지는 변화는 간격당 한 번.
+    if not any(_t == tenant for _w, _t in manager.active):
+        _perf_count("push_state_skipped")
+        return
+    st = _PUSH.setdefault(tenant, {"task": None, "dirty": False, "last": 0.0})
+    st["dirty"] = True
+    t = st["task"]
+    if t is None or t.done():
+        st["task"] = asyncio.create_task(_push_loop(tenant))
+
+
+PUSH_MIN_GAP_S = 1.0     # 대시보드 상태 방송 최소 간격(초) — 보고가 몰려도 초당 한 번
+PUSH_BUILD_TIMEOUT_S = 30.0   # 한 판 조립·발행 상한 — 넘으면 그 판만 버리고 일꾼은 산다
+RESYNC_MIN_GAP_S = 2.0   # 한 화면의 resync(전량 다시) 최소 간격
+STATE_PING_S = 25.0      # 바뀐 카드가 없어도 이만큼 조용하면 ping 한 통(화면 90초 감시견이 괜히 재접속 안 하게)
+UPDATER_STALE_S = 270    # 화면 buildCard 의 「업데이터 N분전」 문턱(_ustale) — 둘이 같아야 한다(test_push)
+STATE_VOLATILE = ("_macro_silent_s", "_updater_age_s")   # 매 조립마다 1초씩 커지는 칸 — 비교에서 뺀다
+_FEED: dict = {}         # tenant → {"ver","keys","full","diff","retired","latest","at"}
+_PUSH: dict = {}         # tenant → {"task", "dirty", "last"}
+
+
+async def _push_loop(tenant: str):
+    """테넌트당 하나만 도는 방송 일꾼 — dirty 가 남아 있는 동안만 돈다.
+    ★끝나는 자리에 await 가 없다★ — while 검사에서 빠져나오면 바로 반환하므로, 그 사이에
+    push_state 가 dirty 를 세우고 「아직 도는 중」 이라 새 일꾼을 안 만드는 틈이 없다."""
+    st = _PUSH[tenant]
+    while st["dirty"]:
+        gap = PUSH_MIN_GAP_S - (time.monotonic() - st["last"])
+        if gap > 0:
+            await asyncio.sleep(gap)
+        st["dirty"] = False
+        st["last"] = time.monotonic()
+        try:
+            # ★한 판이 멈추면 방송 전체가 멈춘다 — 상한을 건다(2026-09-23 반증 #1)★
+            #   일꾼은 테넌트당 하나라, 조립 하나가 영영 안 끝나면 뒤의 보고가 전부 묻혔다.
+            await asyncio.wait_for(_push_state_now(tenant), PUSH_BUILD_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            _perf_count("push_state_timeout")
+            print(f"[push_state] {PUSH_BUILD_TIMEOUT_S}초 넘김 — 이번 판 버림")
+        except Exception as e:      # 이미 push_state_failed 로 셌다 — 일꾼은 죽지 않는다
+            print(f"[push_state] 실패: {e.__class__.__name__}: {e}")
+
+
+async def _push_drain(tenant: str = "main"):
+    """시험용 — 밀린 방송이 끝날 때까지 기다린다(운영 경로는 부르지 않는다)."""
+    t = (_PUSH.get(tenant) or {}).get("task")
+    if t is not None:
+        await t
+    # 상태 펌프(소켓별 전송)까지 — 한 바퀴 더 돌 수 있으니 빌 때까지
+    for _ in range(10):
+        pumps = [x for x in list(manager._pump.values()) if x is not None and not x.done()]
+        if not pumps:
+            break
+        await asyncio.wait(pumps)
+
+
+_VERSION_REFRESH: list = [None]   # 뒤에서 도는 버전 갱신 작업 하나
+
+
+def _version_latest_nowait() -> dict:
+    """★방송에 싣는 최신 버전은 기다리지 않는다★ — 캐시를 바로 쓰고, 5분이 지났으면
+    갱신은 뒤에서 한 번만(_load_version_json_async 의 단일 비행 잠금). 예전엔 방송마다
+    잠금 없는 to_thread(_load_version_json) 를 기다려, 만료 순간 들어온 보고들이
+    각자 GitHub 을 두드리며 줄줄이 늦었다.
+    ★작업 하나만(2026-09-23 반증 #5)★ — 잠금은 작업이 ★돌기 시작해야★ 잡히므로, 같은 순간
+    여러 번 불리면 작업이 여러 개 떴다(5번 → 5개). 뜬 작업을 기억해 끝나기 전엔 안 띄운다."""
+    d = _version_cache.get("data") or {}
+    if not d or time.time() - _version_cache.get("ts", 0) >= VERSION_CACHE_TTL_S:
+        t = _VERSION_REFRESH[0]
+        if (t is None or t.done()) and not _version_lock.locked():
+            try:
+                _VERSION_REFRESH[0] = asyncio.get_running_loop().create_task(_load_version_json_async())
+            except RuntimeError:
+                pass
+    return d if isinstance(d, dict) else {}
+
+
+def _card_key(p: dict) -> str:
+    """카드가 ★화면에서 달라 보이는지★ 를 가르는 열쇠. 매 조립마다 커지는 초 단위 칸은 빼고,
+    화면이 쓰는 모양으로만 남긴다 — 업데이터 나이는 「270초 넘음 + 몇 분째」 만 화면에 보인다.
+    (운영 60초 실측: 카드 변경 2,220건 중 2,154건이 이 두 칸뿐이었다.)"""
+    q = {k: v for k, v in p.items() if k not in STATE_VOLATILE}
+    a = p.get("_updater_age_s")
+    q["__ua"] = (int(a) // 60) if isinstance(a, (int, float)) and a > UPDATER_STALE_S else 0
+    return json.dumps(q, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _feed_update(tenant: str, statuses: list, retired: list, latest) -> bool:
+    """새 판을 만든다. 달라진 게 없으면 False(판 번호 그대로)."""
+    f = _FEED.setdefault(tenant, {"ver": 0, "keys": {}, "full": None, "diff": None,
+                                  "retired": None, "latest": None, "at": 0.0})
+    order, keys, body = [], {}, {}
+    for p in statuses:
+        pid = str(p.get("pc_id") or "")
+        if pid in keys:
+            continue
+        order.append(pid)
+        keys[pid] = _card_key(p)
+        body[pid] = json.dumps(p, ensure_ascii=False, default=str)
+    retired_s = json.dumps(retired, ensure_ascii=False)
+    latest_s = json.dumps(latest, ensure_ascii=False) if latest else None
+    upd = [pid for pid in order if f["keys"].get(pid) != keys[pid]]
+    dels = [pid for pid in f["keys"] if pid not in keys]
+    r_ch = retired_s != f["retired"]
+    l_ch = latest_s is not None and latest_s != f["latest"]
+    if f["full"] is not None and not (upd or dels or r_ch or l_ch):
+        return False
+    prev_ver = f["ver"]
+    v = prev_ver + 1 if prev_ver else int(time.time() * 1000)
+    lat = latest_s or f["latest"]
+    if f["full"] is not None:
+        f["diff"] = ('{"type":"state_diff","ver":%d,"base":%d,"upd":[%s],"del":%s%s%s}' % (
+            v, prev_ver, ",".join(body[x] for x in upd), json.dumps(dels, ensure_ascii=False),
+            (',"retired":' + retired_s) if r_ch else "", (',"latest":' + latest_s) if l_ch else ""))
+    else:
+        f["diff"] = None
+    f["full"] = ('{"type":"state","ver":%d,"pcs":[%s],"retired":%s%s}' % (
+        v, ",".join(body[x] for x in order), retired_s, (',"latest":' + lat) if lat else ""))
+    f.update(ver=v, keys=keys, retired=retired_s, latest=lat)
+    _perf_count("state_cards_changed", len(upd) + len(dels))
+    return True
+
+
+async def _push_state_now(tenant: str = "main"):
+    """실제 조립 + 방송(예전 push_state 몸통). 보는 사람이 없으면 여기서도 안 만든다."""
     if not any(_t == tenant for _w, _t in manager.active):
         _perf_count("push_state_skipped")
         return
@@ -1519,13 +2083,30 @@ async def push_state(tenant: str = "main"):
     _t0 = time.monotonic()
     try:
         statuses = await _build_full_state(tenant)
-        ver = await asyncio.to_thread(_load_version_json)
-        latest = {
-            "macro": ver.get("exe", {}).get("version", ""),
-            "updater": ver.get("updater", {}).get("version", ""),
-        }
-        await manager.broadcast({"type": "state", "pcs": statuses, "latest": latest,
-                                 "retired": _retired_list(tenant)}, tenant)
+        _perf_note("push_build", (time.monotonic() - _t0) * 1000)
+        ver = _version_latest_nowait()
+        # 캐시가 아직 비었으면(부팅 직후) latest 를 빼고 보낸다 — 화면은 msg.latest 가 있을 때만
+        #   갈아끼우므로 빈 값("")으로 「전 PC 구버전」 을 잠깐 그리는 일이 없다.
+        latest = None
+        if (ver.get("exe") or {}).get("version"):
+            latest = {
+                "macro": ver.get("exe", {}).get("version", ""),
+                "updater": ver.get("updater", {}).get("version", ""),
+            }
+        # ★바뀐 카드만 보낸다(2026-09-23 반응속도 2단계)★ — 운영 60초 실측: 전량 111통 11.4MB 중
+        #   화면에서 실제로 달라진 카드는 66장(163KB). 판 번호(ver)를 붙여, 앞 판을 못 받은
+        #   소켓엔 전량을 보낸다(ConnectionManager.publish_state).
+        changed = _feed_update(tenant, statuses, _retired_list(tenant), latest)
+        f = _FEED[tenant]
+        now = time.monotonic()
+        if changed:
+            f["at"] = now
+        elif now - f["at"] >= STATE_PING_S:
+            f["at"] = now
+            await manager.broadcast({"type": "ping"}, tenant)
+        else:
+            _perf_count("push_state_unchanged")
+        await manager.publish_state(tenant)      # 바뀐 게 없어도 — 새로 붙은 소켓은 전량을 받아야 한다
     except Exception:
         _perf_count("push_state_failed")
         raise
@@ -1561,8 +2142,6 @@ HTML_LOGIN = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>⚔ 혼종 사령부 — Login</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>tailwind.config={darkMode:'class'}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&display=swap" rel="stylesheet">
 <style>
@@ -1680,6 +2259,7 @@ HTML_LOGIN = """<!DOCTYPE html>
   @media (prefers-reduced-motion:reduce){
     .seal,body::after,#bg-fx .horizon::before,#err{animation:none!important}}
 </style>
+<!--TW_CSS-->
 </head>
 <body class="text-gray-100 flex items-center justify-center min-h-screen">
 <div id="bg-fx" aria-hidden="true"><div class="stars"></div><div class="horizon"></div></div>
@@ -1815,6 +2395,32 @@ def _login_ok(ip: str):
     _LOGIN_FAILS.pop(ip, None)
 
 
+# ★Tailwind 는 미리 뽑은 CSS 를 인라인으로(2026-09-23 반응속도)★ — 예전엔 두 화면이
+#   cdn.tailwindcss.com(Play CDN, 브라우저 안 JIT)을 받아 ★브라우저에서★ 클래스를 만들었다:
+#   첫 화면이 그 스크립트를 받고·돌리길 기다렸고, 처음 쓰는 클래스는 한 프레임 뒤에 칠해졌다.
+#   이제 tw_build.py 가 같은 생성기로 뽑아 둔 static/tw.css 를 </head> 바로 앞(= Play CDN 이
+#   <style> 을 붙이던 자리, 캐스케이드 순서가 같다)에 넣는다. 파일이 없으면 예전 CDN 으로 돌아간다.
+#   새 클래스를 쓰면 tests/test_tailwind.py 가 빨간불 → `python tw_build.py`.
+TW_CSS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "tw.css")
+_TW_CDN = ('<script src="https://cdn.tailwindcss.com"></script>\n'
+           "<script>tailwind.config={darkMode:'class'}</script>")
+
+
+def _tw_inline(html: str) -> str:
+    try:
+        css = open(TW_CSS_PATH, encoding="utf-8").read()
+        if "--tw-" not in css or "</style" in css.lower():
+            raise ValueError("tw.css 가 이상하다")
+        tag = '<style id="tw-built">\n' + css + '</style>'
+    except Exception as e:
+        print(f"[tailwind] static/tw.css 를 못 씀({e.__class__.__name__}) — Play CDN 으로 대신한다")
+        tag = _TW_CDN
+    return html.replace("<!--TW_CSS-->", tag, 1)
+
+
+HTML_LOGIN = _tw_inline(HTML_LOGIN)       # HTML_DASHBOARD 는 정의 뒤(대시보드 라우트 앞)에서 같은 함수로
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     return HTML_LOGIN
@@ -1836,10 +2442,10 @@ async def do_login(request: Request, response: Response):
         raise HTTPException(status_code=400, detail="잘못된 요청")
     # 비밀번호 → 테넌트 결정 (테넌트별 독립 대시보드, 2026-07-25)
     # 타이밍 차이로 비번을 좁히지 못하게 상수시간 비교로 전체 후보를 훑는다
-    supplied = body.get("password") or ""
+    supplied = (body.get("password") if isinstance(body, dict) else "") or ""   # 목록 본문 500 (2026-09-23)
     tenant = None
     for pw, tn in PW_TO_TENANT.items():
-        if hmac.compare_digest(supplied, pw):
+        if _ct_eq(supplied, pw):
             tenant = tn
     if tenant and tenant in KILLED_TENANTS:
         raise HTTPException(status_code=403, detail="이용이 중지되었습니다. 판매자에게 문의하세요")
@@ -1922,7 +2528,9 @@ async def set_setting_ep(key: str, request: Request):
     #                 형태이고 캐릭이 150명대라 100자는 ★수십 배 부족★ 하다.
     #                 100자로 자르면 JSON 이 깨져 파싱 실패 → 체크가 매번 초기화된다
     #                 (직원분들이 "체크했는데 사라진다" 를 겪게 된다). 배포 전 게이트에서 잡음.
-    _CAP = {"rental_kill": 1000, "ai_dungeon_done": 8000}
+    # ★B-NEW1 (2026-09-23)★ ai_kina_sold 는 {"day","keys":[PC…]} JSON 이라 기본 100자면 PC 9대쯤에서
+    #   잘려 ★깨진 JSON★ 이 저장되고 판매완료 체크가 통째로 풀렸다. (ops/02_서버_대시보드.py 에 _CAP 사본 있음)
+    _CAP = {"rental_kill": 1000, "ai_dungeon_done": 8000, "ai_kina_sold": 4000}
     val = val_raw[:_CAP.get(key, 100)]
     if len(val_raw) > len(val):
         print(f"[설정] ★{key} 값이 상한({_CAP.get(key,100)})을 넘어 잘렸다★ — {len(val_raw)}자")
@@ -1949,7 +2557,9 @@ async def license_check(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400)
-    key = body.get("api_key", "")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400)
+    key = body.get("api_key", "")          # str 아니면 _ct_eq 가 불일치로 본다 (2026-09-23)
     nonce = str(body.get("nonce", ""))[:64]   # 리플레이 방지용 클라 난수(서명에 포함)
     # ★키 판별 오라클 차단(2026-07-27 보안감사 critical): 이 엔드포인트는 무인증이라
     #   check_api_key의 실패 카운터를 우회해 무제한으로 키 정오를 물어볼 수 있었다.
@@ -1959,7 +2569,7 @@ async def license_check(request: Request):
         raise HTTPException(status_code=429, detail="too many attempts")
     tenant = None
     for _k, _tn in KEY_TO_TENANT.items():
-        if hmac.compare_digest(key, _k):
+        if _ct_eq(key, _k):
             tenant = _tn
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     if not tenant:
@@ -2041,6 +2651,8 @@ async def diag_perf(request: Request):
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
         "ws_per_second": _bucket_count([x["at"] for x in _WS_CLOSES], top=8),
         "ws_closes": _WS_CLOSES[-40:],
+        "slow_sends": _SLOW_SENDS[-40:],          # 대시보드 한 통에 SLOW_SEND_MS 넘은 전송(2026-09-23)
+        "dash_closes": _DASH_CLOSES[-40:],        # 대시보드 /ws 끊김 — why 에 code(1005·1012…)
         "bugs_cached_tenants": sorted(_BUG_COUNT_CACHE.keys()),
     })
 
@@ -2145,8 +2757,6 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>⚔ 혼종 사령부 — AION2 관제</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>tailwind.config={darkMode:'class'}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- Orbitron=전광판 숫자 / Black Han Sans=오늘의 한마디(굵고 팍 치는 헤드라인체)
@@ -2479,7 +3089,12 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   .tile-gold  {--tile:#fde047;--tile-glow:rgba(253,224,71,.5)}
   /* 전광판 그리드: 숫자 긴 타일(오드에너지/거래키나/창고키나)만 넓게, 카운트류는 좁게 */
   .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
-  @media (min-width:640px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr}}
+  /* ★어비스 수익 두 칸(2026-09-23 장부 #104)★ — 10칸. 좁은 화면(640~1279)은 5칸 두 줄로 */
+  @media (min-width:640px){.stat-grid{grid-template-columns:repeat(5,minmax(0,1fr))}}
+  @media (min-width:1280px){.stat-grid{grid-template-columns:2fr 2fr 3fr 2fr 2fr 2fr 3fr 3fr 3fr 3fr}}
+  /* 대당 평균 시간당이 문턱(abyss_red_rate) 아래면 숫자를 빨강으로 — 타일 색 변수만 바꾼다 */
+  .stat-tile[data-red="1"]{--tile:#f87171;--tile-glow:rgba(248,113,113,.6)}
+  .stat-tile .stat-sub{font-size:10.5px;color:#94a3b8;margin-top:.15rem;line-height:1.3}   /* 좁으면 두 줄로(잘리면 대수가 안 보인다) */
   .stat-tile .stat-num{font-family:'Orbitron',ui-sans-serif,sans-serif;font-size:1.5rem;font-weight:800;line-height:1.25;
     white-space:nowrap;background:linear-gradient(180deg,#fff 15%,var(--tile) 90%);
     -webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
@@ -2956,6 +3571,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
     border:1px solid rgba(255,93,110,.35);color:var(--dk-coral)!important}
   #bug-clear-btn:hover{background:rgba(255,93,110,.22)!important}
 </style>
+<!--TW_CSS-->
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
@@ -3200,6 +3816,19 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
       <div class="stat-num text-yellow-300" id="cnt-total-kina">–</div>
       <div class="stat-label">창고키나</div>
     </div>
+    <!-- ★어비스 수익(2026-09-23 주인님 장부 #104)★ — 서버 /summary 의 abyss(팜뷰와 같은 계산).
+         모르면 「측정 대기」 — 0 은 재서 0 일 때만. 오늘 = KST 달력 하루(00:00 초기화). -->
+    <div class="stat-tile tile-gold" id="tile-abyss-today">
+      <div class="stat-icon">🌋</div>
+      <div class="stat-num text-amber-300" id="cnt-abyss-today">측정 대기</div>
+      <div class="stat-label">어비스 수익 (오늘)</div>
+    </div>
+    <div class="stat-tile tile-gold" id="tile-abyss-rate">
+      <div class="stat-icon">⏱️</div>
+      <div class="stat-num text-amber-300" id="cnt-abyss-rate">측정 대기</div>
+      <div class="stat-label">시간당</div>
+      <div class="stat-sub" id="cnt-abyss-rate-sub"></div>
+    </div>
   </div>
 
   <!-- 온라인 섹션 -->
@@ -3286,6 +3915,10 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   <section class="bg-gray-900 rounded-xl p-5 border border-gray-800">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-widest mb-3">최근 명령 내역</h2>
     <div id="cmd-history" class="space-y-1 text-xs log-box max-h-40 overflow-y-auto scrollbar-thin text-gray-400">
+      <div class="text-gray-600">없음</div>
+    </div>
+    <h3 class="text-xs font-semibold text-gray-500 mt-3 mb-1">업데이터 명령 (업데이트·재시작)</h3>
+    <div id="upd-history" class="space-y-1 text-xs log-box max-h-40 overflow-y-auto scrollbar-thin text-gray-400">
       <div class="text-gray-600">없음</div>
     </div>
   </section>
@@ -3624,6 +4257,10 @@ const ACCT_SUF_RE  = new RegExp('([' + ACCT_SUFFIX + '])$');       // 'PC-20c' �
 const ACCT_SUF_RE2 = new RegExp('[0-9][' + ACCT_SUFFIX + ']$');    // 숫자 뒤 접미사만
 // ★''.includes('') 가 true 라 빈 문자열을 따로 막는다★ — 옛 'bcd'.includes(c) 의 잠복 버그
 function isAcctSuf(c){ return !!c && c.length === 1 && ACCT_SUFFIX.includes(c); }
+// ★검증용 가짜 PC 판정 한 곳(2026-09-23)★ — 서버 _is_fake_pc 와 같은 규칙. 예전엔 renderCards 는
+//   PC-TEST 만, dkSubCount 는 PC-TEST·PC-DEMO 를 따로 빼서 전광판 칸마다 모집단이 달랐다.
+const FAKE_PC_BASES = ['PC-TEST', 'PC-DEMO'];
+function isFakePc(id){ const s = String(id || '').trim(); return FAKE_PC_BASES.includes(baseId(s).toUpperCase()); }
 // 접미사 → 계정번호(2~). 접미사가 아니면 0 → 호출부의 `|| 1` 폴백이 살아난다.
 function acctNoOfSuf(c){ return isAcctSuf(c) ? ACCT_SUFFIX.indexOf(c) + 2 : 0; }
 
@@ -3736,18 +4373,46 @@ let _pendDupMemo = {cmd:'', at:0, yes:false};   // 일괄 전송(Promise.all) �
 // ★업데이트/재시작 결과만(2026-09-22, 주인님 지시)★ — pendingCmds 는 건드리지 않는다
 //   (범위가 넓고 손대면 회귀 위험). ★기준은 버전★ — updater.version 이 바뀌면 ✓,
 //   3분 안 안 바뀌면 ✗. 설명 문구는 카드에 안 띄운다(hover title 만).
-let UPD_RESULT = {};   // base → {before, deadline, result: null|'ok'|'fail'}
-function updResultStart(base, beforeVer){
-  UPD_RESULT[base] = {before: beforeVer||'', deadline: Date.now()+180000, result: null};
+// ★★B-CQ8 (2026-09-23) 증거가 없으면 ✗ 가 아니라 ?★★ — 예전엔 _updater_version 하나로만 봤다.
+//   그런데 restart 와 「매크로만 바뀐 update」 는 업데이터 버전을 ★안 바꾼다★ → 멀쩡히 된 것이
+//   3분 뒤 전부 ✗ 였다. 이제 증거 두 가지:
+//     ① 버전 — macro_version 또는 _updater_version 이 바뀜(update 의 ✓)
+//     ② 재기동 — uptime_hours(매크로 프로세스 시작부터, config._report_start_time)가 ★줄어듦★
+//        (restart 의 ✓ · 이미 최신이던 update 의 ✓). 0.01h 반올림이라 0.02h 넘게 줄어야 인정.
+//   ✗ 는 ★반대 증거★ 가 있을 때만: 3분 동안 uptime 이 끊김 없이 늘었다(=안 껐다) 또는
+//   재기동은 됐는데 최신이 아닌 버전 그대로(update). 둘 다 없으면 '?'(판정 불가).
+let UPD_RESULT = {};   // base → {cmd, before, beforeMacro, beforeUp, deadline, result: null|'ok'|'fail'|'unknown'}
+function updResultStart(base, beforeVer, command){
+  const p = state[base]||{};
+  const up = (typeof p.uptime_hours === 'number') ? p.uptime_hours : null;
+  UPD_RESULT[base] = {cmd: command||'update', before: beforeVer||'', beforeMacro: p.macro_version||'',
+                      beforeUp: up, deadline: Date.now()+180000, result: null};
 }
 function updResultSweep(){
   let changed = false;
   Object.keys(UPD_RESULT).forEach(b=>{
     const e = UPD_RESULT[b];
     if (e.result) return;   // 이미 확정된 건 재판정 안 한다(다음 시도가 덮어씀)
-    const cur = (state[b]||{})._updater_version || '';
-    if (cur && cur !== e.before) { e.result = 'ok'; changed = true; }
-    else if (Date.now() >= e.deadline) { e.result = 'fail'; changed = true; }
+    const p = state[b]||{};
+    const curU = p._updater_version || '';
+    const curM = p.macro_version || '';
+    const verChanged = (curU && curU !== e.before) || (curM && e.beforeMacro && curM !== e.beforeMacro);
+    const up = (typeof p.uptime_hours === 'number') ? p.uptime_hours : null;
+    const hasUp = (up !== null && e.beforeUp !== null);
+    const rebooted = hasUp && up < e.beforeUp - 0.02;
+    const kept = hasUp && up > e.beforeUp + 0.02;          // 안 끊기고 계속 늘었다 = 재기동 없음
+    const lm = (typeof latestVersions === 'object' && latestVersions) ? (latestVersions.macro || '') : '';
+    const atLatest = !!(lm && curM && curM === lm);
+    const done = Date.now() >= e.deadline;
+    let r = null;
+    if (e.cmd === 'restart') {
+      if (rebooted) r = 'ok';
+      else if (done) r = kept ? 'fail' : 'unknown';
+    } else {
+      if (verChanged || (rebooted && atLatest)) r = 'ok';
+      else if (done) r = (kept || rebooted) ? 'fail' : 'unknown';
+    }
+    if (r) { e.result = r; changed = true; }
   });
   return changed;
 }
@@ -4298,9 +4963,7 @@ function dkSubCount(){
   //   ★renderCards 와 같은 모집단★ 을 쓴다 — PC-TEST/PC-DEMO 는 카드로 안 그린다(4409).
   let sub = 0, nosub = 0, unknown = 0;
   Object.keys(state || {}).forEach(id => {
-    const b = baseId(id || '').toUpperCase();
-    if (b === 'PC-TEST' || b === 'PC-DEMO') return;
-    if (isExcludedPc(id)) return;   // ★계정없음·은퇴는 분모에서도 뺀다(2026-09-23)★ — unknown 도 아니다
+    if (isExcludedPc(id)) return;   // ★가짜·계정없음·은퇴는 분모에서도 뺀다(2026-09-23)★ — unknown 도 아니다(isExcludedPc 한 곳)
     const v = subState(id);
     if (v === 'on') sub++; else if (v === 'off') nosub++; else unknown++;
   });
@@ -4316,26 +4979,66 @@ function dkSubCount(){
 //   바로 다음 렌더에서 클라 계산으로 되돌아간다(깜빡임). 대신 SERVER_SUMMARY 에
 //   저장해 두고, 저 세 함수가 ★있으면 그 값을 최종값으로★ 쓰게 한다(§A12 — 규칙은
 //   여전히 서버 하나, 클라 계산은 서버값이 오기 전 첫 화면용 폴백으로만 남는다).
-let SERVER_SUMMARY = null;
+let SERVER_SUMMARY = null, SERVER_SUMMARY_AT = 0;
+// 폴백 재료가 언제 것인지(2026-09-23 전수 #6·#7) — 서버가 끊겨 화면 계산으로 돌아가도 그 재료
+//   (캐릭 표·회랑 목록)가 같이 낡았으면 「화면 계산」 이라는 말만으로는 거짓이 된다. 나이를 같이 적는다.
+let CHAR_TABLE_AT = 0, CORRIDOR_AT = 0;
+function ageNote(at, label, staleMs, now){
+  const t = (now == null ? sumClock() : now);
+  if(!at) return ' · ' + label + ' 아직 못 받음';
+  return (t - at) > staleMs ? ' · ' + label + ' ' + Math.round((t - at)/60000) + '분째 못 받음' : '';
+}
+// ★시각은 performance.now()(단조 시계)★ — 벽시계(Date.now)는 PC 시계가 뒤로 가면 낡은 값을
+//   그만큼 더 「신선」 하게 보고 「-N초 전」 을 적었다(2026-09-23 반증 B5).
+function sumClock(){ return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
+// ★낡은 서버값을 영원히 믿지 않는다(2026-09-23 반증 #4)★ — /summary 가 실패하면 예전엔
+//   마지막 값이 무기한 남았다. 주기(20초)의 세 배가 지나면 서버값을 버리고 화면 계산(폴백)으로
+//   돌아간다. 요청 하나가 걸려도 10초에 끊는다.
+const SERVER_SUMMARY_TTL_MS = 60000;
+function serverSum(now){
+  if(!SERVER_SUMMARY) return null;
+  return ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) < SERVER_SUMMARY_TTL_MS ? SERVER_SUMMARY : null;
+}
+// 전광판 칸 툴팁에 붙일 출처 한 줄 — 서버값인지, 끊겨서 화면 계산인지 사람이 가를 수 있게.
+function serverSumNote(now){
+  const t = (now == null ? sumClock() : now);
+  if(serverSum(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
+  return SERVER_SUMMARY
+    ? '※ 서버 요약이 ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초째 끊김 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t)
+    : '※ 서버 요약 대기 중 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t);
+}
+// ★renderCards 와 같은 모집단(가짜 PC 제외)★ — 예전엔 20초마다 여기서만 PC-TEST 가 섞여
+//   던전·캐릭 칸이 한 번 튀었다가 다음 renderCards 에 돌아왔다(2026-09-23 반증 B3).
+function summaryPcs(){ return Object.values(state||{}).filter(p => !isFakePc(p.pc_id)); }
+function redrawSummary(){
+  try { refreshSummary(summaryPcs()); } catch(e){ console.error('refreshSummary', e); }
+  try { updateCorridorTile(); } catch(e){ console.error('updateCorridorTile', e); }
+  try { dkHero(); } catch(e){ console.error('dkHero', e); }
+}
 async function loadServerSummary(){
+  const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+  const to = ac ? setTimeout(() => ac.abort(), 10000) : null;
   try{
-    const r = await fetch('/summary', {cache:'no-store'});
-    if(!r.ok) return;
+    const r = await fetch('/summary', ac ? {cache:'no-store', signal: ac.signal} : {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     SERVER_SUMMARY = await r.json();
-    refreshSummary(Object.values(state||{}));
-    updateCorridorTile();
-    dkHero();
+    SERVER_SUMMARY_AT = sumClock();
   }catch(e){ console.error('서버 전광판 요약 실패', e); }
+  finally{ if(to) clearTimeout(to); }
+  redrawSummary();   // 실패해도 다시 그린다 — 낡았으면 serverSum() 이 null 이라 폴백으로 바뀐다
 }
 
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
-  const pcs = Object.values(state||{});
+  // ★제외 PC(가짜·은퇴·계정없음)는 평균·스파크라인에서 뺀다(2026-09-23 반증 2바퀴)★ —
+  //   카드엔 안 보이는 PC-DEMO 90 이 PC-01 10 과 평균돼 50.0 으로 보였다.
+  const pcs = Object.entries(state||{}).filter(([id])=>!isExcludedPc(id)).map(([,p])=>p);
   if(!pcs.length) return;
   const ef = pcs.filter(p=>p.efficiency);
   const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
-  $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
+  // 효율을 가진 카드가 하나도 없으면 「0.0」 이 아니라 「–」(모름, 팜뷰 eff:null 과 같게)
+  $('dk-h-eff').innerHTML = ef.length ? avg.toFixed(1)+'<i>%/h</i>' : '–';
   // ★키나 = 창고 + 거래 (2026-08-29 주인님)★ — 전광판이 센 값을 그대로 쓴다.
   const kw = DK_SUM.kina || 0, kt = DK_SUM.trade;
   const kEl = $('dk-h-kina');
@@ -4345,13 +5048,15 @@ function dkHero(){
     : `창고키나 ${fmtKina(kw)} + 거래키나 ${fmtKina(kt)} = ${fmtKina(kw + kt)}`;
 
   // ★구독 O / X★ — 서버값 있으면 그게 최종값(2026-09-23, §A12·/api/fv/snapshot 과 같은 계산)
-  const sc = SERVER_SUMMARY ? (SERVER_SUMMARY.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
+  const ssH = serverSum();
+  const sc = ssH ? (ssH.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
   const on = $('dk-h-sub-on'), off = $('dk-h-sub-off'), box = $('dk-h-subbox');
   if (on)  on.textContent  = sc.sub;
   if (off) off.textContent = sc.nosub;
   if (box) box.title = `오드에너지 분모로 판정합니다 — 840=구독 / 560=구독 해제 (계정 단위)`
     + `\n구독 ${sc.sub}개 · 해제 ${sc.nosub}개`
-    + (sc.unknown ? `\n★${sc.unknown}개는 오드에너지 미수집이라 판정 불가★ — 어느 쪽에도 안 셌습니다 (정보수집을 돌리면 채워집니다)` : '');
+    + (sc.unknown ? `\n★${sc.unknown}개는 오드에너지 미수집이라 판정 불가★ — 어느 쪽에도 안 셌습니다 (정보수집을 돌리면 채워집니다)` : '')
+    + `\n` + serverSumNote();
 
   // 스파크라인 — 각 PC 효율을 이어 그린 실제 데이터(장식 아님)
   const vs = ef.map(p=>p.efficiency);
@@ -4383,6 +5088,10 @@ function fmtKinaShort(n) {
   if (a>=1e4) return '₭'+Math.round(n/1e4).toLocaleString('en-US')+'만';
   return '₭'+Number(n).toLocaleString('en-US');
 }
+// 카드 안의 「N초 전」 은 이 꼴로 — 글자는 매초 바뀌지만 카드 HTML 비교(reconcileGrid)에서는 빼고,
+//   남겨 둔 카드는 이 칸 글자만 새로 쓴다(2026-09-23). 없으면 살아 있는 카드가 매 렌더 통째로 갈려
+//   호버·포커스·글자 선택이 날아갔다(반증 B2 참고).
+function relSpan(iso) { return `<span data-rt="${escAttr(iso||'')}">${relTime(iso)}</span>`; }
 function relTime(iso) {
   if (!iso) return '–';
   const d = Math.floor((Date.now()-new Date(iso+'Z').getTime())/1000);
@@ -4397,11 +5106,28 @@ const CLASS_LABEL = {gungsung:'궁성',spirit:'정령성',kumsung:'검성',chiyo
 // 오늘 완료로 둔갑하지 않게 시각 게이트.
 function fmtTs(d){const p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
-function lastDailyReset(){const d=new Date();if(d.getHours()<5)d.setDate(d.getDate()-1);d.setHours(5,0,0,0);return d;}
-function lastWeeklyReset(){const d=lastDailyReset();while(d.getDay()!==3)d.setDate(d.getDate()-1);return d;}  // 3=수요일
+// ★B-JS11 (2026-09-23) 리셋 경계는 ★KST 로 계산한다★ — 보는 기기 시간대가 아니다★
+//   예전엔 브라우저 로컬 05:00 을 썼다. 베트남(UTC+7) 직원 폰에선 경계가 07:00 KST 가 되고,
+//   수요일 05~07시 KST 사이엔 주간 경계가 ★지난주★ 로 잡혔다. 게임 리셋은 한국 서버 기준이다.
+//   반환값은 ★절대 시각(Date)★ — Date 비교(isBeforeReset)는 그대로 맞다.
+//   KST 문자열(completed_time·dungeon_done_at, 매크로가 KST 로 찍는다)과 비교할 땐 fmtKstTs 로.
+const KST_OFF_MS = 9 * 3600000, GAME_RESET_MS = 5 * 3600000;
+function kstGameDayNum(ms){ return Math.floor((ms + KST_OFF_MS - GAME_RESET_MS) / 86400000); }   // 1970-01-01(목)=0
+function fmtKstTs(d){const k=new Date(d.getTime()+KST_OFF_MS), p=n=>String(n).padStart(2,'0');
+  return `${k.getUTCFullYear()}-${p(k.getUTCMonth()+1)}-${p(k.getUTCDate())} ${p(k.getUTCHours())}:${p(k.getUTCMinutes())}:${p(k.getUTCSeconds())}`;}
+function lastDailyReset(){ return new Date(kstGameDayNum(Date.now()) * 86400000 + GAME_RESET_MS - KST_OFF_MS); }
+function lastWeeklyReset(){   // 가장 최근 수요일 05:00 KST
+  const D = kstGameDayNum(Date.now()), back = ((D + 4) % 7 - 3 + 7) % 7;   // (D+4)%7 = 요일(0=일), 3=수
+  return new Date((D - back) * 86400000 + GAME_RESET_MS - KST_OFF_MS);
+}
+// ★B-JS6 (2026-09-23)★ 서버 시각(UTC naive) → ★보는 기기의 로컬 시각★ 문자열. 못 읽으면 원문 조각.
+function fmtLocalAt(raw, a, b){
+  const d = collectedAtDate(raw);
+  return d ? fmtTs(d).slice(a, b) : String(raw || '').replace('T', ' ').slice(a, b);
+}
 function isHuntDone(dp){
   if(!dp||!dp.length) return false;
-  const cut=fmtTs(lastDailyReset());
+  const cut=fmtKstTs(lastDailyReset());   // ★B-JS11★ completed_time 은 KST 문자열
   return dp.every(c=>c.completed && ((c.completed_time||'').replace('T',' ')>=cut));
 }
 function isAwakenDone(pc_id){
@@ -4535,7 +5261,7 @@ function isDungeonDone(pc){
   // 일일던전(계정 티켓 14장) 소진 — 매크로가 소진 시각(dungeon_done_at)을 보고.
   // 각성전과 같은 주간 리셋(수요일 05시) 경계 이후 기록만 인정 → 경계 지나면 자연 소멸.
   const t=(pc.dungeon_done_at||'').replace('T',' ');
-  return !!t && t>=fmtTs(lastWeeklyReset());
+  return !!t && t>=fmtKstTs(lastWeeklyReset());   // ★B-JS11★ dungeon_done_at = 원격컴 로컬(KST) time.strftime
 }
 
 // ★★'오늘 끝냈나' 판정은 여기 한 곳만 쓴다 (2026-08-20 PC-12 실측)★★
@@ -4591,7 +5317,7 @@ const cdpMark = pc => {
 //   맨 앞에 남는 구분자를 여기서 한 번만 걷어낸다(「오늘 완료」를 지우면서 생긴 자리).
 function dpMarks(pc) {
   const head = (pc._char_collected_at
-      ? `<span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>` : '')
+      ? `<span class="text-cyan-600">수집 ${relSpan(pc._char_collected_at)}</span>` : '')
     + cdpMark(pc) + nativeMark(pc) + nameMismatch(pc);
   return head.replace(/^\s*\u00b7\s*/, '');
 }
@@ -4613,7 +5339,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     // char_info OCR 이름 우선, 없으면 daily_progress 이름, 없으면 슬롯 번호
     const name = (charNames && charNames[c.slot-1]) || c.name || `${c.slot}`;
     const short = name.length > 3 ? name.slice(0,3) : name;
-    const time = (c.completed_time||'').slice(11,16);
+    const time = String(c.completed_time||'').slice(11,16);
     const cls = done
       ? 'bg-green-900/70 border-green-700 text-green-400'
       : isActive
@@ -4622,8 +5348,8 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
     const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+time:isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
-      <span class="font-bold text-xs leading-none">${icon}</span>
+      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+escAttr(time):isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
+      <span class="font-bold text-xs leading-none">${esc(icon)}</span>
       <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap${sZero?';color:#f87171;font-weight:700':''}">${esc(short)}</span>
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
@@ -4753,7 +5479,10 @@ function platLabel(v){
 }
 function acctNumOf(pcid){
   const c = (pcid||'').slice(-1);
-  return acctNoOfSuf(c) || ((state[pcid]||{}).acct_num || 1);
+  // ★B-JS3 (2026-09-23)★ acct_num 은 매크로 보고값 — ★정수로만★ 돌려준다. 이 값이 acctRow·acctTagSpread·
+  //   카드 메뉴 머리에 HTML 로 박힌다(문자열이면 그대로 주입). 0·음수·못 읽음 = 1(예전 `|| 1` 과 같은 뜻).
+  const n = parseInt((state[pcid]||{}).acct_num, 10);
+  return acctNoOfSuf(c) || (n > 0 ? n : 1);
 }
 // 이 PC가 멀티계정인가 — 형제 계정 카드가 있거나(접미사 카드 존재) 매크로가 acct_total>1 보고.
 function isMultiAcct(pid){
@@ -4837,11 +5566,50 @@ function switchStepChip(pc) {
                 title="${esc('계정전환 진행 단계 — 총 15단계 (본컴 런처 → 원격컴 크롬 → 매크로 재시작)')}"
           >${esc(pc.switch_mark || '')} ${esc(s)}</span>`;
 }
+// ★카드 「💰 어비스」 줄 (2026-09-23 주인님 장부 #104)★ — 매크로 1.1.1004 숫자 칸(abyss_kina_state/gain/
+//   rate/since/mins)으로 그린다. 옛 매크로(숫자 칸 없음)는 글자 칸 abyss_kina 를 ★예전 그대로★.
+//   빨강은 「시간당 < abyss_red_rate」 이고 ★abyss_min_mins 분 넘게 잰 뒤★ 에만 — 그 전엔 튀니까 중립색.
+//   문턱은 서버 설정(/summary 의 abyss.red_rate·min_mins) — renderAbyssTiles 가 serverSum() 에서 받아
+//   ABYSS_TH 에 남긴다(설정값이라 요약이 낡아도 그대로 유효). 아직 못 받았으면 서버 기본값과 같은 수.
+const ABYSS_TH_DEFAULT = {red_rate: 1000000, min_mins: 5};
+let ABYSS_TH = null;
+function abyssTh(){ return ABYSS_TH || ABYSS_TH_DEFAULT; }
+function abyssCardLine(pc){
+  const st = pc && pc.abyss_kina_state;
+  const box = 'mt-1.5 text-xs rounded px-2 py-0.5 truncate border ';
+  // 카드가 좁아 줄이 잘려도(truncate) 호버하면 전부 보이게 — 글자는 숫자·시각뿐이라 본문은 그대로, 툴팁만 escAttr
+  const line = (cls, body) => `<div class="${box}${cls}" title="${escAttr(body)} — 어비스(Delete) 세션: 이번 구간(시작 시각부터) 번 키나와 시간당. 다음 세션 시작까지 유지">💰 어비스 ${body}</div>`;
+  if (st === 'ok' || st === 'waiting') {
+    // ★음수·NaN·문자는 0 으로(글자에 「+-5」·「NaN」 이 안 나가게, 2026-09-23 적대 검증)★
+    const nn = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
+    const since = nn(pc.abyss_kina_since);
+    // ★R7 — 시각은 KST(fmtKstTs)★ 매크로 글자 「(HH:MM부터)」·다른 KST 화면과 같게. 보는 기기(베트남 등) 시간대가 아니다.
+    const hm = (since > 0 && since < 1e11) ? fmtKstTs(new Date(since * 1000)).slice(11, 16) : '?';
+    const th = abyssTh(), mins = nn(pc.abyss_kina_mins), gain = nn(pc.abyss_kina_gain);
+    // ★R5 — 매크로는 10분까지 waiting(lc/loot.py ABYSS_KINA_OK_MINS=10), 주인님 문턱은 min_mins(5)★
+    //   waiting 이어도 gain·mins 가 실려 있고 mins ≥ 문턱이면 gain/mins 로 시간당을 재서 빨강/중립(서버 _abyss_billboard 와 같은 식).
+    const hasNum = pc.abyss_kina_gain != null && pc.abyss_kina_gain !== '' && Number.isFinite(Number(pc.abyss_kina_gain)) && mins > 0;
+    if (st === 'waiting' && !(hasNum && mins >= th.min_mins))
+      return line('text-gray-400 bg-gray-800/40 border-gray-700', `측정 중 (${hm}부터)`);
+    const rate = st === 'ok' ? nn(pc.abyss_kina_rate) : Math.floor(gain * 60 / mins);
+    const txt = `+${fmtKinaKor(gain)} · 시간당 ${fmtKinaKor(rate)} (${hm}부터)`;
+    if (mins < th.min_mins)
+      return line('text-gray-300 bg-gray-800/60 border-gray-700', `${txt} (측정 ${mins}분)`);
+    const cls = rate < th.red_rate ? 'text-red-300 bg-red-950/40 border-red-800' : 'text-amber-300 bg-amber-900/20 border-amber-800/40';
+    return line(cls, txt);
+  }
+  return pc && pc.abyss_kina
+    ? `<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`
+    : '';
+}
+
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
   const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
-  const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
+  // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
+  //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
+  const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
   const bugBadge = (pc._bug_count||0)>0
@@ -4855,7 +5623,7 @@ function buildCard(pc) {
   const _ustale = (_uage !== null && _uage > 270);
   const ucls = _ustale ? 'text-gray-600 line-through'
     : ({'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600');
-  const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${_uage}초째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
+  const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${Math.floor(_uage/60)}분째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
   const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${esc(pc.macro_version)}</span>` : '';
@@ -4863,8 +5631,10 @@ function buildCard(pc) {
   const _ur = UPD_RESULT[baseId(pc.pc_id||'')];
   const updResultTxt = (_ur && _ur.result)
     ? (_ur.result === 'ok'
-        ? `<span class="text-green-400" title="버전 바뀜: ${esc(_ur.before)} → ${esc(pc._updater_version||'')}">✓</span>`
-        : `<span class="text-red-400" title="3분 안에 버전이 안 바뀜(${esc(_ur.before)} 그대로)">✗</span>`)
+        ? `<span class="text-green-400" title="${_ur.cmd==='restart'?'매크로 재기동 확인(가동시간 줄어듦)':'버전 바뀜/재기동 확인'}">✓</span>`
+        : (_ur.result === 'unknown'
+            ? `<span class="text-gray-500" title="3분 안에 판정할 증거 없음(보고 없음) — 로그 확인">?</span>`
+            : `<span class="text-red-400" title="${_ur.cmd==='restart'?'3분 동안 가동시간이 안 끊김 — 재기동 안 됨':'3분 안에 버전이 안 바뀜('+esc(_ur.before)+' 그대로)'}">✗</span>`))
     : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
     ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}${updResultTxt}</div>`
@@ -4929,10 +5699,10 @@ function buildCard(pc) {
       <div class="col-span-2"><span class="pv-k">맵</span> <span class="text-gray-100 font-medium">${esc(pc.map_name||'–')}</span></div>
       <div><span class="pv-k">업타임</span> <span class="text-gray-100 font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="pv-k">서버</span> <span class="text-gray-100 font-medium">${esc(pc.server)}</span></div>`:''}
-      <div><span class="pv-k">최근</span> <span class="text-gray-100 font-medium">${relTime(pc.last_active)}</span></div>
+      <div><span class="pv-k">최근</span> <span class="text-gray-100 font-medium">${relSpan(pc.last_active)}</span></div>
       <div><span class="pv-k">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-gray-100 font-medium'}">${pc.deaths_30m||0}회</span></div>
     </div>
-    ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
+    ${abyssCardLine(pc)}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
@@ -5078,6 +5848,9 @@ function setupDrag(gridId, orderKey) {
   [...grid.children].forEach(card => {
     const handle = card.querySelector('.drag-handle');
     if (!handle) return;
+    // ★부분 갱신 뒤엔 안 바뀐 카드가 그대로 남는다 — 두 번 묶지 않는다(2026-09-23)★
+    if (card._dragBound) return;
+    card._dragBound = true;
     card.setAttribute('draggable','false');
     // 핸들에서만 드래그 시작
     handle.addEventListener('mousedown', e => {
@@ -5085,6 +5858,14 @@ function setupDrag(gridId, orderKey) {
       card.setAttribute('draggable','true');
       dragSrcId = gridKeyOf(card);
       dragSection = orderKey;
+      // ★끌지 않고 놓으면 되돌린다(2026-09-23 반증 B2-3)★ — dragend 는 실제로 끌었을 때만 온다.
+      //   예전엔 매 렌더가 카드를 새로 깔아 저절로 지워졌는데, 부분 갱신은 안 바뀐 카드를 그대로 둔다
+      //   → 카드 몸통 전체가 끌리고, 나중에 다른 카드를 끌면 이 카드가 옮겨졌다.
+      document.addEventListener('mouseup', () => {
+        if (card.classList.contains('card-dragging')) return;
+        card.setAttribute('draggable','false');
+        if (dragSrcId === gridKeyOf(card)) { dragSrcId = null; dragSection = null; }
+      }, {once: true});
     });
     handle.addEventListener('click', e => e.stopPropagation());
     card.addEventListener('dragstart', e => {
@@ -5258,13 +6039,63 @@ function buildStack(s){
     <div class="acct-body relative">${buildCard(s.top)}</div></div>`;
 }
 
+// 격자 부분 갱신 — items 순서대로 [{key, html}]. 같은 key 의 html 이 그대로면 그 DOM 을 ★건드리지 않는다★.
+//   바뀐 것만 새 노드로 바꾸고, 순서가 다르면 옮기고, 없어진 것은 뺀다. 한 뿌리 요소가 아닌
+//   html 이 섞이면 예전처럼 통째로 깐다(안전판). 반환 = 갈아끼운·뺀 노드 수(계측용).
+let RENDER_STATS = {calls: 0, replaced: 0, kept: 0, full: 0};
+// 「N초 전」 칸(relSpan)은 시각 값·글자를 비교에서 뺀다 — 하트비트마다 last_active 가 바뀌어도 카드는 남긴다.
+//   남긴 카드는 새 HTML 의 시각 값을 ★같은 순서로★ 옮겨 적고 글자를 다시 쓴다(정규화가 같으면 칸 수·순서도 같다).
+const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">');
+const _rkUnesc = v => v.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+function _rkTick(el, html){
+  const vals = [...String(html).matchAll(/data-rt="([^"]*)"/g)].map(m => _rkUnesc(m[1]));
+  el.querySelectorAll('[data-rt]').forEach((e, i) => {
+    if (i < vals.length && e.dataset.rt !== vals[i]) e.dataset.rt = vals[i];
+    const t = relTime(e.dataset.rt); if (e.textContent !== t) e.textContent = t;
+  });
+}
+function reconcileGrid(grid, items){
+  RENDER_STATS.calls++;
+  const tpl = document.createElement('template');
+  const cur = new Map();
+  let clean = true;
+  [...grid.children].forEach(el => { const k = el.dataset ? el.dataset.rk : null; if (k && !cur.has(k)) cur.set(k, el); else clean = false; });
+  const fresh = items.map(it => {
+    const old = clean ? cur.get(it.key) : null;
+    const norm = _rkNorm(it.html);
+    if (old && old._rkHtml === norm) { RENDER_STATS.kept++; _rkTick(old, it.html); return old; }
+    tpl.innerHTML = String(it.html).trim();
+    if (tpl.content.childElementCount !== 1) return null;
+    const el = tpl.content.firstElementChild;
+    el.dataset.rk = it.key; el._rkHtml = norm;
+    RENDER_STATS.replaced++;
+    return el;
+  });
+  if (!clean || fresh.some(x => !x)) {
+    RENDER_STATS.full++;
+    grid.innerHTML = items.map(it => it.html).join('');
+    [...grid.children].forEach((el, i) => { if (items[i]) { el.dataset.rk = items[i].key; el._rkHtml = _rkNorm(items[i].html); } });
+    return items.length;
+  }
+  const keep = new Set(fresh);
+  let changed = 0;
+  [...grid.children].forEach(el => { if (!keep.has(el)) { el.remove(); changed++; } });
+  let prev = null;
+  fresh.forEach(el => {
+    const want = prev ? prev.nextElementSibling : grid.firstElementChild;
+    if (want !== el) { grid.insertBefore(el, want); changed++; }
+    prev = el;
+  });
+  return changed;
+}
+
 function renderCards() {
   migrateOrder();          // 옛 순서 목록 1회 이관(baseId 정의 뒤에 안전하게)
   // ★PC-TEST 는 화면에 안 띄운다 (2026-08-20 사용자: "거슬린다")★
   //   배포 검증이 pc_id=PC-TEST 로 /check 를 때리면서 카드가 생긴다. 지워도 다음
   //   검증 때 또 생기므로 ★렌더 단계에서 거른다★ (전광판 합계에서도 같이 빠진다).
   const pcs = Object.values(state)
-    .filter(p => baseId(p.pc_id||'') !== 'PC-TEST')
+    .filter(p => !isFakePc(p.pc_id))   // PC-DEMO 도(2026-09-23 — 전광판 모집단을 dkSubCount·서버와 같게)
     .sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
   const groups = {};
   pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
@@ -5294,7 +6125,10 @@ function renderCards() {
   const offCnt = stacks.filter(s=>!s.online).length;
   const go  = document.getElementById('grid-online');
   const gof = document.getElementById('grid-offline');
-  go.innerHTML  = all.length ? all.map(buildStack).join('') : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
+  // ★바뀐 카드만 갈아끼운다(2026-09-23 반응속도 2단계)★ — 예전엔 보고가 올 때마다 격자 전체를
+  //   innerHTML 로 새로 깔아 스크롤 위치·열린 메뉴·입력 포커스·호버가 매번 날아갔다.
+  if (all.length) reconcileGrid(go, all.map(s => ({key: s.base, html: buildStack(s)})));
+  else { go.innerHTML = '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>'; }
   gof.innerHTML = '';
   document.getElementById('online-count').textContent  = `(${all.length - offCnt}/${all.length})`;
   document.getElementById('offline-count').textContent = `(${offCnt})`;
@@ -5400,8 +6234,9 @@ function refreshSummary(pcs) {
   let totalOdd = 0, totalAwaken = 0, awakenSeen = false, totalTrade = 0, tradeSeen = false;
   charTableData.forEach(r => {
     totalOdd += parseOddEnergy(r.odd_energy);
-    if (r.awakening_ticket != null) { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
-    if (r.trade_kina != null) { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
+    // 빈 문자열은 「못 읽음」 — 서버 _fv_char_agg 의 _seen 과 같은 뜻(2026-09-23 반증 B6)
+    if (r.awakening_ticket != null && r.awakening_ticket !== '') { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
+    if (r.trade_kina != null && r.trade_kina !== '') { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
   });
   const elOn = document.getElementById('cnt-online');
   elOn.textContent = c.onlineChars;
@@ -5410,25 +6245,63 @@ function refreshSummary(pcs) {
              + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
   // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
   //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
-  const ss = SERVER_SUMMARY;
-  document.getElementById('cnt-odd-energy').textContent = ss
+  //   ★서버 합계는 「한 카드도 못 읽은 칸」을 null 로 준다(반증 #2)★ — 0 과 모름을 가른다.
+  //   ★낡으면(60초) 서버값을 버린다(반증 #4)★ — serverSum() 이 null 을 준다.
+  const ss = serverSum();
+  const ssNote = serverSumNote();
+  const elOdd = document.getElementById('cnt-odd-energy');
+  elOdd.textContent = ss
     ? (ss.odd_energy > 0 ? ss.odd_energy.toLocaleString() : '–')
     : (totalOdd > 0 ? totalOdd.toLocaleString() : '–');
-  document.getElementById('cnt-awakening').textContent = ss
+  elOdd.title = ssNote;
+  const elAw = document.getElementById('cnt-awakening');
+  elAw.textContent = ss
     ? (ss.awakening_ticket != null ? ss.awakening_ticket.toLocaleString() : '–')
     : (awakenSeen ? totalAwaken.toLocaleString() : '–');
-  document.getElementById('cnt-trade-kina').textContent = ss
-    ? fmtKinaKor(ss.trade_kina || 0)
+  elAw.title = ssNote;
+  const elTr = document.getElementById('cnt-trade-kina');
+  elTr.textContent = ss
+    ? (ss.trade_kina != null ? fmtKinaKor(ss.trade_kina) : '–')
     : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
+  elTr.title = ssNote;
   document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
   const elDone = document.getElementById('cnt-completed');
   elDone.textContent = c.completedChars;
   elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
-  document.getElementById('cnt-total-kina').textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
+  const elTk = document.getElementById('cnt-total-kina');
+  elTk.textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
+  elTk.title = ssNote;
   // ★히어로가 ★같은 값★ 을 쓰게 넘겨둔다 (2026-08-29)★ — 따로 더하면 전광판과 갈린다.
   //   renderCards 안에서 refreshSummary 가 dkHero 보다 먼저 불린다(4389 → 4394).
   DK_SUM.kina  = ss ? (ss.total_kina || 0) : c.totalKina;
-  DK_SUM.trade = ss ? (ss.trade_kina || 0) : (tradeSeen ? totalTrade : null);
+  DK_SUM.trade = ss ? (ss.trade_kina != null ? ss.trade_kina : null) : (tradeSeen ? totalTrade : null);
+  try { renderAbyssTiles(ss, ssNote); } catch(e){ console.error('renderAbyssTiles', e); }
+}
+
+// ★어비스 수익 두 칸 (2026-09-23 주인님 장부 #104)★ — ★서버값만★ 쓴다. 「오늘」 은 서버가 PC 마다
+//   구간(since)을 은행에 쌓은 값이라 화면에서 다시 셀 재료가 없다. 서버값이 없거나 낡았으면(60초)
+//   「측정 대기」 — ★0 으로 칠하지 않는다★(모름 ≠ 0).
+function renderAbyssTiles(ss, note){
+  const a = ss && ss.abyss;
+  const $ = id => document.getElementById(id);
+  const tEl = $('cnt-abyss-today'), rEl = $('cnt-abyss-rate'), sub = $('cnt-abyss-rate-sub'), tile = $('tile-abyss-rate');
+  if (a && a.red_rate != null)
+    ABYSS_TH = {red_rate: a.red_rate, min_mins: a.min_mins != null ? a.min_mins : ABYSS_TH_DEFAULT.min_mins};
+  if (!tEl || !rEl) return;
+  tEl.textContent = (a && a.today != null) ? fmtKinaKor(a.today) : '측정 대기';
+  tEl.title = (a ? `오늘(KST ${a.day}) 어비스에서 번 키나 — PC ${a.today_pcs}대 합 · 00:00 초기화\n` : '') + (note || '');
+  const hasRate = !!(a && a.rate_sum != null);
+  rEl.textContent = hasRate ? fmtKinaKor(a.rate_sum) : '측정 대기';
+  const red = !!(hasRate && a.red);
+  if (tile) tile.dataset.red = red ? '1' : '';
+  if (sub) sub.textContent = a
+    ? (hasRate ? `대당 ${fmtKinaKor(a.rate_avg)} · ` : '') + `${a.rate_n}대 측정 중 / ${a.wait_n}대 대기`
+    : '';
+  rEl.title = a
+    ? `함대 시간당 합계 — ${a.min_mins}분 넘게 잰 PC 만 (${a.rate_n}대 측정 중 / ${a.wait_n}대 대기)`
+      + (hasRate ? `\n대당 평균 ${fmtKinaKor(a.rate_avg)}` + (red ? ` — ★문턱 ${fmtKinaKor(a.red_rate)} 아래★` : '') : '')
+      + '\n' + (note || '')
+    : (note || '');
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
@@ -5476,10 +6349,21 @@ function updateSelBar() {
 }
 
 function selectAllPcs() {
-  Object.keys(state).forEach(id=>selectedPcs.add(id));
-  document.querySelectorAll('[id^="card-"]').forEach(el=>el.classList.add('card-sel'));
+  // ★B-JS8 (2026-09-23)★ 가짜(PC-TEST·PC-DEMO)·은퇴·계정없음은 전체선택에 안 넣는다 — isExcludedPc 한 곳.
+  Object.keys(state).filter(id => !isExcludedPc(id)).forEach(id=>selectedPcs.add(id));
+  document.querySelectorAll('[id^="card-"]').forEach(el=>{ if (selectedPcs.has(el.id.slice(5))) el.classList.add('card-sel'); });
   updateSelBar();
 }
+// ★B-JS4 (2026-09-23) 명령이 ★실제로 닿을 카드★ — sendCmd 의 사고 307 우회와 같은 규칙★
+//   안 도는 카드면 같은 PC 의 살아 있는 카드로. 살아 있는 카드가 없으면 자기 자신(큐에 남는다).
+function cmdTargetOf(id){
+  const st = (state[id]||{}).status || 'offline';
+  if ((STATUS_CFG[st]||STATUS_CFG.offline).online) return id;
+  const live = liveCardOf(baseId(id));
+  return (live && live.pc_id) || id;
+}
+// 카드 id 목록 → 실제 대상 id(중복 없이). 스택 5장을 골라도 도는 매크로엔 ★1건★ 만 간다.
+function cmdTargets(ids){ return [...new Set([...ids].map(cmdTargetOf))]; }
 
 // ★멀티계정(v1.1.412 리뷰 결함 4/11): 업데이터 명령은 base id로★ — 업데이터는 PC 단위라
 //   base id(PC-03)로만 폴링한다. 부계정 카드(PC-03b)로 보내면 아무도 안 가져가는 고아 명령이
@@ -5533,6 +6417,7 @@ async function selUpdaterCmd(command, args={}) {
     } catch(e) { ok = false; }
     if(!ok) failed.push(b);
   }
+  loadUpdHistory();
   const n=sent.size;
   // ★★응답을 보고 말한다 (2026-08-22 사고 146)★★
   //   옛 코드는 fetch 결과를 ★쳐다보지도 않고★ 무조건 성공 토스트를 띄웠다.
@@ -5596,6 +6481,9 @@ async function toggleSlotFilter(pc_id, slot, enabled) {
 let livePc = null, liveTimer = null, liveImg = null, liveFails = 0, liveArmedAt = 0;
 
 async function openLive(pc) {
+  // ★B-JS5 (2026-09-23)★ 안 도는 계정 카드로 열면 live_on 은 sendCmd 가 살아 있는 카드로 돌리는데
+  //   화면은 /live/<누른 id> 를 당겨 영영 안 떴다. 처음부터 실제 대상 id 로 — live_off·beacon 도 이 id.
+  pc = cmdTargetOf(pc);
   livePc = pc; liveFails = 0; liveArmedAt = Date.now();
   document.getElementById('liveTitle').textContent = pc + ' — 실시간 화면';
   document.getElementById('liveStep').textContent = '연결 중…';
@@ -5805,10 +6693,12 @@ async function bulkCmd(command, args={}) {
   //   ★무장 없이★ 돌았고, 완주한 13대가 정보수집도 계정전환도 못 한 채 8시간을 섰다.
   //   주인님이 허용목록을 '*' 로 전체 개방하셨으므로 그 방어의 근거도 사라졌다.
   //   → sendCmd 의 rotate:true 를 그대로 통과시킨다(여기서 덮어쓰지 않는다).
-  const ids=Object.keys(state);
+  // ★B-JS4·B-JS8 (2026-09-23)★ 가짜·은퇴·계정없음 제외 + 물리 PC 당 1건(오프라인 형제가 살아 있는 카드로
+  //   우회돼 같은 매크로에 최대 5건이 쌓였다). 토스트 숫자도 물리 PC 수.
+  const ids=cmdTargets(Object.keys(state).filter(id => !isExcludedPc(id)));
   if(!ids.length){showToast('연결된 PC 없음');return;}
   await withBulk(() => Promise.all(ids.map(id=>sendCmd(id,command,args))));
-  showToast(`✓ ${command} → 전체 ${ids.length}대`);
+  showToast(`✓ ${command} → 전체 ${new Set(ids.map(baseId)).size}대`);
   loadCmdHistory();
 }
 
@@ -5846,7 +6736,9 @@ ${names}
   }
   // ★보내는 것은 안 바꾼다★ — 명령은 지금처럼 ★카드별★ 로 나간다(전체선택 때 이미 그랬다).
   //   바뀐 건 고르는 방법과 보여주는 숫자뿐이다(사고 337).
-  await withBulk(() => Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args))));
+  // ★B-JS4 (2026-09-23)★ 실제 대상으로 접어서 보낸다 — 스택째 고르면(사고 337) 오프라인 형제마다
+  //   sendCmd 가 살아 있는 카드로 돌려 같은 명령이 한 매크로에 여러 건 쌓였다.
+  await withBulk(() => Promise.all(cmdTargets(selectedPcs).map(id=>sendCmd(id,command,args))));
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
@@ -5954,7 +6846,7 @@ function autoIdleTargets(){
   }
   for (const b of Object.keys(byBase).sort()) {
     const cards = byBase[b];
-    if (b.toUpperCase() === 'PC-TEST' || b.toUpperCase() === 'PC-DEMO') {
+    if (isFakePc(b)) {
       if (picked && selBases.has(b)) skip.push({base:b, why:'검증용 가짜 PC — 순환 대상이 아님'});
       continue;
     }
@@ -6197,7 +7089,7 @@ async function switchAllToFirst() {
   const byBase = {};
   for (const id of Object.keys(state)) {
     const b = baseId(id);
-    if (b === 'PC-TEST' || b === 'PC-DEMO') continue;
+    if (isFakePc(id)) continue;
     const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
@@ -6326,7 +7218,7 @@ async function sellAllSel() {
   const p=getSalePrice();
   if(p<=0||!isSalePriceConfirmed()){alert('먼저 거래소 가격을 입력하고 [확정] 하세요');return;}
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
+  if(!confirm(`선택 ${selectedBases().length}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;   // ★B-JS4★ 물리 PC 수
   await selCmd('sell_all',{price:p});
 }
 async function sellAllCard(pc) {
@@ -6352,8 +7244,8 @@ function openCardMenu(pc_id, e) {
   // 헤더에 실시간 상태 + 매크로 버전 표시 (메뉴 v2 — 열 때마다 state에서 스냅샷)
   const pc=state[pc_id]||{};
   const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
-  const ver=pc.macro_version?`v${pc.macro_version}`:'';
-  const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${acctNumOf(pc_id)}</span>` : '';
+  const ver=pc.macro_version?`v${esc(pc.macro_version)}`:'';   // ★B-JS3 (2026-09-23)★ 매크로 보고값 → esc
+  const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${esc(acctNumOf(pc_id))}</span>` : '';
   document.getElementById('menu-pc-label').innerHTML=
     `<span class="font-bold text-gray-100">${baseId(pc_id)}${_mAcct}</span>`+
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
@@ -6656,7 +7548,7 @@ async function sellAllFromMenu() {
 // ─── 준비(prepare) — 전 캐릭 순회: 정산(계정1회)→추출→개인/서버창고→인벤정렬→귀환주문서 ───
 async function settleSel() {
   if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;
+  if(!confirm(`선택 ${selectedBases().length}대 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;   // ★B-JS4★ 물리 PC 수
   await selCmd('prepare');
 }
 
@@ -6699,16 +7591,50 @@ async function deletePCFromMenu() {
 let _renderTimer=null;
 function scheduleRender(){ if(_renderTimer) return; _renderTimer=setTimeout(()=>{_renderTimer=null; renderCards();},700); }
 
+// ★카드 상태 = 판 번호(2026-09-23 반응속도 2단계)★ — 서버는 앞 판을 가진 화면에 바뀐 카드만
+//   보낸다(state_diff: base=앞 판, upd=바뀐 카드, del=없어진 카드, retired·latest 는 바뀔 때만).
+//   base 가 내 판과 다르면(끊겼다 붙음·놓침) 적용하지 않고 전량을 다시 달라고 한다 — 틀린
+//   조각을 덧대는 것보다 한 통 늦는 게 낫다. 전량(state)은 언제나 통째로 갈아엎는다(예전과 같음).
+let STATE_VER = -1, _resyncAsked = false;
+function applyStateMsg(msg, sock){
+  if (msg.type === 'state') {
+    state = {}; (msg.pcs||[]).forEach(p=>{ state[p.pc_id] = p; });
+    RETIRED = new Set(msg.retired||[]);
+    if (msg.latest) latestVersions = msg.latest;
+    STATE_VER = (typeof msg.ver === 'number') ? msg.ver : -1;
+    _resyncAsked = false;
+    return true;
+  }
+  if (typeof msg.base !== 'number' || msg.base !== STATE_VER) {
+    STATE_VER = -1;
+    // 전량이 올 때까지 한 번만 조른다(이미 날아오던 조각들이 줄줄이 또 조르지 않게)
+    if (!_resyncAsked) {
+      _resyncAsked = true;
+      try { if (sock && sock.readyState === 1) sock.send(JSON.stringify({type:'resync'})); } catch(e) {}
+    }
+    return false;
+  }
+  (msg.upd||[]).forEach(p=>{ state[p.pc_id] = p; });
+  (msg.del||[]).forEach(id=>{ delete state[id]; });
+  if (msg.retired) RETIRED = new Set(msg.retired);
+  if (msg.latest) latestVersions = msg.latest;
+  STATE_VER = msg.ver;
+  return true;
+}
+
 let _ws=null, _wsLastMsg=0;
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws`);
   _ws=ws; _wsLastMsg=Date.now();
+  // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
+  //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
+  STATE_VER = -1; _resyncAsked = false;
   ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();updResultSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
+    if(msg.type==='state'||msg.type==='state_diff'){ if(applyStateMsg(msg, ws)){pendSweep();updResultSweep();scheduleRender();} }   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -6754,22 +7680,28 @@ function updateCorridorTile(){
   if(el){
     // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — 아래 상세(nFresh/nStale)는
     //   클라 계산에서 그대로 보여준다(툴팁용, 서버는 총합만 준다).
-    const ss = SERVER_SUMMARY;
-    el.textContent = ss ? String(ss.corridor_remaining || 0) : (has?String(rem):'–');
+    const ss = serverSum();
+    // 서버가 회랑 스냅샷을 하나도 못 가졌으면 null → 「–」(폴백의 has=false 와 같은 뜻)
+    el.textContent = ss ? (ss.corridor_remaining != null ? String(ss.corridor_remaining) : '–') : (has?String(rem):'–');
+    // ★툴팁 내역도 숫자와 같은 출처에서(2026-09-23 반증 #4)★ — 숫자는 서버, 내역은 화면 캐시면
+    //   「남음 5 = 신선 3 + 미착수 4」 처럼 어긋났다. 서버값이 있으면 서버 corridor_detail 을 쓴다.
+    const cd = (ss && ss.corridor_detail) ? ss.corridor_detail
+      : {fresh_n: nFresh, fresh_left: rem-remStale, stale_n: nStale, stale_left: remStale};
     const t=el.closest('.stat-tile');
     // ★줄바꿈은 String.fromCharCode(10) 으로 만든다★ — 이 파일은 파이썬 문자열 안에
     //   들어 있어서 백슬래시 이스케이프가 중간 도구에 먹히는 일이 잦다(실제로 먹혔다).
     const NL = String.fromCharCode(10);
     if(t)t.title = '회랑을 아직 다 못 돈 캐릭터 수 (적 진영 제외 · 수·토 22시 리셋)'
-      + NL + `· 이번 판에 보고한 ${nFresh}대: 남은 ${rem-remStale}`
-      + NL + `· 리셋 뒤 아직 시작 안 한 ${nStale}대: 남은 ${remStale} (지난 판 정원 기준)`
-      + NL + '※ 회랑을 한 번도 보고한 적 없는 PC 는 아직 여기에 안 들어갑니다';
+      + NL + `· 이번 판에 보고한 ${cd.fresh_n}대: 남은 ${cd.fresh_left}`
+      + NL + `· 리셋 뒤 아직 시작 안 한 ${cd.stale_n}대: 남은 ${cd.stale_left} (지난 판 정원 기준)`
+      + NL + '※ 회랑을 한 번도 보고한 적 없는 PC 는 아직 여기에 안 들어갑니다'
+      + NL + serverSumNote() + (ss ? '' : ageNote(CORRIDOR_AT, '회랑 목록', 600000));
   }
 }
 async function loadCorridorSummary(){
   try{
     const r=await fetch('/corridor/progress');if(!r.ok)return;
-    const d=await r.json();corridorRemaining={};
+    const d=await r.json();CORRIDOR_AT=sumClock();corridorRemaining={};
     Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total,stale:!!v.stale};});
     updateCorridorTile();
     scheduleRender();   // 🌀 뱃지도 갱신 (만료로 사라진 PC 반영)
@@ -6848,21 +7780,79 @@ async function toggleRentalKill(idx, kill){
 loadRentalTenants();
 
 // ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
-let serverBoot=null;
+// ★새로고침 연쇄 막기 (2026-09-23 팜뷰 반증 #2)★ — 재배포 동안 옛·새 인스턴스가 번갈아 /ping 에
+//   답하면 boot 가 A→B→A 로 흔들려 새로고침이 이어졌다(팜뷰 옆 창 «응답없음» 방아쇠 후보).
+//   ① 진행 중 가드(겹친 폴링·새로고침 중 재호출 무시) ② 같은 새 boot 를 ★연속 두 번★ 봐야 한 번 새로고침
+//   ③ 떠난 boot 는 sessionStorage 에 적어 새 화면이 옛 인스턴스 답을 기준값·변화로 안 읽는다
+//   ④ 한 탭에서 60초 안 재새로고침 금지. sessionStorage 가 막혀도 ①②는 그대로 돈다.
+let serverBoot=null, _bootCand=null, _bootBusy=false, _bootReloading=false;
+const _BOOT_SS='dashBootReload', BOOT_RELOAD_MIN_GAP_MS=60000;
+let BOOT_PING_TIMEOUT_MS=4000;
+// sessionStorage 가 막힌 창(반증 J2 — 막히면 새로고침이 다시 이어졌다)은 window.name 에 적는다(같은 탭 새로고침에 남는다)
+function _bootMem(){
+  let raw=null;
+  try{ raw=sessionStorage.getItem(_BOOT_SS); }catch(e){ try{ const n=String(window.name||''); if(n.startsWith(_BOOT_SS+':')) raw=n.slice(_BOOT_SS.length+1); }catch(_){} }
+  try{ const m=JSON.parse(raw||'null'); return (m&&typeof m==='object')?m:{}; }catch(e){ return {}; }
+}
+function _bootMemSet(v){
+  const t=JSON.stringify(v);
+  try{ sessionStorage.setItem(_BOOT_SS, t); }catch(e){ try{ window.name=_BOOT_SS+':'+t; }catch(_){} }
+}
 async function checkServerBoot(){
+  if(_bootBusy||_bootReloading) return;
+  _bootBusy=true;
   try{
-    const r=await fetch('/ping',{cache:'no-store'});
+    // ★답 없는 ping 이 가드를 영영 쥐지 않게 4초 제한 (반증 J1)★
+    const _ac=(typeof AbortController!=='undefined')?new AbortController():null;
+    let _to=null;
+    const _late=new Promise((_,rej)=>{ _to=setTimeout(()=>{ try{_ac&&_ac.abort();}catch(e){} rej(new Error('ping 시간초과')); }, BOOT_PING_TIMEOUT_MS); });
+    let r; try{ r=await Promise.race([fetch('/ping',_ac?{cache:'no-store',signal:_ac.signal}:{cache:'no-store'}), _late]); } finally { clearTimeout(_to); }
     if(!r.ok)return;
     const b=(await r.json()).boot;
-    if(serverBoot===null){serverBoot=b;return;}   // 최초 폴링 = 기준값 저장
-    if(b!==serverBoot)location.reload();            // boot 바뀜 = 서버 재시작 → 새로고침
+    if(!b) return;
+    const m=_bootMem(); const old=Array.isArray(m.old)?m.old:[];
+    if(serverBoot===null){ serverBoot=(old.includes(b)&&m.to)?m.to:b; return; }   // 최초 = 기준값(떠난 boot 면 옮겨 간 쪽)
+    if(b===serverBoot||old.includes(b)){ _bootCand=null; return; }
+    if(_bootCand!==b){ _bootCand=b; return; }                // 한 번 더 같은 새 boot 를 볼 때까지
+    if(typeof m.at==='number' && Date.now()-m.at < BOOT_RELOAD_MIN_GAP_MS) return;
+    _bootReloading=true;
+    _bootMemSet({old:[...old, serverBoot].slice(-5), to:b, at:Date.now()});
+    location.reload();                                        // boot 바뀜(두 번 확인) = 서버 재시작 → 새로고침 한 번
   }catch(e){/* 재시작 중이라 연결 실패 = 무시, 다음 폴링에서 감지 */}
+  finally{ _bootBusy=false; }
 }
 
 // ─── 명령 내역 ────────────────────────────────────────────────────────────────
 async function loadCmdHistory() {
+  loadUpdHistory();
   const res=await fetch('/commands/recent'); if(!res.ok) return;
   renderCmdHistory((await res.json()).commands||[]);
+}
+// ★업데이터 명령도 내역에 보인다 (2026-09-23 배포 반증 #2)★ — 업데이터 큐는 10분 만료·같은 종류 덮어쓰기·
+//   팜뷰 처리가 있는데 대시보드엔 보이는 곳이 없어 «눌렀는데 사라짐» 을 가를 수 없었다(사고 146 과 같은 눈).
+const UPD_ST={pending:['대기','text-yellow-500'], acked:['업데이터 받음','text-green-500'],
+  expired:['만료(10분 안 가져감)','text-red-400'], superseded:['덮임(같은 명령 다시 누름)','text-gray-500'],
+  handed_noack:['업데이터가 받아감 — ack 없음(돌았을 수 있음)','text-amber-400'],
+  fv_claimed:['팜뷰 처리 중','text-yellow-500'], fv_done:['팜뷰 완료','text-green-500'],
+  fv_failed:['팜뷰 실패','text-red-400'], fv_unknown:['팜뷰 응답 없음 — 실행됐는지 모름','text-red-400']};
+async function loadUpdHistory() {
+  try {
+    const res=await fetch('/updater/commands/recent?limit=20'); if(!res.ok) return;
+    renderUpdHistory((await res.json()).commands||[]);
+  } catch(e) {}
+}
+function renderUpdHistory(cmds) {
+  const el=document.getElementById('upd-history'); if(!el) return;
+  if(!cmds.length){el.innerHTML='<div class="text-gray-600">없음</div>';return;}
+  el.innerHTML=cmds.map(c=>{
+    const st=UPD_ST[c.status]||[String(c.status||''),'text-gray-500'];
+    return `<div class="flex gap-2 items-center py-0.5">
+      <span class="text-gray-600 shrink-0" title="보는 기기의 로컬 시각">${esc(fmtLocalAt(c.created_at, 11, 19))}</span>
+      <span class="text-indigo-400 shrink-0">${esc(c.pc_id)}</span>
+      <span class="text-gray-200">${esc(c.command)}</span>
+      <span class="${st[1]} ml-auto shrink-0" title="${esc(c.status)}">${esc(st[0])}</span>
+    </div>`;
+  }).join('');
 }
 function renderCmdHistory(cmds) {
   // ★사고 308-b — ack/만료/취소를 카드 표시에 반영한다★
@@ -6877,7 +7867,7 @@ function renderCmdHistory(cmds) {
       ? `<button onclick="cancelCmd(${c.id})" class="ml-1 text-gray-600 hover:text-red-400 transition-colors leading-none" title="취소">✕</button>`
       : '';
     return `<div class="flex gap-2 items-center py-0.5">
-      <span class="text-gray-600 shrink-0">${(c.created_at||'').slice(11,19)}</span>
+      <span class="text-gray-600 shrink-0" title="보는 기기의 로컬 시각">${esc(fmtLocalAt(c.created_at, 11, 19))}</span>
       <span class="text-indigo-400 shrink-0">${esc(c.pc_id)}</span>
       <span class="text-gray-200">${esc(c.command)}</span>
       <span class="${sc} ml-auto shrink-0">${esc(c.status)}</span>${cancelBtn}
@@ -6885,9 +7875,16 @@ function renderCmdHistory(cmds) {
   }).join('');
 }
 async function cancelCmd(cmd_id) {
-  const res=await fetch(`/commands/${cmd_id}`,{method:'DELETE'});
-  if(res.ok) showToast('✕ 명령 취소됨');
-  else showToast('✗ 취소 실패');
+  // ★B-N1 (2026-09-23) 200 ≠ 취소★ — 서버는 이미 처리된 명령에 200 + {ok:false} 를 준다.
+  //   예전엔 res.ok 만 봐서 못 취소한 것도 「✕ 명령 취소됨」 이었다. 본문 j.ok 로 가른다.
+  // ★B-CQ10★ WS 로 이미 매크로에 간 명령은 {delivered:true} — 취소가 아니라 정지로 끊어야 한다.
+  try {
+    const res=await fetch(`/commands/${cmd_id}`,{method:'DELETE'});
+    let j=null; try{ j=await res.json(); }catch(e){ j=null; }
+    if(res.ok && j && j.ok===true) showToast('✕ 명령 취소됨');
+    else if(j && j.delivered) showToast('⚠ 이미 전달됨 — 정지로 끊으세요');
+    else showToast(res.ok ? '✗ 취소 못 함 — 이미 처리된 명령' : '✗ 취소 실패');
+  } catch(e) { showToast('✗ 취소 실패'); }
 }
 
 // ─── 로그 모달 ────────────────────────────────────────────────────────────────
@@ -6943,7 +7940,8 @@ async function loadLogs(){
   rows.sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
   if(rows.length>2000) rows=rows.slice(-2000);   // 두 소스를 합치면 최대 3000줄 — 상한을 건다
   el.innerHTML='';
-  rows.forEach(l=>appendLogLine(l.level,`${String(l.created_at||'').slice(11,19)} ${l.message}`,l.src));
+  // ★B-JS6 (2026-09-23)★ 줄머리 시각은 보는 기기 로컬(created_at 은 UTC naive) — 매크로 원문 로그와 같은 벽시계
+  rows.forEach(l=>appendLogLine(l.level,`${fmtLocalAt(l.created_at, 11, 19)} ${l.message}`,l.src));
   el.scrollTop=el.scrollHeight;
 }
 
@@ -7081,9 +8079,8 @@ const AI_T = {
 
 // ★게임일 — 새벽 5시 경계 (주인님 지시)★ 5시 전이면 전날로 친다.
 function aiGameDay(){
-  const d = new Date();
-  if (d.getHours() < 5) d.setDate(d.getDate() - 1);
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  // ★B-JS11 (2026-09-23)★ 5시 경계는 ★KST★ — 베트남 폰에서도 한국 리셋에 맞춰 체크가 풀린다.
+  return fmtKstTs(new Date(kstGameDayNum(Date.now()) * 86400000 - KST_OFF_MS)).slice(0, 10);
 }
 
 // `840(+115)/840` → {daily:840, bonus:115, max:840}. 못 읽으면 null.
@@ -7305,15 +8302,12 @@ function setAiFilter(f){
 function aiStaleDays(p){
   const la = p && p.last_active;
   if (!la) return 0;
-  const gday = d => {
-    const x = new Date(d);
-    if (isNaN(x)) return null;
-    if (x.getHours() < 5) x.setDate(x.getDate() - 1);
-    return Math.floor(new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() / 86400000);
-  };
-  const a = gday(la), b = gday(new Date());
-  if (a === null || b === null) return 0;
-  return Math.max(0, b - a);
+  // ★B-JS2 (2026-09-23)★ last_active 는 UTC naive(lc/report_module._now) — new Date() 로 읽으면
+  //   로컬로 오해해 9시간(베트남 7시간) 어긋나 방금 보고한 계정이 「1일째 소식 없음」 이 됐다.
+  //   collectedAtDate 로 UTC 파싱 + 게임일은 KST 05:00 경계(kstGameDayNum).
+  const a = collectedAtDate(la);
+  if (!a) return 0;
+  return Math.max(0, kstGameDayNum(Date.now()) - kstGameDayNum(a.getTime()));
 }
 
 // ★★「사냥중」과 「사람이 가야 함」은 갈라서 보여준다 (2026-08-28 본방 실측 확인)★★
@@ -7333,8 +8327,7 @@ function aiBuildHunt(){
   for (const p of Object.values(state)) {
     const b = baseId(p.pc_id || '');
     if (!b) continue;
-    const U = b.toUpperCase();
-    if (U === 'PC-TEST' || U === 'PC-DEMO') continue;
+    if (isFakePc(b)) continue;
     (byBase[b] = byBase[b] || []).push(p);
   }
   const out = [];
@@ -7695,10 +8688,11 @@ function renderAiPlan(){
     a.chars.forEach(c => {
       const done = aiDone.keys.includes(c.key);
       // ★체크해도 자리는 그대로★ — 흐리게 + 취소선으로만 표시한다(정렬은 위에서 고정).
+      // ★키는 data-k 로 (2026-09-23)★ — slot 은 PC 가 보낸 값이라 onchange 문자열에 넣으면 XSS 였다.
       h += `<div class="flex items-center gap-2 px-3 py-1.5" style="${done?'opacity:.45':''}">
-        <input type="checkbox" ${done?'checked':''} onchange="aiToggleDone('${c.key}', this)"
+        <input type="checkbox" ${done?'checked':''} data-k="${esc(c.key)}" onchange="aiToggleDone(this.dataset.k, this)"
                style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
-        <span class="text-xs text-gray-500 w-10">${T.slot}${c.slot}</span>
+        <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
         <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
         <span class="text-xs text-gray-400">${T.power} <b class="text-amber-300">${c.pw.toLocaleString()}</b></span>
         <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
@@ -7953,7 +8947,7 @@ async function sendUpdaterCmd(pc_id, command, args={}) {
     }
     // ★결과만(2026-09-22)★ — update/restart 만 추적. update_only 는 대상 밖(사람이 안 부른다).
     if (res.ok && (command === 'update' || command === 'restart')) {
-      updResultStart(_base, (state[_base]||{})._updater_version || '');
+      updResultStart(_base, (state[_base]||{})._updater_version || '', command);
     }
     return res.ok;
   } catch (e) {          // ★네트워크 예외도 실패다 (2026-08-22)★ 안 잡으면 호출부가 통째로 죽는다
@@ -8022,7 +9016,7 @@ async function openBugsModal(pc_id) {
         <span class="text-xs text-gray-400 font-mono truncate mr-2">${esc(b.filename)}</span>
         <div class="flex items-center gap-2 shrink-0">
           <span class="text-xs text-gray-600">${(b.size/1024).toFixed(1)}KB</span>
-          <button onclick="deleteBug('${esc(encodeURIComponent(b.filename))}')" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
+          <button data-f="${esc(b.filename)}" onclick="deleteBug(this.dataset.f)" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
         </div>
       </div>
       <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${esc(b.filename)}" loading="lazy">
@@ -8107,12 +9101,23 @@ function fmtSlotUptime(slotUptime, activeSlot, fallback) {
 }
 function fmtAt(iso) {
   if (!iso) return '–';
-  return iso.replace('T',' ').slice(0,16);
+  return fmtLocalAt(iso, 0, 16);   // ★B-JS6 (2026-09-23)★ UTC 원문을 로컬처럼 보이던 것 → 보는 기기 로컬 시각
 }
 
 // ─── 전체 캐릭터 테이블 ────────────────────────────────────────────────────
 let charTableData = [];
 let charTableSort = {key:'pc_id', asc:true};
+// ★악몽 도전 티켓 상한 — 한 곳(2026-09-23)★ 예전엔 「N/14」 와 「>=14 빨강」 이 세 곳에 박혀 있었다.
+//   주인님이 악몽을 「쉬운 보스로 티켓만 소모」 로 바꾸시면서 상한을 다시 정하신다 — 정해지기 전엔
+//   null(모름): 칸에는 「N」 만 쓰고, 「가득 참」 빨간 표시도 안 한다(모르는 문턱으로 경고하지 않는다).
+const NIGHTMARE_TICKET_MAX = null;
+function nmTicketText(n){
+  if (n == null || n === '') return '–';
+  return NIGHTMARE_TICKET_MAX != null ? `${n}/${NIGHTMARE_TICKET_MAX}` : String(n);
+}
+function nmTicketFull(n){
+  return NIGHTMARE_TICKET_MAX != null && n != null && n !== '' && Number(n) >= NIGHTMARE_TICKET_MAX;
+}
 let charTableVisible = false;
 // ★은퇴·계정없음 PC 는 여기서 한 번에 뺀다(2026-09-23 주인님)★ — 「24번이 구독으로
 //   표시돼서 구독 자료 자체를 흐린다」. char_info 옛 행은 no_account 로 바뀌어도 안 지운다
@@ -8123,6 +9128,10 @@ let charTableVisible = false;
 function isExcludedPc(pc_id){
   if (!pc_id) return true;
   if (RETIRED.has(pc_id)) return true;
+  // ★가짜 PC(PC-TEST·PC-DEMO)도 같은 한 곳에서 뺀다(2026-09-23 반증 2바퀴)★ — 서버
+  //   _fv_pc_excluded 와 같은 규칙. 빠져 있으면 /summary 가 낡아 폴백으로 떨어질 때마다
+  //   거래키나·각성전·회랑 타일이 가짜 PC 몫만큼 튀었다(서버 K10 vs 폴백 K5010).
+  if (isFakePc(pc_id)) return true;
   return (state[pc_id]||{}).status === 'no_account';
 }
 
@@ -8140,6 +9149,7 @@ async function loadCharTable() {
     const r = await fetch('/characters?t=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
+    CHAR_TABLE_AT = sumClock();
     // ★각성전(3)·일일던전(14) 티켓도 리셋 이전 값이면 가득 찬 값으로 보정(2026-09-23)★
     //   ★한 곳에서 바꾼다★ — 테이블 칸·isAwakenDone·전광판 각성 합계·베트남 표가 전부
     //   이 charTableData 하나만 보므로, 여기서 고치면 전부 같이 고쳐진다(§A12).
@@ -8220,11 +9230,23 @@ function sortVietnam(key){
   else vietnamSort = {key, asc:true};
   renderVietnam();
 }
+// ★B-JS7 (2026-09-23)★ 'PC-03' 이 숫자만 남겨 -3 이 돼 PC 순서가 거꾸로 섰다 → pc_id 는 문자열로 두고
+//   자연 정렬(numeric localeCompare). 빈 값(''·'–'·null)은 null — 정렬에서 방향과 무관하게 맨 뒤.
 function _vietnamVal(r, key){
   if(key==='odd_energy') return parseOddEnergy(r.odd_energy);
   const v = r[key];
-  const n = Number(String(v==null?'':v).replace(/[^\d.-]/g,''));
-  return isNaN(n) ? String(v==null?'':v) : n;
+  const t = String(v==null?'':v).trim();
+  if(key==='pc_id') return t || null;
+  if(!t || t==='–' || t==='-') return null;
+  const n = Number(t.replace(/[^\d.-]/g,''));
+  return isNaN(n) ? t : n;
+}
+function _vietnamCmp(a, b, key, asc){
+  const va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
+  if(va==null || vb==null) return (va==null) - (vb==null);   // 빈 값은 늘 맨 뒤
+  if(typeof va==='number' && typeof vb==='number') return asc?va-vb:vb-va;
+  const c = String(va).localeCompare(String(vb), undefined, {numeric:true, sensitivity:'base'});
+  return asc?c:-c;
 }
 function renderVietnam(){
   const L = vietnamLang, T = VN_T[L];
@@ -8234,12 +9256,7 @@ function renderVietnam(){
   document.getElementById('vn-lang-vi').className = L==='vi'?on:off;
   document.getElementById('vn-lang-ko').className = L==='ko'?on:off;
   const {key, asc} = vietnamSort;
-  const rows = [...vietnamData].sort((a,b)=>{
-    let va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
-    if(typeof va==='number' && typeof vb==='number') return asc?va-vb:vb-va;
-    va=String(va).toLowerCase(); vb=String(vb).toLowerCase();
-    return asc?va.localeCompare(vb):vb.localeCompare(va);
-  });
+  const rows = [...vietnamData].sort((a,b)=>_vietnamCmp(a,b,key,asc));   // ★B-JS7★
   document.getElementById('vietnam-head').innerHTML =
     `<th class="px-2 py-2 text-center">${T.done}</th>` +
     VIETNAM_COLS.map(c=>{
@@ -8250,7 +9267,7 @@ function renderVietnam(){
     ? rows.map(r=>{
         const d = vnDone(r.pc_id, r.slot);
         return `<tr class="${d?'bg-green-900/40':'bg-gray-900'}">`+
-          `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${r.slot},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
+          `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${Number(r.slot)|0},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
           VIETNAM_COLS.map(c=>{
             const cls = (c.red && c.red(r)) ? 'text-red-400 font-bold' : 'text-gray-200';
             return `<td class="px-3 py-1.5 ${_ta(c.align)} ${cls}">${esc(c.fmt(r))}</td>`;
@@ -8260,6 +9277,18 @@ function renderVietnam(){
     : `<tr><td colspan="${VIETNAM_COLS.length+1}" class="text-center text-gray-600 py-8">${T.nodata}</td></tr>`;
 }
 
+// ★B-JS10 (2026-09-23) 빨간 줄 판정 한 곳★ — 행 배경(renderRow)과 그룹 헤더 (N) 뱃지가 각자 계산해서
+//   성역은 행이 「첫값>=분모」, 뱃지가 「첫값>=2」 로 갈렸다(2/5 → 뱃지만 빨강, 1/1 → 행만 빨강). §A12.
+function isRowRed(r){
+  const odd = r.odd_energy || '–', daily = r.daily_ticket || '–', sanc = r.sanctuary || '–', ext = r.extract_level || '–';
+  const oddFull = (odd !== '–' ? parseInt(odd) : 0) >= 840;
+  const dailyFull = (daily !== '–' ? parseInt(daily) : 0) >= 14;
+  const sp = sanc !== '–' ? String(sanc).match(/(\d+).*\/(\d+)/) : null;
+  const sFirst = sp ? parseInt(sp[1]) : 0, sMax = sp ? parseInt(sp[2]) : 0;
+  const sancFull = r.gear_power >= 2700 && sMax > 0 && sFirst >= sMax;
+  const extFull = String(ext).includes('입문') && String(ext).includes('50');
+  return oddFull || dailyFull || nmTicketFull(r.nightmare_ticket) || r.awakening_ticket >= 3 || sancFull || extFull;
+}
 function renderCharTable() {
   const filter = (document.getElementById('char-filter')?.value || '').toLowerCase();
   let rows = charTableData;
@@ -8290,7 +9319,7 @@ function renderCharTable() {
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
     const daily = r.daily_ticket || '–';
-    const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
+    const nmTicket = nmTicketText(r.nightmare_ticket);
     const nmProg = r.nightmare_progress || '';
     // ★nm 만 일부러 HTML 을 품는다★ — 조각을 여기서 감싸고, 쓰는 자리는 그대로 둔다 (2026-09-11)
     const nm = nmProg ? `${esc(nmTicket)} <span class="text-pink-400 text-[10px]">${esc(nmProg)}</span>` : esc(nmTicket);
@@ -8301,8 +9330,8 @@ function renderCharTable() {
     const scroll = r.return_scroll_count != null ? r.return_scroll_count : '–';
     const scrollLow = typeof r.return_scroll_count === 'number' && r.return_scroll_count <= 50;
     const ext = r.extract_level || '–';
-    const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
-    const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
+    const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${Number(r.slot)|0});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
+    const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${Number(r.slot)|0});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
     const trade = r.trade_kina ? Number(r.trade_kina).toLocaleString() : '–';
     const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
@@ -8310,24 +9339,24 @@ function renderCharTable() {
     const oddFull = oddFirst >= 840;
     const dailyNum = daily !== '–' ? parseInt(daily) : 0;
     const dailyFull = dailyNum >= 14;
-    const nmFull = r.nightmare_ticket >= 14;
+    const nmFull = nmTicketFull(r.nightmare_ticket);
     const awFull = r.awakening_ticket >= 3;
     const sancParts = sanc !== '–' ? sanc.match(/(\d+).*\/(\d+)/) : null;
     const sancFirst = sancParts ? parseInt(sancParts[1]) : 0;
     const sancMax = sancParts ? parseInt(sancParts[2]) : 0;
     const sancFull = r.gear_power >= 2700 && sancMax > 0 && sancFirst >= sancMax;
     const extFull = ext.includes('입문') && ext.includes('50');
-    const hasRed = oddFull || dailyFull || nmFull || awFull || sancFull || extFull;
+    const hasRed = isRowRed(r);   // ★B-JS10★ 그룹 뱃지와 같은 판정
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 text-center">
         <input type="checkbox" ${slotEnabled ? 'checked' : ''}
-          onchange="toggleSlotFilter('${r.pc_id}',${r.slot},this.checked)"
+          onchange="toggleSlotFilter('${r.pc_id}',${Number(r.slot)|0},this.checked)"
           onclick="event.stopPropagation()" class="cursor-pointer accent-green-500"></td>
       <td class="px-3 py-1.5 text-gray-400">${esc(r.slot||'–')}</td>
       <td class="px-3 py-1.5 text-white">${esc(r.name||'–')}</td>
       <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${esc(cls)}</td>
-      <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${r.slot})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
+      <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${Number(r.slot)|0})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
       <td class="px-3 py-1.5 text-right ${gpLow?'':'text-gray-200'}">${gpLow?rc(gp):gp}</td>
       <td class="px-3 py-1.5 text-right font-medium ${ppLow?'':'text-cyan-400'}">${ppLow?rc(pp):pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(esc(odd)):esc(odd)}</td>
@@ -8361,12 +9390,7 @@ function renderCharTable() {
   let idx = 0;
   Object.keys(groups).sort().forEach(pc => {
     const pcRows = groups[pc];
-    const redCount = pcRows.filter(r => {
-      const odd = r.odd_energy||''; const sanc = r.sanctuary||''; const ext = r.extract_level||'';
-      return parseInt(odd)>=840 ||
-             parseInt(r.daily_ticket)>=14 || r.nightmare_ticket>=14 || r.awakening_ticket>=3 ||
-             (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
-    }).length;
+    const redCount = pcRows.filter(isRowRed).length;   // ★B-JS10★ 행 배경과 같은 판정
     const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
     // ★서버는 계정별 우선(v1.1.424, 사용자: "2계정 서버를 못 읽는 것 같네")★ —
     //   info.txt 계정N_서버(지도) > 그 카드의 acct_server > 게임 감지 공통 서버 순.
@@ -8388,12 +9412,12 @@ function renderCharTable() {
           ${serverTag}${kinaTag}${acctIdTag(pc)}
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
           <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
-            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
-            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>Number(r.slot)|0))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>Number(r.slot)|0))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
             <span class="text-gray-600">|</span>
             <button onclick="sendCmd('${pc}','start')" class="px-1.5 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300 whitespace-nowrap">▶ 시작</button>
             <button onclick="sendCmd('${pc}','exit')" class="px-1.5 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300 whitespace-nowrap">✕ 종료</button>
-            <button onclick="sendUpdaterCmd('${pc}','update')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">↺ 재시작</button>
+            <button onclick="sendUpdaterCmd('${pc}','restart')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">↺ 재시작</button>
             <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300 whitespace-nowrap">일일던전</button>
             <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
@@ -8567,6 +9591,7 @@ function renderInfoContent(info) {
   }).join('');
   el.innerHTML = kinaHtml + charsHtml;
   document.getElementById('info-collected-at').textContent = `수집 시각: ${fmtAt(info.collected_at)}`;
+  document.getElementById('info-collected-at').title = '보는 기기의 로컬 시각';   // ★B-JS6★
 }
 
 async function openInfoModal(pc_id) {
@@ -8959,9 +9984,26 @@ function handleCharInfoMsg(msg) {
 
 // ─── 초기화 ──────────────────────────────────────────────────────────────────
 (async()=>{
-  const res=await fetch('/status');
-  if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
-  renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
+  // ★B-JS9 (2026-09-23)★ 첫 /status 가 던지면(서버 재시작 중·망 끊김) 이 IIFE 가 통째로 죽어
+  //   connectWS·setInterval·checkServerBoot 가 한 번도 안 돌았다 = 새로고침 전까지 죽은 화면.
+  //   → 실패해도 아래는 전부 돈다. /status 는 5초마다 성공할 때까지 다시 받는다(은퇴 목록은 여기에만 온다).
+  const _initStatus = async () => {
+    try {
+      const res=await fetch('/status', {cache:'no-store'});
+      if(!res.ok) return false;
+      const j=await res.json();
+      // ★WS 전량이 먼저 왔으면 덮지 않는다(2026-09-23 반증 B2-5)★ — 이 /status 는 그보다 낡은 판일 수
+      //   있고, 그 사이 지워진 카드를 되살리면 조각(state_diff)은 다시 그 카드를 지우지 않는다.
+      if (STATE_VER !== -1) return true;
+      j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);
+      return true;
+    } catch(e) { console.error('초기 /status 실패 — 5초 뒤 다시', e); return false; }
+  };
+  if(!(await _initStatus())){
+    const _t=setInterval(async()=>{ if(await _initStatus()){ clearInterval(_t); try{renderCards();}catch(e){console.error(e);} } },5000);
+  }
+  try { renderCards(); } catch(e) { console.error('초기 renderCards 실패', e); }
+  loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   loadServerSummary();   // ★전광판 숫자를 팜뷰와 같은 서버 계산으로(2026-09-23)★
   setInterval(loadServerSummary, 20000);   // 정보수집·은퇴 등록은 즉시 안 보여도 20초면 따라잡는다
   setInterval(()=>{ updResultSweep(); renderCards(); },60000);   // ★3분 데드라인의 최소 보장 틱★ — WS state 가 안 와도 1분마다 판정
@@ -8990,6 +10032,9 @@ function handleCharInfoMsg(msg) {
 # ─────────────────────────────────────────────────────────────────────────────
 # Web routes (session auth)
 # ─────────────────────────────────────────────────────────────────────────────
+
+HTML_DASHBOARD = _tw_inline(HTML_DASHBOARD)   # Tailwind 인라인 — _tw_inline 머리 주석
+
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -9226,6 +10271,19 @@ def _base_pc(pc_id: str) -> str:
     return s[:-1] if len(s) > 1 and s[-1] in ACCT_SUFFIX and s[-2].isdigit() else s
 
 
+FAKE_PC_BASES = ("PC-TEST", "PC-DEMO")   # 배포 검증용 가짜 PC(deploy_to·contract_test 가 /check 에 쓰는 이름)
+
+
+def _is_fake_pc(pc_id) -> bool:
+    """★검증용 가짜 PC 판정 — 화면 JS isFakePc 와 글자 하나까지 같은 규칙(2026-09-23 반증)★.
+    JS baseId 는 숫자 뒤가 아니어도 끝 글자가 계정 접미사면 뗀다('PC-TESTb'→'PC-TEST'). 여기서
+    _base_pc(숫자 뒤만)를 쓰면 'PC-TESTb' 를 화면은 빼고 서버는 세어 「구독 모름」이 또 +1 이 된다."""
+    s = str(pc_id or "").strip()
+    if len(s) > 1 and s[-1] in ACCT_SUFFIX:
+        s = s[:-1]
+    return s.upper() in FAKE_PC_BASES
+
+
 async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> dict:
     """★배달 직전에★ 비밀·주소록을 args 에 채운다. DB 에는 저장하지 않는다.
 
@@ -9389,7 +10447,8 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
             #   queue 가 없으면 예전 그대로(사냥만 도는 완주 순환)라 되돌림이 없다.
             _fq = [str(x) for x in ((args or {}).get("queue") or [])
                    if str(x) in ROT_TASKS]
-            _ok, _why = await _rot_arm(tenant, pc_id, queue=_fq, full=bool(_fq))
+            _ok, _why = await _rot_arm(tenant, pc_id, queue=_fq, full=bool(_fq),
+                                       need_card=True)   # ★B-ROT8★
             await _rot_save(force=True)
             _rot_result = {"armed": _ok, "why": _why, "queue": _fq}
             if not _ok:
@@ -9402,7 +10461,8 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
             #   [⚡ 노는 PC 자동진행] 버튼이 일일던전 → 회랑 → 악몽 을 이렇게 보낸다.
             _q = [str(x) for x in ((args or {}).get("queue") or [])
                   if str(x) in ROT_TASKS]
-            _ok, _why = await _rot_arm(tenant, pc_id, task=command, queue=_q)
+            _ok, _why = await _rot_arm(tenant, pc_id, task=command, queue=_q,
+                                       need_card=True)   # ★B-ROT8★
             await _rot_save(force=True)
             _rot_result = {"armed": _ok, "why": _why, "queue": _q}
             if not _ok:
@@ -9491,6 +10551,7 @@ async def send_command(pc_id: str, request: Request):
 async def remove_pc(pc_id: str, request: Request):
     tenant = _require_session(request)
     await delete_pc_all_data(ns(tenant, pc_id))
+    _PC_CLOCK.pop(ns(tenant, pc_id), None)      # 시계 표본 캐시도(표는 delete_pc_all_data 가 지운다)
     await push_state(tenant)
     return JSONResponse({"ok": True})
 
@@ -9517,7 +10578,8 @@ async def admin_retire_pc(pc_id: str, request: Request):
     ★백업은 미리★(ops/pc_backup.py) — 여기선 안 만든다."""
     tenant = _require_session(request)
     nspc = ns(tenant, pc_id)
-    await delete_pc_all_data(nspc)
+    await delete_pc_all_data(nspc, purge_all=True)   # ★B-DB9★ 은퇴는 영구 — 슬롯 필터·악몽 진행까지
+    _PC_CLOCK.pop(nspc, None)
     RETIRED_PCS.add(nspc)
     await set_setting("retired_pcs", ",".join(sorted(RETIRED_PCS)))
     await push_state(tenant)
@@ -9582,7 +10644,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         return
     tenant = None
     for _k, _tn in KEY_TO_TENANT.items():
-        if hmac.compare_digest(api_key, _k):
+        if _ct_eq(api_key, _k):
             tenant = _tn
     if not tenant or tenant_blocked(tenant):
         # 미등록 키만 추측 카운터에 계상 — 킬/만료 테넌트의 재접속 폭주가 자기 IP를 잠가
@@ -9618,11 +10680,20 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     _old = macro_ws_connections.get(nspc)
     if _old is not None and _old is not websocket:
         _WS_EVICTED[0] += 1
+        # ★B-CQ11★ 죽은 옛 소켓으로 새 명령이 새지 않게 자리부터 비운다(새 소켓은 드레인 뒤에 앉힌다)
+        if macro_ws_connections.get(nspc) is _old:
+            macro_ws_connections.pop(nspc, None)
         try:
             await _old.close(code=1012)      # 1012 = Service Restart(자리 넘김)
         except Exception:
             pass
-    macro_ws_connections[nspc] = websocket
+    _drn = _WS_DRAINING.get(nspc)
+    if _drn is not None and _drn is not websocket and _drn is not _old:
+        try:
+            await _drn.close(code=1012)      # ★B-CQ11★ 드레인 중이던 앞 연결도 자리 넘김
+        except Exception:
+            pass
+    _WS_DRAINING[nspc] = websocket
     _ws_t0 = time.monotonic()        # ★수명 계측 (2026-09-10)★
     _ws_why = "루프 이탈"            # 아래에서 덮어쓴다
     _WS_ACCEPTS[0] += 1
@@ -9659,17 +10730,46 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         #   enrich_cmd_args 를 거치는데 이 경로는 안 거쳤다 = PC-21 peer_id 사고가
         #   ★절반만★ 막혀 있었다. WS 가 끊겼다 붙는 건 흔한 일이라 실전 경로다.
         # ==================================================================
-        _pending = await get_pending_commands(nspc, all_key=ns(tenant, "all"), limit=WS_RECONNECT_DRAIN)
-        for _p in _pending:
-            _pargs = await enrich_cmd_args(tenant, pc_id,
-                                           _p["command"], _p.get("args") or {})
-            await websocket.send_text(json.dumps({
-                "type": "command", "id": _p["id"],
-                "command": _p["command"], "args": _pargs
-            }))
-        if len(_pending) > 1:
-            print("[WS] %s 재접속 - 밀린 명령 %d건을 한 묶음으로 보냈다"
-                  % (nspc, len(_pending)))
+        # ★★B-CQ11 (2026-09-23) 드레인이 끝난 ★뒤에★ 자리에 앉힌다★★
+        #   예전엔 소켓을 먼저 등록하고 드레인했다 → 드레인의 await 사이에 들어온 새 명령이
+        #   send_command_to_macro 로 ★밀린 것보다 먼저★ 가고(순서 역전), 스냅샷 전에 들어왔으면
+        #   드레인에도 실려 ★두 번★ 갔다. 이제 ① 등록 안 된 채 스냅샷을 보내고 ② 그 사이 끼어든
+        #   것만(id 가 더 큰 것) 다시 읽어 뒤에 붙이고 ③ 빈 조회 직후(await 없이) 등록한다.
+        #   상한(WS_RECONNECT_DRAIN)을 넘게 밀렸으면 _WS_BACKLOG 로 표시 — 남은 것이 폴링으로
+        #   (오래된 순) 다 나갈 때까지 새 명령은 WS 로 새치기하지 않는다(send_command_to_macro).
+        _WS_BACKLOG.discard(nspc)
+        _sent_n, _last_id, _more = 0, 0, False
+        for _round in range(3):
+            _pending = await get_pending_commands(nspc, all_key=ns(tenant, "all"),
+                                                  limit=WS_RECONNECT_DRAIN + 1 + _sent_n)
+            _pending = [_p for _p in _pending if int(_p["id"]) > _last_id]
+            _room = WS_RECONNECT_DRAIN - _sent_n
+            if len(_pending) > _room:
+                _more = True
+                _pending = _pending[:max(0, _room)]
+            if not _pending:
+                break
+            for _p in _pending:
+                _pargs = await enrich_cmd_args(tenant, pc_id,
+                                               _p["command"], _p.get("args") or {})
+                await websocket.send_text(json.dumps({
+                    "type": "command", "id": _p["id"],
+                    "command": _p["command"], "args": _pargs
+                }))
+                _cmd_mark_delivered(_p["id"])
+                _last_id = max(_last_id, int(_p["id"]))
+                _sent_n += 1
+            if _more:
+                break
+        if _more:
+            _WS_BACKLOG.add(nspc)
+        # ★자리 넘김 규칙은 그대로★ — 드레인 중 더 새 연결이 왔으면(_WS_DRAINING 을 가져갔으면) 앉지 않는다.
+        if _WS_DRAINING.get(nspc) is websocket:
+            _WS_DRAINING.pop(nspc, None)
+            macro_ws_connections[nspc] = websocket
+        if _sent_n > 1:
+            print("[WS] %s 재접속 - 밀린 명령 %d건을 한 묶음으로 보냈다%s"
+                  % (nspc, _sent_n, " (상한 초과 — 나머지는 폴링 순서대로)" if _more else ""))
         while True:
             raw = await websocket.receive_text()
             # ★차단 재검사(2026-08-06 감사 major)★ — 핸드셰이크 때 한 번만 보면, 이미 붙어 있던
@@ -9684,8 +10784,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             msg_type = msg.get("type", "")
             if msg_type == "status":
                 payload = msg.get("payload", {})
+                if not isinstance(payload, dict):   # 목록이면 연결째 죽었다 (2026-09-23)
+                    continue
                 payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
                 await upsert_status(nspc, payload)
+                await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
                 errors = payload.get("errors") or []
                 for e in errors[:3]:
                     await insert_log(nspc, "warn", str(e))
@@ -9742,6 +10845,8 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
         #
         #   ★is 로 본다★ — 같은 pc_id 라도 ★객체가 다르면 남의 것★ 이다.
         # ══════════════════════════════════════════════════════════════════
+        if _WS_DRAINING.get(nspc) is websocket:       # ★B-CQ11★ 드레인 중 끊긴 판
+            _WS_DRAINING.pop(nspc, None)
         if macro_ws_connections.get(nspc) is websocket:
             macro_ws_connections.pop(nspc, None)
         else:
@@ -9761,6 +10866,8 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
     await manager.connect(websocket, tenant)
+    _dash_t0 = time.monotonic()
+    _dash_why = "?"
     # ══════════════════════════════════════════════════════════════════════
     # ★★등록했으면 어느 길로 나가든 지운다 (2026-09-11 전수조사)★★
     #   초판은 ①초기 상태 조립·전송이 try ★밖★ 이고 ②`WebSocketDisconnect` 만
@@ -9770,18 +10877,35 @@ async def websocket_endpoint(websocket: WebSocket):
     #   통째로 푼다★ — 초당 1회 카드 72장 조립이 되살아난다.
     # ══════════════════════════════════════════════════════════════════════
     try:
-        # 초기 상태 전송 (updater 정보 포함)
-        pcs = await _build_full_state(tenant)
-        await websocket.send_text(json.dumps({"type": "state", "pcs": pcs,
-                                              "retired": _retired_list(tenant)}))
+        # ★초기 상태도 상태 펌프 한 길로(2026-09-23)★ — 예전엔 여기서 따로 조립해 직접 보냈다.
+        #   그 사이 방송이 같은 소켓에 동시에 쓰거나(자물쇠 밖), 더 낡은 판이 나중에 도착했다
+        #   (반증 #4: 새 화면이 seq [1, 0] 을 받음). 이제 새 판을 한 번 조르고(push_state),
+        #   방금 만든 판이 있으면 그걸 바로 받는다 — 어느 쪽이든 펌프가 순서대로 보낸다.
+        _f = _FEED.get(tenant)
+        if _f and _f.get("full") is not None and time.monotonic() - _f.get("at", 0) < 5:
+            await manager.publish_state(tenant)
+        await push_state(tenant)
+        _last_resync = 0.0
         while True:
-            await websocket.receive_text()   # keep alive; client doesn't send
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+            raw = await websocket.receive_text()
+            # 화면이 「판 번호가 안 맞는다」 고 하면 다음엔 전량 — 그 밖의 글은 무시(keep alive)
+            if raw and "resync" in raw[:64]:
+                manager.resync(websocket, tenant)
+                _perf_count("state_resync")
+                # 연타는 2초에 한 번으로 미룬다(버리지 않는다 — 버리면 화면은 다시 안 조른다)
+                _wait = RESYNC_MIN_GAP_S - (time.monotonic() - _last_resync)
+                if _wait > 0:
+                    await asyncio.sleep(_wait)
+                _last_resync = time.monotonic()
+                await manager.publish_state(tenant)
+    except WebSocketDisconnect as _e:
+        _dash_why = "disconnect(code=%s)" % getattr(_e, "code", "?")
+    except Exception as _e:
+        _dash_why = _e.__class__.__name__
     finally:
+        _dash_why = getattr(websocket, "_dash_drop_why", None) or _dash_why
         manager.disconnect(websocket)
+        _note_dash_close(tenant, time.monotonic() - _dash_t0, _dash_why, websocket)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -9801,9 +10925,16 @@ async def receive_report(pc_id: str, request: Request):
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    if not isinstance(data, dict):             # 목록 본문 500 (2026-09-23)
+        raise HTTPException(status_code=400, detail="JSON 객체가 아닙니다")
     nspc = ns(tenant, pc_id)
     data["pc_id"] = nspc
-    await upsert_status(nspc, data)
+    # ★lan_url 입구 검사 (2026-09-23 B2-7)★ — 길이·모양 무제한이라 한 대가 25만 자를 보내면
+    #   내부망 캐시 저장본이 잘려 깨졌다. 모양이 틀리면 비운다(캐시의 마지막 정상값이 대신 뜬다).
+    if "lan_url" in data and data.get("lan_url") and not _lan_url_ok(data.get("lan_url")):
+        data["lan_url"] = ""
+    await upsert_status(nspc, data)            # NaN/Infinity 는 저장 자리에서 None (2026-09-23)
+    await _abyss_note(nspc, data)              # ★어비스 수익 오늘 합계 — WS 입구와 같은 함수(2026-09-23 장부 #104)★
     # 중요 이벤트는 로그 테이블에 저장
     errors = data.get("errors") or []
     if errors:
@@ -9819,6 +10950,11 @@ async def receive_alert(pc_id: str, request: Request):
     """매크로 → 대시보드 실시간 알림. 캡차 3회 실패처럼 '사람이 지금 봐야 하는' 이벤트용.
     본문이 브라우저 DOM과 TTS로 그대로 흘러가므로 길이·문자 제한을 서버에서 건다."""
     tenant = _require_api_key(request)
+    # ★B-TG5 (2026-09-23) 은퇴 가드★ — /report·/log·/char_info 와 같은 자리·같은 모양. 없으면 은퇴 id
+    #   (삭제한 카드)의 알림이 logs 행을 다시 만들고 대시보드 배너·음성으로 울렸다.
+    if ns(tenant, pc_id) in RETIRED_PCS:
+        _mark_retired_seen(ns(tenant, pc_id))
+        return JSONResponse({"ok": True, "retired": True})
     try:
         data = await request.json()
     except Exception:
@@ -9849,7 +10985,7 @@ async def telegram_status(request: Request):
         #   안내가 영영 못 나간다. 읽기 전용이라 정보 노출도 없다(자기 테넌트의 on/off뿐).
         supplied = request.headers.get("X-Api-Key", "")
         for _k, _tn in KEY_TO_TENANT.items():
-            if supplied and hmac.compare_digest(supplied, _k) and tenant_blocked(_tn):
+            if supplied and _ct_eq(supplied, _k) and tenant_blocked(_tn):
                 tenant = _tn
         if not tenant:
             raise HTTPException(status_code=403)
@@ -9892,7 +11028,13 @@ async def telegram_mute(pc_id: str, request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    hours = float(body.get("hours") or 0)
+    # ★숫자가 아니면 400 (2026-09-23)★ — "abc"·[1] 은 500, "nan" 은 만료 없는 항목이 남았다.
+    try:
+        hours = float((body.get("hours") if isinstance(body, dict) else 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="hours 는 숫자")
+    if hours != hours or hours in (float("inf"), float("-inf")):
+        raise HTTPException(status_code=400, detail="hours 는 유한한 숫자")
     base = _base_pc(clean_pc_id(pc_id) or "")
     if not base:
         raise HTTPException(status_code=400, detail="pc_id 이상")
@@ -9904,7 +11046,7 @@ async def telegram_mute(pc_id: str, request: Request):
     _TG_MUTE[_mk] = time.time() + hours * 3600.0
     return JSONResponse({"ok": True, "pc": base, "muted": True,
                          "hours": hours,
-                         "until": time.strftime("%H:%M", time.localtime(_TG_MUTE[_mk]))})
+                         "until": datetime.fromtimestamp(_TG_MUTE[_mk], timezone(timedelta(hours=9))).strftime("%H:%M")})   # KST (서버는 UTC, 2026-09-23)
 
 
 @app.get("/telegram/mute")
@@ -9915,6 +11057,26 @@ async def telegram_mute_list(request: Request):
     return JSONResponse({"muted": {split_ns(k)[1]: round((v - now) / 60.0, 1)
                                    for k, v in _TG_MUTE.items()
                                    if v > now and ns_of(k) == tenant}})
+
+
+ALARM_EVENT_PREFIX = "[알람]"     # 팜뷰 alarmvoice.py 가 이 머리로 알람을 알아본다(FV_API «[알람] 이벤트», #128)
+
+
+async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = False) -> None:
+    """★텔레그램으로 내보낸 알람을 그 PC 로그에 즉시 한 줄 (주인님 #128, 팜뷰 알람 목소리)★
+    — 예전엔 매크로가 보낸 ★뒤★ 남기는 «[텔레그램] 중계 전송» info 줄이 하트비트(30초)에 실려 와 팜뷰 목소리가 ~35초
+    늦었다(텔레그램보다 늦게). 서버가 보내는 순간 DB 에 쓰면 팜뷰 /api/fv/events(5초 폴링)가 5초 안에 줍는다.
+    음소거로 생략한 것은 안 적는다(나가지 않은 알람을 말하지 않게) — 부르는 쪽이 음소거 검사 ★뒤★ 에 부른다.
+    텔레그램 전송 ★뒤★ 에 적는다 — 전송이 실패(502)해도 적되 끝에 «(텔레그램 실패)» 를 붙인다(아이온2 v2 반증 2부:
+    목소리가 텔레그램보다 조용히 더 많이 말하지 않게 — 주인님은 어느 쪽이든 듣고, 텔레그램엔 안 갔음을 안다).
+    본문의 줄바꿈(\\r·\\n)은 빈칸으로 — 로그 한 줄·팜뷰 요약이 줄 단위다. 로그 실패가 알람 응답을 막지 않는다."""
+    body = re.sub(r"[\r\n]+", " ", str(text)).strip()[:300]
+    if tg_failed:
+        body += " (텔레그램 실패)"
+    try:
+        await insert_log(ns(tenant, name), "info", f"{ALARM_EVENT_PREFIX} {name} | {body}")
+    except Exception as e:
+        print(f"[알람] 이벤트 기록 실패 {name}: {e}", flush=True)
 
 
 @app.post("/telegram/send/{pc_id}")
@@ -9934,7 +11096,7 @@ async def telegram_send(pc_id: str, request: Request):
         supplied = request.headers.get("X-Api-Key", "")
         cand = None
         for _k, _tn in KEY_TO_TENANT.items():
-            if hmac.compare_digest(supplied, _k):
+            if _ct_eq(supplied, _k):
                 cand = _tn
         if not (cand and tenant_blocked(cand)):
             raise HTTPException(status_code=403)
@@ -9995,6 +11157,7 @@ async def telegram_send(pc_id: str, request: Request):
                              "reason": "muted",
                              "minutes_left": round(_left / 60.0, 1)})
     mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
+    await _alarm_event(tenant, name, text, tg_failed=mid is None)
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if bool(data.get("expect_reply")):
@@ -10012,11 +11175,13 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
     form = await request.form()
     caption = str(form.get("caption") or "").strip()[:800]
     expect_reply = str(form.get("expect_reply") or "").lower() in ("1", "true", "yes")
-    raw = await file.read()
+    raw = await file.read(8 * 1024 * 1024 + 1)       # ★상한+1 만 읽는다 (2026-09-23)★
     if not raw or len(raw) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="이미지 크기 오류")
     name = clean_pc_id(pc_id)
+    # 캡션 뒤에 «(사진)» — 팜뷰 alarmvoice.summarize 가 «(» 에서 자르므로 앞에 두면 캡션이 통째로 사라진다
     mid = await tg_send_photo(chat, f"{name} | {caption}" if name else caption, raw)
+    await _alarm_event(tenant, name, f"{caption} (사진)" if caption else "(사진)", tg_failed=mid is None)
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if expect_reply:
@@ -10056,7 +11221,7 @@ ACK_DROP_STATUSES = ("cancelled", "rejected")   # 통합 2026-09-12 — CONTRACT
 async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
     """매크로의 ack. ★통합 2026-09-12 (CONTRACTS_대시보드 #1)★ 본문은 선택 —
     {"status":"acked"|"cancelled"|"rejected", "why":"..."}. 없으면 예전처럼 acked.
-    cancelled/rejected 는 pending 일 때만 상태를 바꾼다(cancel_command 와 같은 규칙, §A12) —
+    cancelled/rejected 는 pending ★또는 acked★ 일 때 상태를 바꾼다(B-CQ2 2026-09-23 — 매크로는 받자마자 ack) —
     매크로가 오버라이드로 큐를 버리거나 「이전 명령 처리 중」으로 거부한 것이 이력에 ⛔ 로 보인다.
     예전엔 매크로가 실행 전에 ack 하고 그 뒤 버려도 서버는 acked 뿐이라 ★유실이 안 보였다★."""
     tenant = _require_api_key(request)
@@ -10071,7 +11236,11 @@ async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
     except Exception:
         pass
     if status in ACK_DROP_STATUSES:
-        ok = await cancel_command(cmd_id)
+        # ★B-CQ2 (2026-09-23) acked 에서도 내린다★ — 매크로는 ★받자마자★ ack 하고(report_module
+        #   on_message) 실행 전에 버리거나 거부하면 그 뒤에 cancelled/rejected 를 보낸다. pending 만
+        #   받으면 그 통지가 전부 no-op 이라 CONTRACTS_대시보드 #1 의 ⛔ 가 한 번도 안 떴다.
+        #   대시보드 ✕(cancel_cmd) 는 그대로 pending 만 — 매크로가 가진 걸 사람이 「취소됨」 으로 못 덮는다.
+        ok = await cancel_command(cmd_id, allow_acked=True)
         try:
             await insert_log(ns(tenant, clean_pc_id(pc_id)), "warning",
                              f"[명령] 매크로가 #{cmd_id} 를 {status} 로 돌려보냈다 — {why or '사유 없음'}")
@@ -10091,9 +11260,15 @@ async def cancel_cmd(cmd_id: int, request: Request):
     tenant = _require_session(request)
     if not await _cmd_belongs_to(cmd_id, tenant):
         raise HTTPException(status_code=404)
+    # ★B-CQ10 (2026-09-23) WS 로 이미 보낸 명령은 「취소됨」 이라 말하지 않는다★ — 매크로 ack 가
+    #   오기 전까지 행은 pending 이라 예전엔 ok:true(✕ 명령 취소됨) 였지만 매크로는 이미 갖고 있다.
+    #   행은 그대로 두고(ack 가 오면 acked — 이력이 사실대로) delivered 를 돌려준다 → 화면은 「정지로 끊으세요」.
+    if cmd_id in _CMD_DELIVERED:
+        return JSONResponse({"ok": False, "delivered": True,
+                             "why": "이미 매크로에 전달됨 — 정지 명령으로 끊으세요"})
     ok = await cancel_command(cmd_id)
     await _push_cmd_history(tenant)
-    return JSONResponse({"ok": ok})
+    return JSONResponse({"ok": ok, "delivered": False})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -10160,10 +11335,27 @@ async def receive_updater_logs(pc_id: str, request: Request):
         try:
             t = float(entry.get("ts") or 0)
             if t > 0 and abs(now - t) <= UPD_LOG_TS_SKEW:
-                created = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                # ★B-DB2 (2026-09-23)★ 미래는 지금으로 누른다 — 시계가 빠른 PC 한 대의 줄이 FV
+                #   전역 커서(next_since)를 미래로 밀어 ★함대 전체 로그가 그 시각까지 안 보였다★.
+                created = datetime.fromtimestamp(min(t, now), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                # ★B-FV3 (2026-09-23)★ FV 폴링이 이미 지나간 시각이면 그 위 끝으로 올린다 —
+                #   20초 배치의 줄은 대개 커서보다 옛날이라 `> since` 에 영영 안 걸렸다. 올려도
+                #   id 순서(=업데이터가 찍은 순서)는 그대로다. 원래 시각은 줄 끝에 남긴다.
+                if created < _FV_HORIZON_HI[0]:
+                    message = f"{message} (찍힘 {created[11:]}Z)"
+                    created = _FV_HORIZON_HI[0]
         except Exception:
             created = None
-        await insert_log(key, level, message, created_at=created)
+        # ★B-FV3 보강 (2026-09-23 병합 반증) 시각을 정한 뒤 커밋까지 「진행 중」 으로 걸어 둔다★ — insert_log 를
+        #   기다리는 사이 FV 폴링이 위 끝을 올리고 커서를 이 줄 시각 너머로 내주면, 뒤늦게 커밋된 줄은
+        #   `> since` 에 영영 안 걸렸다. 폴링은 걸린 시각 중 가장 이른 것 ★미만★ 까지만 내준다(fv_events).
+        #   시각 결정 → 등록 사이에 await 가 없어야 한다(한 틱 안에서 원자적).
+        _fl = created or datetime.now(timezone.utc).strftime(_FV_TS_FMT)
+        _FV_INFLIGHT.append(_fl)
+        try:
+            await insert_log(key, level, message, created_at=created)
+        finally:
+            _FV_INFLIGHT.remove(_fl)
         n += 1
     return JSONResponse({"ok": True, "count": n})
 
@@ -10183,6 +11375,11 @@ async def updater_report_status(pc_id: str, request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
     nspc = ns(tenant, pc_id)
+    # ★B-DB5 (2026-09-23)★ 은퇴 id 의 업데이터 보고 — /report 처럼 수신을 한 번 적는다.
+    #   ★저장은 한다★: 업데이터 상태는 물리 PC 것이라 형제 카드(PC-07b 등)가 이 행으로 조인한다
+    #   (_build_full_state_inner 의 ukey). 은퇴 id 의 ★카드만★ 아래 「업데이터 단독」 갈래에서 안 만든다.
+    if nspc in RETIRED_PCS:
+        _mark_retired_seen(nspc)
     data["pc_id"] = nspc
     await upsert_updater_status(nspc, data)
     await push_state(tenant)
@@ -10192,10 +11389,74 @@ async def updater_report_status(pc_id: str, request: Request):
 @app.get("/updater/command/{pc_id}")
 async def updater_poll_command(pc_id: str, request: Request):
     tenant = _require_api_key(request)
-    cmd = await get_pending_updater_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
+    pc_id = _base_pc(clean_pc_id(pc_id))   # ★B-CQ12★ 업데이터 큐 키 = 물리 PC(보내는 쪽과 같은 규칙)
+    _key = ns(tenant, pc_id)
+    _quiet = (time.monotonic() - _FV_LAST_SEEN[0]) > FV_QUIET_SEC
+    cmd = None
+    for _ in range(6):
+        _unk: list = []
+        cmd = await get_pending_updater_command(_key, all_key=ns(tenant, "all"), unknown_out=_unk, fv_quiet=_quiet)
+        for _x in _unk:      # ★팜뷰가 집고 ack 없음 → 실행됐는지 모름 (배포 반증 3차 #1)★ — 업데이터엔 안 준다, 사람이 본다
+            _fv_q_drop_ucmd(_x["id"])
+            try:
+                await insert_log(_key, "WARNING",
+                                 f"[팜뷰] 업데이터 명령 {_x['command']}(#{_x['id']}) — 팜뷰가 집었는데 결과가 안 왔습니다. "
+                                 f"실행됐는지 모름 → 다시 보내지 않았습니다(필요하면 다시 누르십시오)")
+            except Exception:
+                pass
+        if not cmd:
+            break
+        _cmdname = str(cmd.get("command") or "")
+        # ★팜뷰가 이 PC 에서 같은 종류의 더 새 명령을 집었다 (반증 B1)★ — 이 옛 행은 영영 못 받는다. 대기로 두면
+        #   get_pending 이 늘 가장 옛 행을 주므로 이 PC 의 큐 머리를 10분 막는다(2차 F1b) → superseded 로 치우고 다음 행.
+        if _updcmd_fv_newer(_key, _cmdname, cmd["id"]) and cmd.get("pc_id", _key) == _key:
+            await supersede_updater_command(cmd["id"])
+            cmd = None
+            continue
+        # ★한 명령은 한 길로만 (2026-09-23 팜뷰 반증 #1)★ — 팜뷰가 먼저 집은 것은 주지 않고, 여기서 주는
+        #   것은 팜뷰 큐에서 뺀다. 판정과 표시는 await 없이 한 번에(_updcmd_take) — 두 폴링이 끼어들 틈이 없다.
+        _prev = _UPDCMD_OWNER.get(cmd["id"])
+        if not _updcmd_take(cmd["id"], "updater", pc_key=_key, command=_cmdname):
+            cmd = None
+            break
+        # ★집은 뒤 DB 를 다시 본다 (배포 반증 3차 #5)★ — get_pending 을 기다리는 사이 팜뷰가 집고 ok ack 까지 했으면
+        #   (재배포가 겹친 두 인스턴스처럼 소유 표가 서로 안 보일 때도) 행은 이미 fv_claimed/fv_done 이다. 대기가
+        #   아니면 주지 않는다 — 판정·표시는 위 _updcmd_take 가 먼저 했으니 이 await 사이 팜뷰 쪽도 이 행을 못 집는다.
+        try:
+            _st = await updater_command_status(cmd["id"])
+        except Exception:
+            _st = "pending"
+        if _st != "pending":
+            if _prev is None and _UPDCMD_OWNER.get(cmd["id"]) == "updater":
+                _UPDCMD_OWNER.pop(cmd["id"], None)
+            if (_UPDCMD_UP_PC.get((_key, _cmdname)) or (None,))[0] == cmd["id"]:
+                _UPDCMD_UP_PC.pop((_key, _cmdname), None)
+            cmd = None
+            continue
+        break
     if cmd:
+        # ★내준 시각 (v2 반증 1부 B)★ — ack 가 사라진 사이 같은 종류를 또 눌러도 이 행을 superseded 로 안 찍게(DB 라 재배포에도)
+        try:
+            await mark_updater_handed(cmd["id"])
+        except Exception as e:
+            print(f"[updater] 내준 시각 기록 실패 #{cmd['id']}: {e}")
         return JSONResponse({"command": cmd["command"], "args": cmd.get("args", {}), "id": cmd["id"]})
     return JSONResponse({"command": None})
+
+
+async def _upd_has_live_sibling(tenant: str, base: str) -> bool:
+    """★B-CQ12 보강 (2026-09-23)★ 물리 PC base 의 계정 카드(base+b/c/…) 중 은퇴 안 했고 카드 행(pc_status)이
+    있는 것이 하나라도 있으면 True — 그 PC 의 업데이터는 아직 쓰인다(형제 카드가 업데이터 행을 조인, B-DB5)."""
+    for sfx in ACCT_SUFFIX:
+        k = ns(tenant, base + sfx)
+        if k in RETIRED_PCS:
+            continue
+        try:
+            if await get_status(k) is not None:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 @app.post("/updater/command/{pc_id}")
@@ -10210,10 +11471,27 @@ async def dashboard_send_updater_command(pc_id: str, request: Request):
         raise HTTPException(
             status_code=400,
             detail="브로드캐스트 명령은 막혀 있습니다(A7) — PC 를 하나씩 지정하십시오")
-    body = await request.json()
+    # ★B-CQ12 (2026-09-23) 업데이터 큐 키는 물리 PC★ — 업데이터는 PC 당 하나라 base id 로 폴링한다.
+    #   'PC-20b' 로 넣으면 아무도 안 집어 가는 행이 된다(화면은 baseId 로 보내지만 API 는 안 접었다).
+    #   은퇴한 물리 PC 에는 넣지 않는다 — 조용히 쌓이는 대신 이유를 돌려준다.
+    pc_id = _base_pc(clean_pc_id(pc_id))
+    # ★B-CQ12 보강 (2026-09-23 병합 반증) 「은퇴한 PC」 = base 와 형제 카드가 ★전부★ 은퇴(또는 살아 있는 카드 0장)★ —
+    #   base id(PC-20) 는 ★계정1 카드★ 이기도 하다. 계정1 만 은퇴하고 PC-20b 가 도는 PC 는 순환(_rot_acct_excluded)도
+    #   B-DB5(형제 카드가 업데이터 행을 계속 조인)도 정상으로 보는데, 초판은 base 만 보고 그 PC 의 업데이트를 410 으로 막았다.
+    if ns(tenant, pc_id) in RETIRED_PCS and not await _upd_has_live_sibling(tenant, pc_id):
+        raise HTTPException(status_code=410, detail=f"은퇴한 PC 입니다({pc_id}) — 업데이터 명령을 넣지 않았습니다")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 본문이 필요합니다")
+    # ★배포 반증 2차 F6★ 배열 본문·목록 command 가 500 이었다
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON 객체가 필요합니다")
     command = body.get("command")
-    if not command:
-        raise HTTPException(status_code=400, detail="command 필드 필요")
+    if not command or not isinstance(command, str) or len(command) > 64:
+        raise HTTPException(status_code=400, detail="command 필드(글자) 필요")
+    if not isinstance(body.get("args", {}) or {}, dict):
+        raise HTTPException(status_code=400, detail="args 는 객체여야 합니다")
     cmd_id = await insert_updater_command(ns(tenant, pc_id), command, body.get("args", {}))
     # ★팜뷰 큐에도 같이 넣는다(2026-09-22, 폴백 겸용)★ — 위 insert_updater_command 는
     #   그대로 둔다(기존 길이 그대로 살아 있어야 팜뷰가 60초 안에 못 받아가도 안전하다).
@@ -10221,7 +11499,7 @@ async def dashboard_send_updater_command(pc_id: str, request: Request):
     #   전부 이 한 엔드포인트로 모이므로 여기 한 곳만 고치면 셋 다 커버된다.
     _fv_act = FV_UPDCMD_ACT.get(str(command))
     if _fv_act:
-        _fv_updcmd_push(tenant, pc_id, _fv_act)
+        _fv_updcmd_push(tenant, pc_id, _fv_act, ucmd_id=cmd_id)
     return JSONResponse({"ok": True, "id": cmd_id})
 
 
@@ -10283,6 +11561,7 @@ def _list_bug_files(tenant: str, pc_id: Optional[str] = None) -> list[dict]:
 # 디스크만 먹는 게 아니라 목록 API·대시보드 뱃지가 전부 느려진다.
 # ★학습 크롭(ocrlearn_*)은 따로 더 넉넉히 잡는다★ — 그건 '모아야 뱅크가 채워지는'
 #   자산이라 사고 증거와 같은 잣대로 지우면 안 된다.
+_BUG_NAME_SAFE = re.compile(r"[^A-Za-z0-9가-힣._\-]")   # 업로드 파일명 허용 문자(2026-09-23)
 BUG_KEEP_PER_PC = 40        # PC당 일반 스샷(사고 증거) 보관 수
 BUG_KEEP_LEARN  = 120       # PC당 학습 크롭(ocrlearn_/ocrdiff_) 보관 수
 
@@ -10326,6 +11605,9 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     os.makedirs(bdir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     orig = os.path.basename(file.filename or "bug.png")
+    # ★파일명 화이트리스트 (2026-09-23)★ — 이 이름이 대시보드 onclick 속성에 들어간다.
+    #   따옴표 하나로 deleteBug('…') 를 빠져나와 스크립트가 돌았다(encodeURIComponent 는 ' 를 안 바꾼다).
+    orig = _BUG_NAME_SAFE.sub("_", orig)[-120:] or "bug.png"
     # ★.png 강제(2026-07-30 리뷰)★ — 목록·뱃지·prune이 전부 .png만 취급하므로,
     #   다른 확장자는 '보이지도 지워지지도 않는' 무한 축적 경로가 된다(볼륨 고갈).
     #   클라이언트는 항상 png를 보내므로 정상 경로엔 영향 없음. 대문자 .PNG는 소문자화.
@@ -10338,7 +11620,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     dest = os.path.join(bdir, filename)
     # ★크기 상한(2026-07-27 보안감사): 무제한이면 통짜로 메모리에 올려 OOM,
     #   반복 업로드로 /data를 채워 DB까지 마비시킬 수 있다. 스샷은 1280x720 PNG라 8MB면 충분.★
-    content = await file.read()
+    content = await file.read(8 * 1024 * 1024 + 1)   # ★넘치는 만큼만 읽는다 (2026-09-23) — 예전엔 통째로★
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
     with open(dest, 'wb') as f:
@@ -10357,7 +11639,9 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
     #   (= 링크 한 번에 증거 스샷 전량 소실). 대시보드에서 온 요청만 허용한다.★
     _ref = request.headers.get("referer", "") or request.headers.get("origin", "")
     _host = request.headers.get("host", "")
-    if _host and _ref and _host not in _ref:
+    # ★호스트는 정확히 같아야 한다 (2026-09-23)★ — 예전엔 부분문자열이라
+    #   `https://<우리호스트>.evil.example/` 에서 온 요청이 통과해 스샷이 전부 지워졌다.
+    if _host and _ref and _urlparse.urlsplit(_ref).netloc.lower() != _host.lower():
         raise HTTPException(status_code=403, detail="cross-site request rejected")
     if not _ref:      # 링크·이미지 태그 직접 호출(Referer 없음)도 거부
         raise HTTPException(status_code=403, detail="direct request rejected")
@@ -10365,30 +11649,43 @@ async def download_bugs_zip(request: Request, pc_id: Optional[str] = None):
     if not bugs:
         raise HTTPException(status_code=404, detail="다운로드할 버그 이미지 없음")
     bdir = tenant_bugs_dir(tenant)
-    buf = io.BytesIO()
-    downloaded_paths = []
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for bug in bugs:
-            path = os.path.join(bdir, bug["filename"])
-            if os.path.exists(path):
-                zf.write(path, bug["filename"])
-                downloaded_paths.append(path)
-    buf.seek(0)
-    # ZIP 빌드 완료 후 파일 삭제
-    for path in downloaded_paths:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
+
+    def _build_zip():
+        # ★스레드에서 (2026-09-23)★ — 동기 zip 이 이벤트 루프를 수 초 세웠다(60장 2초 실측).
+        #   PNG 는 이미 압축돼 있어 DEFLATE 는 시간만 먹는다 → STORED.
+        buf = io.BytesIO()
+        done = []
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED) as zf:
+            for bug in bugs:
+                path = os.path.join(bdir, bug["filename"])
+                if os.path.exists(path):
+                    zf.write(path, bug["filename"])
+                    done.append(path)
+        return buf.getvalue(), done
+
+    data, downloaded_paths = await asyncio.to_thread(_build_zip)
+    # ★응답을 먼저 만든 뒤에 지운다 (2026-09-23)★ — 한글 pc_id 면 헤더 인코딩이 ★파일을 지운 뒤★
+    #   UnicodeEncodeError(500)라 스샷만 사라졌다. ASCII 이름 + filename*=UTF-8''.
+    zip_name = f"bugs_{pc_id or 'all'}_{int(time.time())}.zip"
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]", "_", zip_name)
+    resp = Response(
+        data,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=\"%s\"; filename*=UTF-8''%s"
+                 % (ascii_name, _urlparse.quote(zip_name, safe=""))},
+    )
+
+    def _remove_all():
+        for path in downloaded_paths:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    await asyncio.to_thread(_remove_all)
     # 상태 브로드캐스트 (뱃지 갱신)
     _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
-    zip_name = f"bugs_{pc_id or 'all'}_{int(time.time())}.zip"
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={zip_name}"},
-    )
+    return resp
 
 
 @app.get("/bugs")
@@ -10704,6 +12001,122 @@ async def delete_bug_image(filename: str, request: Request):
 # Char Info API (macro → server, server → dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _str_or_none(v):
+    return v if isinstance(v, str) else None
+
+
+# ★PC 시계 어긋남 (반증 v2 #1 → v2 반증 1부 A, 2026-09-24)★ — 판독 시각(PC 시계)을 서버 시계로 옮길 «PC 시계로 보낸 시각».
+#   ① 요청마다 그 요청 안의 직접 증거만 쓴다: sent_at > (merge·재전송 아님) collected_at = 보내기 직전 _now()
+#      > (merge·재전송 아님·창고키나 실음) kina_read_at — `report_module._stamp_kina` 는 새로 읽은 판에만 창고키나를 싣고
+#      그때 kina_read_at = 보내기 직전 _now() 다(merge 는 새 판독이 아니면 total_kina 를 뺀다).
+#   ② 배운 어긋남은 ★재전송(resend:true)에만★ — 마지막 표본 3개가 2시간 안이고 서로 60초 안에서 맞을 때만 그 가운데값.
+#      v2 는 마지막 한 값을 merge 에도 썼다 → NTP 로 고친 PC 의 merge 판독이 두 번 빠지거나(400) 버려져 얼었고(2·2b),
+#      엉터리 보고 하나가 배운 값을 뒤집었다(1·1b·1d). 모르거나 낡았으면 None = PC 시계를 믿는다(버리지 않는다).
+#   ③ 하루 넘게 어긋난 «증거» 는 증거가 아니다(CMOS·시간대 사고) — 판정에도 배우기에도 안 쓴다.
+#   ④ 창고키나를 못 읽은 보고(0)에서는 배우지 않는다. 표본은 pc_clock 표에 남긴다(재배포 뒤에도, 5c).
+_PC_CLOCK: dict = {}                # 카드 → [[서버 epoch, 서버−PC 초], …] (pc_clock 표의 캐시)
+PC_CLOCK_OFS_MAX_S = 86400          # 이보다 크게 어긋난 증거는 버린다
+PC_CLOCK_N = 3                      # 배운 어긋남을 쓰려면 마지막 표본이 이만큼
+PC_CLOCK_FRESH_S = 2 * 3600         # …이 시간 안에
+PC_CLOCK_AGREE_S = 60               # …서로 이만큼 안에서 맞아야 한다
+PC_CLOCK_KEEP = 10
+
+
+def _parse_utc_naive(v):
+    try:
+        d = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        if d.tzinfo is not None:
+            d = d.astimezone(timezone.utc).replace(tzinfo=None)
+        return d
+    except (ValueError, OverflowError, AttributeError):
+        return None
+
+
+async def _pc_clock_samples(nspc: str) -> list:
+    if nspc not in _PC_CLOCK:
+        _PC_CLOCK[nspc] = await pc_clock_get(nspc)
+    return _PC_CLOCK[nspc]
+
+
+def _pc_clock_learned(samples: list, now_ts: float):
+    """마지막 PC_CLOCK_N 개가 최근이고 서로 맞으면 그 가운데값(초), 아니면 None."""
+    last = samples[-PC_CLOCK_N:]
+    if len(last) < PC_CLOCK_N or any(now_ts - t > PC_CLOCK_FRESH_S or t - now_ts > 60 for t, _ in last):
+        return None
+    ofs = sorted(o for _, o in last)
+    if ofs[-1] - ofs[0] > PC_CLOCK_AGREE_S:
+        return None
+    return ofs[len(ofs) // 2]
+
+
+async def _kina_sent_at(nspc: str, data: dict, merge: bool, total_kina: int = 0) -> "tuple[str | None, bool, bool]":
+    """(PC 시계로 보낸 시각 또는 None, 배운 값인가, 방금 보낸 새 전송인가). None = 모름 → PC 시계를 믿는다.
+    «방금 보낸 새 전송» = 재전송이 아니고 직접 증거가 있으며 그것까지 넣은 마지막 표본 3개가 서로 맞는다 — 옛 본문이 그대로
+    다시 온 것(옛 collected_at)은 표본이 튀어 여기서 걸러진다. upsert 가 «밀려난 옛 판독» 규칙을 이때는 안 쓴다(반증 에이전트 #6:
+    순번이 1 로 돌아가고 시계가 뒤로 고쳐진 카드의 새 판독이 전부 버려졌다)."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_ts = now.replace(tzinfo=timezone.utc).timestamp()
+    resend = data.get("resend") is True
+    cands = [_str_or_none(data.get("sent_at"))]
+    if not resend and not merge:
+        cands.append(_str_or_none(data.get("collected_at")))
+    if not resend and merge and total_kina > 0:
+        cands.append(_str_or_none(data.get("kina_read_at")))
+    for sent in cands:
+        if sent is None:
+            continue
+        d = _parse_utc_naive(sent)
+        if d is None:
+            return sent, False, False   # 못 읽는 sent_at 은 판정이 알아서 버린다(옛 동작 그대로)
+        ofs = (now - d).total_seconds()
+        if abs(ofs) >= PC_CLOCK_OFS_MAX_S:
+            return None, False, False   # ③ 엉터리 증거 — 모름으로
+        fresh = False
+        if total_kina > 0:              # ④
+            smp = list(await _pc_clock_samples(nspc)) + [[now_ts, ofs]]
+            smp = smp[-PC_CLOCK_KEEP:]
+            _PC_CLOCK[nspc] = smp
+            try:
+                await pc_clock_put(nspc, smp)
+            except Exception as e:
+                print(f"[pc_clock] 저장 실패 {nspc}: {e}")
+            fresh = not resend and _pc_clock_learned(smp, now_ts) is not None
+        return sent, False, fresh
+    if not resend:
+        return None, False, False       # merge 인데 창고키나를 안 실음 — 판정할 판독이 없다
+    ofs = _pc_clock_learned(await _pc_clock_samples(nspc), now_ts)
+    if ofs is None:
+        return None, False, False
+    return (now - timedelta(seconds=ofs)).strftime("%Y-%m-%dT%H:%M:%S"), True, False
+
+
+_KINA_STR_RE = re.compile(r"[0-9]{1,3}(,[0-9]{3})+|[0-9]+", re.ASCII)
+
+
+def _kina_int(v) -> int:
+    """창고키나 값 → 정수. ★엄격 (v2 반증 1부)★ — 1.9 가 1 로 잘리고 −0.5 가 0 으로, 전각 «１２３»·«1_000» 이 int() 로
+    들어갔다. 받는 것: 정수(불 제외) · 소수부 0 인 실수 · ASCII 숫자(세 자리 쉼표 허용). 나머지는 400. 범위는 호출부."""
+    if v is None:
+        return 0
+    if isinstance(v, bool):                       # True 가 1 키나로 들어갔다 (배포 반증 D)
+        raise HTTPException(status_code=400, detail="total_kina 는 숫자")
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")) or not v.is_integer():
+            raise HTTPException(status_code=400, detail="total_kina 는 정수")
+        return int(v)
+    if isinstance(v, str):
+        t = v.strip()
+        if t == "":
+            return 0
+        # 길이 먼저 — 4300 자리 넘는 숫자열은 int() 가 ValueError(파이썬 자릿수 상한)로 500 이었다(v3 델타 반증 #2).
+        #   KINA_MAX(10^15)는 쉼표 포함 21자라 32자면 넉넉하다(범위 400 은 호출부).
+        if len(t) <= 32 and _KINA_STR_RE.fullmatch(t):
+            return int(t.replace(",", ""))
+    raise HTTPException(status_code=400, detail="total_kina 는 숫자")
+
+
 @app.post("/char_info/{pc_id}")
 async def receive_char_info(pc_id: str, request: Request):
     """매크로가 수집한 캐릭터 세부정보 저장"""
@@ -10717,22 +12130,71 @@ async def receive_char_info(pc_id: str, request: Request):
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON 객체가 아닙니다")
     nspc = ns(tenant, pc_id)
-    total_kina = data.get("total_kina", 0)
+    # ★받는 자리에서 형을 맞춘다 (2026-09-23)★ — 그대로 저장하면 뒤에서 터졌다:
+    #   total_kina "1,234,567" → kina_adjust 500·FV 합계에서 조용히 빠짐 / slot "3" 과 3 이 섞이면
+    #   병합 정렬 TypeError / slot 에 꺾쇠를 넣으면 대시보드 AI 계획표 XSS.
+    total_kina = _kina_int(data.get("total_kina", 0))
+    # ★범위 (배포 반증 D #2)★ — 2^63 이상·1e30·40자리 문자열이 SQLite OverflowError(500)였다
+    if not 0 <= total_kina <= KINA_MAX:
+        raise HTTPException(status_code=400, detail=f"total_kina 는 0~{KINA_MAX:,}")
+    _kseq = data.get("kina_seq")
+    if _kseq is not None:
+        if isinstance(_kseq, bool) or not isinstance(_kseq, int) or not 0 <= _kseq < KINA_SEQ_MAX:
+            raise HTTPException(status_code=400, detail="kina_seq 는 0 이상 정수(2^53 미만)")
+    if data.get("collected_at") is not None and not isinstance(data.get("collected_at"), str):
+        raise HTTPException(status_code=400, detail="collected_at 는 문자열(UTC 시각)")   # 목록·객체가 500 이었다
     chars = data.get("characters", [])
+    if not isinstance(chars, list):
+        raise HTTPException(status_code=400, detail="characters 는 목록")
+    chars = [c for c in chars if isinstance(c, dict)]
+    for c in chars:
+        if c.get("slot") is not None:
+            try:
+                c["slot"] = int(c["slot"])
+            except (TypeError, ValueError, OverflowError):
+                raise HTTPException(status_code=400, detail="slot 은 정수")
     merge = bool(data.get("merge", False))   # 단일 캐릭 수집: slot 기준 병합(나머지 보존)
     # ★수집 시각 = '전체수집 기준'(2026-07-25, 사용자 정의): 단일수집(merge)은 구버전 매크로가
     #   새 시각을 보내와도 무시하고 기존(전체수집) 시각 유지★
     ca = None if merge else (data.get("collected_at") or None)
-    merged = await upsert_char_info(nspc, total_kina, chars, merge=merge, collected_at=ca)
-    # 병합 시 최종 total_kina/collected_at을 다시 읽어 브로드캐스트(기존값 유지분 반영)
-    final_kina = total_kina
+    _replay: dict = {}
+    # ★창고키나 판독 표식(SHARED_ISSUES_대시보드 KF1)★ — kina_read_at(UTC, 창고를 실제로 읽은 시각)·kina_seq.
+    #   있으면 판독 시각으로, 없으면(옛 매크로) 장부 사슬로 재전송을 가른다(database.upsert_char_info).
+    #   sent_at(선택, 매크로가 보내는 순간의 PC 시계 UTC) 이 오면 PC 시계 어긋남을 판독 시각에서 뺀다(반증 D #4).
+    #   ★sent_at 이 없으면 collected_at 을 쓴다 (반증 v2 #1)★ — 지금 매크로는 sent_at 을 안 보낸다. 대신
+    #   `report_module.send_char_info` 는 merge 가 아니면 collected_at = 보내기 직전 _now()(같은 PC 시계, POST 한 번·
+    #   15초 상한)라 그게 곧 보낸 시각이다. 재전송(resend:true)·merge 는 옛 collected_at 을 싣으므로 쓰지 않는다.
+    #   없으면 PC 시계를 그대로 믿어, 1시간 느린 PC 는 판매를 두 번 빼고(700→400) 10분 빠른 PC 는 창고키나가 얼었다.
+    #   재전송은 카드별로 배운 어긋남으로 — 최근 3개가 맞을 때만, 아니면 PC 시계(_kina_sent_at, v2 반증 1부 A).
+    _sent, _learned, _fresh = await _kina_sent_at(nspc, data, merge, total_kina)
+    merged = await upsert_char_info(nspc, total_kina, chars, merge=merge, collected_at=ca, replay_out=_replay,
+                                    kina_seq=_kseq, kina_read_at=_str_or_none(data.get("kina_read_at")),
+                                    sent_at=_sent, sent_learned=_learned, fresh_send=_fresh)   # 표식이 엉터리면 무시하고 저장(L-33)
+    if _replay:
+        # ★재전송된 옛 창고키나에 팜뷰 차감 장부를 다시 적용했다(2026-09-23)★ — 증거는 그 PC 로그줄(A2)
+        if _replay.get("why"):
+            _msg = (f"[팜뷰] 창고 키나 판독 {_replay['received']:,} 무시 — 저장값 {_replay['applied']:,} 유지"
+                    f" ({_replay['why']} — PC 시계를 확인하십시오)")
+        elif _replay.get("stale"):
+            _msg = (f"[팜뷰] 창고 키나 옛 판독 {_replay['received']:,} 무시 — 저장값 {_replay['applied']:,} 유지"
+                    f" (판독 시각이 마지막 판독보다 옛것)")
+        else:
+            _msg = (f"[팜뷰] 창고 키나 재전송 {_replay['received']:,} → 장부 다시 적용 {_replay['applied']:,} "
+                    f"(tid {', '.join(_replay['tids'])})")
+        await insert_log(nspc, "info", _msg)
+        _fv_snap["body"] = None
+    # 최종 total_kina/collected_at을 다시 읽어 브로드캐스트(기존값 유지분·장부 재적용분 반영)
+    #   ★merge 가 아니어도 다시 읽는다 (2026-09-23 반증 R-5)★ — 전체수집이 키나를 못 읽어 0 을 보내면 DB 는
+    #   기존값을 지키는데 화면 프레임만 0 을 뿌렸다.
+    final_kina = _replay["applied"] if _replay else total_kina   # 화면 char_info 프레임도 장부 반영값으로
     final_ca = data.get("collected_at", "")
-    if merge:
-        info = await get_char_info(nspc)
-        if info:
-            final_kina = info.get("total_kina", total_kina)
-            final_ca = info.get("collected_at", final_ca)
+    info = await get_char_info(nspc)
+    if info:
+        final_kina = info.get("total_kina", final_kina)
+        final_ca = info.get("collected_at", final_ca)
     await manager.broadcast({"type": "char_info", "pc_id": pc_id,
                               "total_kina": final_kina, "chars": merged,
                               "collected_at": final_ca}, tenant)
@@ -10743,10 +12205,13 @@ async def receive_char_info(pc_id: str, request: Request):
 async def set_slot_filter(pc_id: str, request: Request):
     """대시보드 → 슬롯 활성화/비활성화 저장 + 매크로에 명령 전달"""
     tenant = _require_session(request)
-    body = await request.json()
-    filters = body.get("filters", {})
-    # int 키로 정규화
-    filters = {int(k): bool(v) for k, v in filters.items()}
+    try:
+        body = await request.json()
+        filters = body.get("filters", {})
+        # int 키로 정규화 — ★숫자 아닌 키·목록 본문은 400 (2026-09-23, 예전엔 500)★
+        filters = {int(k): bool(v) for k, v in filters.items()}
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="filters 는 {슬롯번호: bool}")
     nspc = ns(tenant, pc_id)
     await upsert_slot_filters(nspc, filters)
     # 매크로에 set_slot_filter 명령 전달 (※인자 순서 버그 수정: command, args, cmd_id)
@@ -10876,7 +12341,9 @@ CORRIDOR_KEY = "corridor_prog_all"
 async def _corridor_persist():
     """CORRIDOR_PROG 전체를 KV에 저장(마지막 쓰기가 곧 전체 상태 — 부분 갱신 경합 없음)."""
     try:
-        await set_setting(CORRIDOR_KEY, json.dumps(CORRIDOR_PROG, ensure_ascii=False)[:200000])
+        # ★직렬화본을 자르지 않는다 (2026-09-23 B2-6)★ — [:200000] 은 깨진 JSON 을 남겨 재배포 때
+        #   ★전 테넌트★ 회랑 진행이 통째로 사라졌다. 크기는 입구(_corridor_clean)·테넌트별 상한이 막는다.
+        await set_setting(CORRIDOR_KEY, json.dumps(CORRIDOR_PROG, ensure_ascii=False))
     except Exception as e:
         print(f"[corridor] 영속 저장 실패(무시): {e}")
 
@@ -10887,10 +12354,42 @@ async def _corridor_restore():
         if raw:
             data = json.loads(raw)
             if isinstance(data, dict):
-                CORRIDOR_PROG.update(data)
+                CORRIDOR_PROG.update({str(k): v for k, v in data.items() if isinstance(v, dict)})
+                for _t in {ns_of(k) for k in CORRIDOR_PROG}:     # ★옛 저장본의 폭주분도 상한으로 (2026-09-23 B2-6)★
+                    _tenant_cap(CORRIDOR_PROG, _t, CORRIDOR_TENANT_MAX,
+                                lambda k: _num_or0((CORRIDOR_PROG.get(k) or {}).get("ts")))
                 print(f"[corridor] 진행 스냅샷 복원: {len(CORRIDOR_PROG)}대")
     except Exception as e:
         print(f"[corridor] 복원 실패(무시): {e}")
+
+
+def _num_or0(v) -> float:
+    try:
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+
+CORRIDOR_TENANT_MAX = 200     # 한 테넌트 스냅샷 최대 수(함대 24대 × 계정 접미사 넉넉히)
+CORRIDOR_SLOTS_MAX = 16
+
+
+def _corridor_clean(data) -> dict:
+    """★매크로가 보내는 필드만 받는다 (2026-09-23 B2-6)★ — lc/corridor.py 가 보내는 것:
+    our{lower,middle} · slots{"1":{lower,middle}} · remaining · total · reset_key.
+    예전엔 본문을 통째로 저장해 한 건 2MB 도 들어갔고 모양이 틀리면 /characters 가 터질 수 있었다."""
+    def _num(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and abs(v) < 1e9 else None
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="본문은 객체여야 합니다")
+    our_in = data.get("our") if isinstance(data.get("our"), dict) else {}
+    our = {f: _num(our_in.get(f)) for f in ("lower", "middle") if f in our_in}
+    slots = {}
+    for k, e in list((data.get("slots") if isinstance(data.get("slots"), dict) else {}).items())[:CORRIDOR_SLOTS_MAX]:
+        if isinstance(e, dict):
+            slots[str(k)[:8]] = {f: _num(e.get(f)) for f in ("lower", "middle") if _num(e.get(f)) is not None}
+    return {"our": our, "slots": slots, "remaining": _num(data.get("remaining")),
+            "total": _num(data.get("total")), "reset_key": str(data.get("reset_key") or "")[:32]}
 
 
 def _corridor_cutoff() -> float:
@@ -10917,8 +12416,16 @@ async def save_corridor_progress(pc_id: str, request: Request):
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    if not isinstance(data, dict):             # 목록 본문 500 (2026-09-23)
+        raise HTTPException(status_code=400, detail="JSON 객체가 아닙니다")
+    data = _corridor_clean(data)
     data["ts"] = time.time()
-    CORRIDOR_PROG[ns(tenant, pc_id)] = data
+    _ck = ns(tenant, pc_id)
+    _new = _ck not in CORRIDOR_PROG
+    CORRIDOR_PROG[_ck] = data
+    if _new:                           # ★테넌트별 상한 — 넘치면 가장 오래 소식 없는 스냅샷부터 (2026-09-23 B2-6)★
+        _tenant_cap(CORRIDOR_PROG, tenant, CORRIDOR_TENANT_MAX,
+                    lambda k: _num_or0((CORRIDOR_PROG.get(k) or {}).get("ts")) if k != _ck else float("inf"))
     await _corridor_persist()          # 재배포에도 살아남게(2026-08-07)
     await manager.broadcast({"type": "corridor_progress", "pc_id": pc_id,
                              "data": {"remaining": data.get("remaining"),
@@ -10964,6 +12471,16 @@ async def all_corridor_progress(request: Request):
 # 전체 캐릭터 테이블 API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _int_or_none(v):
+    """정수로 읽히면 int, 아니면 None (bool·NaN·문자 섞임 포함, 2026-09-23)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        return None
+    try:
+        return int(v)
+    except (ValueError, OverflowError):
+        return None
+
+
 @app.get("/characters")
 async def get_all_characters(request: Request):
     """해당 테넌트 PC들의 모든 캐릭터 정보를 플랫 테이블로 반환"""
@@ -10985,18 +12502,23 @@ async def get_all_characters(request: Request):
         t, raw = split_ns(k)
         if t != tenant or (v.get("ts") or 0) < _cor_cut:   # 리셋 경계 지난 스냅샷 제외
             continue
-        our = v.get("our") or {}
-        ol, om = our.get("lower"), our.get("middle")
-        for s_str, e in (v.get("slots") or {}).items():
+        # ★PC 가 보낸 값 그대로라 형을 믿지 않는다 (2026-09-23)★ — lower=null·"2"·slots=[…] 하나가
+        #   GET /characters 를 테넌트 통째로 500 으로 만들었다. 숫자가 아니면 '?'(모름).
+        our = v.get("our") if isinstance(v.get("our"), dict) else {}
+        ol, om = _int_or_none(our.get("lower")), _int_or_none(our.get("middle"))
+        _slots = v.get("slots") if isinstance(v.get("slots"), dict) else {}
+        for s_str, e in _slots.items():
             try:
                 s = int(s_str)
             except Exception:
                 continue
-            dl, dm = e.get("lower", 0), e.get("middle", 0)
-            cor_map[(raw, s)] = (f"하{dl}/{ol if ol is not None else '?'}"
-                                 f"·중{dm}/{om if om is not None else '?'}")
-            cor_full[(raw, s)] = (ol is not None and dl >= ol
-                                  and om is not None and dm >= om)
+            if not isinstance(e, dict):
+                continue
+            dl, dm = _int_or_none(e.get("lower", 0)), _int_or_none(e.get("middle", 0))
+            cor_map[(raw, s)] = (f"하{dl if dl is not None else '?'}/{ol if ol is not None else '?'}"
+                                 f"·중{dm if dm is not None else '?'}/{om if om is not None else '?'}")
+            cor_full[(raw, s)] = (ol is not None and dl is not None and dl >= ol
+                                  and om is not None and dm is not None and dm >= om)
     rows = []
     for info in all_info:
         pc_id = split_ns(info["pc_id"])[1]
@@ -11013,7 +12535,8 @@ async def get_all_characters(request: Request):
                 "power_power": ch.get("power_power", 0),
                 "odd_energy": ch.get("odd_energy", ""),
                 "daily_ticket": ch.get("daily_ticket", ""),
-                "nightmare_ticket": ch.get("nightmare_ticket", 0),
+                # 못 읽었으면 null — 0 으로 두면 표에 「0/14」 가 떠서 「다 썼다」 로 읽혔다(2026-09-23)
+                "nightmare_ticket": ch.get("nightmare_ticket"),
                 "awakening_ticket": ch.get("awakening_ticket", 0),
                 "sanctuary": ch.get("sanctuary", ""),
                 "mail_count": ch.get("mail_count", 0),
@@ -11027,7 +12550,9 @@ async def get_all_characters(request: Request):
                 "gakin_kina": ch.get("gakin_kina", 0),
                 "trade_kina": ch.get("trade_kina", 0),
                 "total_kina": total_kina,
-                "collected_at": collected_at,
+                # ★B-JS1 (2026-09-23)★ 단일수집(merge)으로 들어온 캐릭은 자기 시각을 갖는다 —
+                #   없으면(옛 행·전체수집) 행 시각. 화면의 리셋 보정이 이 값 하나만 본다.
+                "collected_at": ch.get("collected_at") or collected_at,
                 "nightmare_progress": nm_map.get((pc_id, slot), ""),
                 "corridor_progress": cor_map.get((pc_id, slot), ""),
                 "corridor_full": cor_full.get((pc_id, slot), False),
@@ -11078,7 +12603,9 @@ async def _load_version_json_async() -> dict:
         #   이 줄이 없으면 24대가 줄을 서서 ★차례로 24번★ GitHub 을 두드린다(시험으로 확인).
         if _version_cache["data"] and time.time() - _version_cache["ts"] < VERSION_CACHE_TTL_S:
             return _version_cache["data"]
+        _t0 = time.monotonic()
         data = await asyncio.to_thread(_load_version_json)
+        _perf_note("version_fetch", (time.monotonic() - _t0) * 1000)   # GitHub 대기(최악 14초)를 따로 잰다
         # ★캐시는 여기서도 채운다★ — 안쪽 함수가 어느 갈래(raw·api·구운 사본)로 돌아왔든
         #   결과가 쓸 만하면 다음 사람은 캐시를 보게 한다.
         if isinstance(data, dict) and (data.get("exe") or {}).get("version"):
@@ -11288,9 +12815,16 @@ async def check_purge(request: Request):
 @app.post("/check")
 async def updater_check(request: Request):
     """updater.exe가 호출 — exe/이미지/updater 업데이트 필요 여부 응답"""
-    body = await request.json()
+    try:
+        body = await request.json()        # ★깨진 JSON·목록 본문은 400 (2026-09-23, 예전엔 500)★
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 파싱 실패")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON 객체가 아닙니다")
     client_exe_ver     = body.get("exe_version", "0.0.0")
     client_img_hashes  = body.get("image_hashes", {})
+    if not isinstance(client_img_hashes, dict):   # 목록이면 .get 에서 500 (2026-09-23)
+        client_img_hashes = {}
     client_updater_ver = body.get("updater_version", "0.0.0")
     client_edition     = body.get("edition", "main")   # 렌탈 채널(2026-07-26): rental이면 rental exe 배포
 
@@ -11305,7 +12839,7 @@ async def updater_check(request: Request):
     key_tenant = None
     if _supplied_key and not _key_probe_blocked(_ip):
         for _k, _tn in KEY_TO_TENANT.items():
-            if hmac.compare_digest(_supplied_key, _k):
+            if _ct_eq(_supplied_key, _k):
                 key_tenant = _tn
         if not key_tenant:
             _key_probe_failed(_ip)      # 키 오라클 방지(2026-07-27 조치를 여기에도 적용)
@@ -11447,6 +12981,15 @@ ROT_COLLECT_PER_CHAR = 250.0          # 캐릭 1명당 여유(초) — ★통합
                                       #   어비스 시간 판독 포함). 150 이면 22분에 ★멀쩡한 수집을 죽였다★(SHARED_ISSUES_아이온2 #1, 장부 #756)
 ROT_COLLECT_HARD_MAX = 2400.0         # 캐릭이 아무리 많아도 40분 (통합 2026-09-12: 30분은 6캐릭 실측 28.5분에 붙어 있었다)
 ROT_SWITCH_MAX   = 1200.0             # 계정전환(본컴+원격컴+재시작) 대기 상한
+# ★전환 상한은 «마지막 전환 명령» 부터 잰다 · 전환이 진행 중이면 늘린다 (2026-09-24 PC-21, 사고 522 부류)★
+#   00:18:50 순환이 switch_launcher → 00:23 첫 시도 실패 → 00:36 사람이 한 대 재시도(switch_account) → 00:37 본컴 전환 진행 중
+#   → 00:38:50 «계정2 전환이 20분째 안 끝났습니다» 로 ★전환 도중★ 순환이 꺼졌다(시계가 첫 명령 기준이었다).
+#   ① 이 PC(카드 전부)에 단계 시작 뒤 새 전환 명령이 들어왔으면 시계를 그 명령 시각부터 다시 잰다(명령마다 한 번).
+#   ② 그래도 상한을 넘었는데 카드가 지금 acct_switching 을 신선하게(5분 안) 보고 중이면 멈추지 않고
+#      ROT_SWITCH_HARD(단계 시작 또는 다시 잰 시각부터)까지 늘린다 — 무한 대기는 없다(그물은 남는다).
+ROT_SWITCH_HARD  = 2400.0             # 진행 중 연장의 끝(40분)
+ROT_SWITCH_CMDS  = ("switch_launcher", "switch_account")
+ROT_SWITCH_PROGRESS_FRESH = 300       # acct_switching 보고가 이 초 안이어야 «진행 중»
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ★★사고 188 (2026-08-24) — 순환이 ★자기가 일으킨 재시작★ 에 자살한다★★
@@ -11505,6 +13048,23 @@ def _rot_boot_grace(st: dict) -> dict:
         return {"expect_restart": False}      # 이미 그 부팅을 봤다 — 다시 세우지 않는다
     return {"expect_restart": True, "expect_until": _rot_now() + ROT_BOOT_GRACE}
 ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
+# ★사냥으로 치는 상태 (2026-09-24 재지시 #1 P0 — 「어비스·회랑·악몽 중에 사냥 진입 실패 오탐」)★ — 매크로는 사냥 스레드가
+#   돌 때 세션에 따라 hunting 을 awakening·dungeon·nightmare·corridor·abyss 로 바꿔 보고한다(lc/config.py report_status
+#   remap). 순환이 hunting·moving 만 사냥으로 보면 어비스에서 ▶시작한 카드가 7분(ROT_START_MAX) 뒤 «사냥이 안 잡힙니다» ⛔.
+#   ★단 «사냥 시작 확인» 은 셋뿐이다(v4 반증 F1)★ — corridor·nightmare·dungeon·awakening 은 매크로가 ★세션★ 표시로
+#   보고한다(dungeon.py·nightmare.py·awakening.py·corridor.py·config.py remap). 사람이 누른 세션이 ▶start 를 밀어내면
+#   (loot.py 684-704 «X 진행 중 → 'start' 거부») 그걸 사냥으로 받는 순간 순환은 사냥 단계로 넘어가 ★12시간 침묵★ 했다.
+#   → 세션 넷은 «세션 중 대기»: 끝나 idle 이 되면 start 를 ★한 번★ 다시(전환 단계 idle 길로 되돌려 완주 판정도 같은 길),
+#     세션 대기 전체는 ROT_SESSION_MAX 로 묶는다.
+ROT_HUNT_OK      = ("hunting", "moving", "abyss")                          # 사냥 시작 확인
+ROT_SESSION      = ("corridor", "nightmare", "dungeon", "awakening")      # 세션 중 — 사냥 아님, 끝나길 기다린다
+ROT_HUNT_LIKE    = ROT_HUNT_OK + ROT_SESSION                                # 계속 움직이는 상태(_rot_active 신선도)
+ROT_SESSION_MAX  = 5400.0             # 세션 중 대기 전체 상한(첫 세션 목격부터, 90분) — 넘으면 ⛔
+# ★세션 대기로 기다리는 상태 (v4 델타 반증)★ — 세션 넷 + 사람이 손대야 풀리는 두 대기(ROT_HUMAN_WAIT).
+#   전환·시작 대기 중 목표 카드가 이 상태면 명령을 보내지 않고 기다린다(각성전 대기에 start 를 넣으면 세션이 깨지고,
+#   악몽 대기는 사람이 보스를 잡는 구간일 수 있다). 옛 판은 이 둘을 «사냥 안 잡힘» 으로 7분(작업은 20분)에 ⛔ 했다.
+ROT_SESS_HOLD    = ROT_SESSION + ("nightmare_wait", "awakening_wait")
+ROT_SESS_IDLE_N  = 2                  # 세션 뒤 idle 이 이만큼 ★연속 틱★ 이어야 ▶start 재시작(한 번뿐)을 쓴다 — 한 틱 깜빡임에 안 쓴다
 # ★사냥 단계 절대 상한★ — 예전엔 「사냥 상한 < 무장 수명(TTL)」 을 지켜야 했다.
 #   ★TTL 이 없어졌으므로(2026-09-09 주인님 지시) 이제 이 값이 사냥 단계의 유일한 상한이다.★
 # ★사고 611★ ROT_HUNT_MAX(사냥 단계 14시간 상한)는 없앴다 — 주인님 지시. 좀비는 `not active` 로 갈린다.
@@ -11602,7 +13162,8 @@ ROT_ST_KOR = {"hunting": "사냥", "moving": "이동", "selling": "판매",
               "captcha": "캡차", "dungeon": "일일던전", "nightmare": "악몽",
               "awakening": "각성전", "corridor": "회랑", "abyss": "어비스",
               "subquest": "서브퀘", "dead": "사망", "paused": "일시정지",
-              "error": "에러", "starting": "시작"}
+              "error": "에러", "starting": "시작",
+              "nightmare_wait": "악몽 최종보스 대기", "awakening_wait": "각성전 대기", "offline": "오프라인"}
 ROT_TASK_MAX   = 90 * 60.0            # 한 계정에서 한 작업의 절대 상한
 _ROT: dict[str, dict] = {}            # "tenant::PC-20" → 순환 상태
 _ROT_BOOT: dict[str, dict] = {}       # "tenant::PC-20" → {"id": 부팅지문, "at": epoch}
@@ -11626,6 +13187,22 @@ ROT_BOOT_GRACE_S = 25                 # 엔진이 부팅 직후 첫 틱 전에 �
 
 def _rot_now() -> float:
     return time.time()
+
+
+ROT_BOOT_MAX = 2000                   # 부팅지문 칸 상한 (함대 24대 × 테넌트 몇 개면 수십 칸)
+
+
+def _rot_boot_prune() -> None:
+    """★부팅지문 상한 (2026-09-23 B2)★ — pc_id 마다 한 칸씩 늘기만 하고 정리가 없어 30초마다 통째로
+    직렬화·저장됐다. ★무장된(_ROT) PC 칸은 절대 안 지운다★(②-a: 비면 사람 재부팅을 삼킨다).
+    무장 안 된 칸은 지워도 다음 부팅이 「최초 등록 — 판정 보류」로 다시 깔 뿐이다."""
+    over = len(_ROT_BOOT) - ROT_BOOT_MAX
+    if over <= 0:
+        return
+    cand = sorted((k for k in _ROT_BOOT if k not in _ROT),
+                  key=lambda k: float((_ROT_BOOT.get(k) or {}).get("at") or 0))
+    for k in cand[:over]:
+        _ROT_BOOT.pop(k, None)
 
 
 # ── 게임일(하루) 판정 ────────────────────────────────────────────────────────
@@ -11883,7 +13460,8 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
 
 # ── 무장 / 해제 ──────────────────────────────────────────────────────────────
 async def _rot_arm(tenant: str, pc_id: str, task: str = "",
-                   queue: list | None = None, full: bool = False) -> tuple[bool, str]:
+                   queue: list | None = None, full: bool = False,
+                   need_card: bool = False) -> tuple[bool, str]:
     """▶시작 버튼을 누르면 무장. ★부팅이 아니라 사람의 '시작' 이 방아쇠★ (사용자 지시).
 
     ★task 를 주면 '작업 순환' 이다 (2026-08-23)★ — 사냥 완주가 아니라 그 작업
@@ -11902,13 +13480,33 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
     #   PC-TEST 는 배포 검증 스크립트가 /check 를 두드릴 때 쓰는 이름이라 카드로 남는데,
     #   한 번 무장되면 ★영원히 사냥 중★ 이라 14시간 뒤 "사냥 단계가 14시간째입니다" 라는
     #   유령 알람이 튀어나온다(2026-08-23 실제로 울렸다). 실체가 없으니 조치도 불가능하다.
-    if base.upper() in ("PC-TEST", "PC-DEMO"):
+    if _is_fake_pc(pc_id):
         return False, f"{base} 는 검증용 가짜 PC — 순환 대상이 아님"
+    # ★★B-ROT8 (2026-09-23) — 브로드캐스트 id 는 무장하지 않는다★★
+    #   /rotate/all 에 allow="*" 면 "all" 이라는 ★실체 없는 키★ 가 무장됐다. 그 좀비는
+    #   카드가 없어 아무것도 안 하지만 해제 사유도 없이 영원히 남는다(TTL 은 사고 522 로 없앴다).
+    if str(base).strip() in _BROADCAST_IDS:
+        return False, f"'{base}' 는 브로드캐스트 id — 순환은 한 대씩만 무장한다"
     allow = await _rot_allow(tenant)
     if not allow:
         return False, "허용 목록이 비어 있음 (POST /rotate/allow 로 대상 PC 지정 필요)"
     if "*" not in allow and base not in allow:
         return False, f"{base} 는 허용 목록에 없음"
+    # ★B-ROT8 (2026-09-23)★ 카드(pc_status 행)가 하나도 없는 id 도 거절한다 — 오타·옛 이름이
+    #   allow="*" 를 타고 무장되면 위와 같은 좀비가 된다. 계정 카드(PC-20b…) 중 하나라도 있으면 된다.
+    #   ★사람 입구(/rotate·/command ▶시작)만 need_card=True★ — 핫키는 매크로 로그로 오므로 카드가
+    #   이미 있고, ops 시뮬레이터(autoprog_test 게이트)는 DB 행 없이 _rot_arm 을 직접 부른다.
+    _has_card = not need_card
+    for _lb in ([""] + list(ACCT_SUFFIX)) if need_card else []:
+        try:
+            if await get_status(ns(tenant, base + _lb)) is not None:
+                _has_card = True
+                break
+        except Exception:
+            _has_card = True                  # DB 오류로 멀쩡한 무장을 막지 않는다
+            break
+    if not _has_card:
+        return False, f"{base} 는 카드(상태 보고)가 없는 PC — 순환 대상이 아님"
     key = ns(tenant, base)
     # ★N7: 재무장이 왕복 방지 가드를 리셋하지 않게 이어받는다★
     #   전환 도중 ▶시작을 한 번 더 누르면 hops/visits 가 0 으로 돌아가 계정1↔계정2
@@ -12038,6 +13636,7 @@ def _rot_note_boot(nspc: str, message: str) -> None:
             return                                   # 같은 부팅 — 재전송/중복
         _ROT_BOOT[key] = {"id": fp, "at": now}
         if not prev:
+            _rot_boot_prune()
             # 이 PC 의 부팅 지문을 처음 본다 = 새 부팅인지 서버가 처음 보는 건지 모른다.
             # ★모를 때는 순환을 건드리지 않는다★ (엉뚱한 해제가 더 나쁘다).
             print(f"[순환] {key} 부팅지문 최초 등록({fp[:8]}) — 판정 보류")
@@ -12055,6 +13654,8 @@ def _rot_note_boot(nspc: str, message: str) -> None:
         if now - float(prev.get("at") or 0) < ROT_BOOT_DEBOUNCE:
             return                                   # 같은 부팅의 다른 줄
         _ROT_BOOT[key] = {"id": "", "at": now}
+        if not prev:
+            _rot_boot_prune()
 
     st = _ROT.get(key)
     if not st:
@@ -12137,8 +13738,10 @@ def _rot_active(cards: list) -> dict | None:
         #     idle 같은 ★가만히 있는 게 정상인 상태★ 는 무보고를 이유로 버리지 않는다.
         #   (박제된 idle 카드에 명령이 나가는 경우는 switching 20분 상한이 ⛔ 로 잡는다 —
         #    조용히 죽는 게 아니라 시끄럽게 실패한다.)
+        # ★v4 반증 F2★ 새 다섯 상태(abyss·corridor·nightmare·dungeon·awakening)도 계속 움직이는 상태다 — 무보고면 박제.
+        #   (매크로 _auto_report_thread 가 30초마다 보고한다)
         if st in ("hunting", "moving", "collecting", "switching", "acct_switching",
-                  "selling", "settling") and not _fresh(c.get("last_active"), 300):
+                  "selling", "settling") + ROT_HUNT_LIKE and not _fresh(c.get("last_active"), 300):
             continue
         live.append(c)
     if not live:
@@ -12167,7 +13770,28 @@ def _rot_collect_max(cards) -> float:
                ROT_COLLECT_MAX + ROT_COLLECT_PER_CHAR * max(0, n))
 
 
-def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
+def _rot_acct_excluded(tenant: str, active: dict, n: int, cards: list | None = None) -> bool:
+    """★B-ROT2 (2026-09-23)★ 계정 n 의 카드가 은퇴(RETIRED_PCS)·계정없음(NO_ACCOUNT_PCS)이면 True.
+
+    acct_ids 카탈로그는 매크로가 info.txt 에서 보고한 ★자격증명 목록★ 이라, 주인님이
+    대시보드에서 은퇴/계정없음으로 뺀 계정도 그대로 들어 있다. 그 계정으로 switch_launcher 를
+    쏘면 은퇴 카드는 보고가 막혀 ROT_SWITCH_MAX(20분)를 헛돌다 ⛔ 로 죽는다.
+    """
+    try:
+        base = _base_pc(str((active or {}).get("pc_id") or ""))
+        if not base or n < 1 or n > len(ACCT_LABELS):
+            return False
+        k = ns(tenant, base + ("" if n == 1 else ACCT_LABELS[n - 1]))
+        if k in RETIRED_PCS or k in NO_ACCOUNT_PCS:
+            return True
+        # 카드 status 「no_account」 는 NO_ACCOUNT_PCS 가 덮어쓴 값이다 — 같은 뜻으로 본다
+        return any(str(c.get("status")) == "no_account" and _rot_acct_no(c.get("pc_id")) == n
+                   for c in (cards or []))
+    except Exception:
+        return False
+
+
+def _rot_next_acct(cards: list, active: dict, tenant: str = "main") -> tuple[int, str]:
     """다음으로 갈 계정 번호. 반환 (번호, 사유).
        번호 > 0 : 그 계정으로 간다
        번호 < 0 : |번호| 계정의 캐릭 이름이 없다 → ★정지 + 알람★
@@ -12203,6 +13827,8 @@ def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
             continue
         if not str(ids.get(str(n)) or "").strip():
             continue                    # 자격증명 없는 계정 = 없는 계정
+        if _rot_acct_excluded(tenant, active, n, cards):
+            continue                    # ★B-ROT2★ 은퇴·계정없음 카드는 순환 대상이 아니다
         if not saw_names:
             return 0, "매크로가 계정별 캐릭 이름을 아직 보고하지 않음(구버전) — 순환 보류"
         if not (names.get(str(n)) or []):
@@ -12211,7 +13837,8 @@ def _rot_next_acct(cards: list, active: dict) -> tuple[int, str]:
     return 0, "남은 계정 없음"
 
 
-def _rot_next_acct_task(cards: list, active: dict, st: dict) -> tuple[int, str]:
+def _rot_next_acct_task(cards: list, active: dict, st: dict,
+                        tenant: str = "main") -> tuple[int, str]:
     """작업 순환에서 다음 계정. 반환 (번호, 사유). 0 = 갈 곳 없음(끝).
 
     ★완주 순환과 규칙이 다르다 — 여기는 '한 계정 한 번' 이다★
@@ -12235,8 +13862,121 @@ def _rot_next_acct_task(cards: list, active: dict, st: dict) -> tuple[int, str]:
             continue
         if not str(ids.get(str(n)) or "").strip():
             continue                    # 자격증명 없는 계정 = 없는 계정
+        if _rot_acct_excluded(tenant, active, n, cards):
+            continue                    # ★B-ROT2★ 은퇴·계정없음 카드는 순환 대상이 아니다
         return n, ""
     return 0, "남은 계정 없음"
+
+
+def _rot_undone_lines(st: dict) -> list:
+    """★B-ROT4 (2026-09-23)★ 이번 무장에서 ★못 한★ 계정·작업 목록(문구). 없으면 []."""
+    _ud = (st or {}).get("undone")
+    return [str(v) for v in _ud.values()] if isinstance(_ud, dict) else []
+
+
+def _rot_log_after(line: dict, t0: float) -> bool:
+    """★B-ROT6 (2026-09-23)★ 로그 한 줄이 t0(epoch) ★이후★ 에 찍혔나.
+
+    get_logs 는 최근 N줄을 시각 구분 없이 준다 — 그래서 ★지난번★ 무호스트·거부 줄이
+    이번 수집/작업을 ⛔ 로 죽이거나 헛재전송을 부르곤 했다. created_at 은 insert_log 가
+    적는 UTC naive "%Y-%m-%dT%H:%M:%S"(초 단위 절삭)라 2초 여유를 둔다.
+    ★시각이 없거나 못 읽는 줄은 예전처럼 센다★ — logs.created_at 은 NOT NULL 이라 운영 DB 에는
+    그런 줄이 없다. 시각 없는 가짜 로그로 도는 ops 시뮬레이터(autoprog_test T8)를 깨지 않기 위해서다.
+    """
+    try:
+        _ca = str((line or {}).get("created_at") or "").replace("Z", "")[:19]
+        if not _ca:
+            return True
+        _ts = datetime.strptime(_ca, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return True
+    return _ts >= float(t0 or 0) - 2.0
+
+
+def _rot_rejected(msg, cmd: str) -> bool:
+    """매크로가 그 명령을 거부했다는 줄인가 — 실제 문구 셋(v4 반증 F3): 로그 «→ 'X' 거부»(loot.py 538·658·667·679·690·700),
+    텔레그램 «'X'를 거부했습니다»·«'X' 명령을 거부했습니다». 옛 판정은 «'X'를 거부» 하나만 찾아 로그 줄을 못 잡았다."""
+    m, q = str(msg or ""), f"'{cmd}'"
+    return (q + "를 거부") in m or (q + " 거부") in m or (q + " 명령을 거부") in m
+
+
+async def _rot_session_wait(tenant: str, base: str, st: dict, status: str, acct_no) -> bool:
+    """★세션 중 대기 (v4 반증 F1·F3)★ 카드가 ROT_SESSION(회랑·악몽·일일던전·각성전) 중이면 사냥도 작업도 아니다 —
+    기다린다(True). 첫 목격 시각(sess_since)부터 ROT_SESSION_MAX 를 넘으면 ⛔ 로 세우고 False(호출부는 return).
+    말은 한 번만(sess_said). sess_* 는 새 전환 단계·사냥 확인 때 지운다."""
+    now = _rot_now()
+    if not st.get("sess_since"):
+        st["sess_since"] = now
+    waited = now - float(st.get("sess_since") or now)
+    if waited > ROT_SESSION_MAX:
+        await _rot_stop(tenant, base,
+                        f"⛔ 순환 정지 — 계정{acct_no} 카드가 {ROT_ST_KOR.get(status, status)} 중으로 {int(waited / 60)}분째입니다 "
+                        f"(세션 대기 상한 {int(ROT_SESSION_MAX / 60)}분). 화면 확인 필요")
+        return False
+    # ★v4 델타 반증 높음 1·2★ 세션을 볼 때마다 단계 시계를 다시 잡는다 — 세션이 7분(작업 전환은 20분)을 넘긴 뒤
+    #   captcha·reconnecting·paused 가 한 틱만 떠도 «▶시작 뒤 N분» ⛔ 이 나던 것(90분 상한이 사실상 7분).
+    #   세션이 끝난 뒤의 그물(ROT_START_MAX·ROT_SWITCH_MAX)은 ★마지막 세션 틱부터★ 그대로 잰다.
+    st["since"] = now
+    st["sess_idle_n"] = 0
+    if not st.get("sess_said"):
+        st["sess_said"] = True
+        await _rot_say(tenant, base, f"계정{acct_no} 카드가 {ROT_ST_KOR.get(status, status)} 중입니다 — 끝나면 이어갑니다 "
+                       f"(최대 {int(ROT_SESSION_MAX / 60)}분)", routine=True)
+    return True
+
+
+def _rot_recv_fresh(card: dict, secs: float) -> bool:
+    """카드를 ★서버가 받은 시각★(_updated_at)으로 secs 초 안에 받았나. 모르면 False(모름을 신선으로 읽지 않는다)."""
+    a = _age_s(card.get("_updated_at"))
+    return a is not None and a <= secs
+
+
+async def _rot_switch_age(tenant: str, base: str, st: dict, cards: list, age: float) -> tuple:
+    """★전환 단계 상한을 잴 나이 + «진행 중이라 늘림» 여부 (2026-09-24 PC-21, 사고 522 부류)★ → (age, extending).
+
+    상한(ROT_SWITCH_MAX)을 넘었을 때만 본다(그 전엔 DB 를 안 읽는다).
+      ① 단계 시작(since) 5초 뒤부터 이 PC 카드 중 하나에 들어온 새 전환 명령(ROT_SWITCH_CMDS — 사람의 한 대 재시도
+         switch_acct.py 의 switch_account 포함)이 있으면 since 를 그 명령 시각으로 옮긴다(명령 id 마다 한 번).
+         순환이 이 단계를 열며 보낸 자기 명령은 since 보다 앞이라 안 걸린다.
+      ② 그래도 넘었는데 카드가 acct_switching/switching 을 ROT_SWITCH_PROGRESS_FRESH 초 안에 보고 중이면
+         (★서버가 받은 시각 _updated_at 으로 잰다★ — last_active 는 매크로 시계라 PC 마다 최대 301초 어긋난다(1383 주석),
+          그걸로 재면 시계 늦은 PC 는 연장이 톱니에 끊긴다: v4 반증 BRK-1)
+         ROT_SWITCH_HARD 까지 멈추지 않는다(늘린다는 말은 한 번만). 그 뒤는 예전처럼 ⛔.
+    ★호출부는 await 뒤 _alive() 를 다시 본다★ — 여기서 st 를 바꾸는 것은 since·reclock_cmd·switch_ext 뿐."""
+    if age <= ROT_SWITCH_MAX:
+        return age, False
+    t0 = float(st.get("since") or 0)
+    try:
+        ids = {ns(tenant, str(c.get("pc_id") or "")) for c in (cards or []) if c.get("pc_id")}
+        ids.add(ns(tenant, base))
+        after = datetime.fromtimestamp(t0 + 5, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        r = await latest_command_after(sorted(ids), ROT_SWITCH_CMDS, after)
+    except Exception as e:
+        print(f"[순환] {base} 전환 명령 조회 실패: {e}")
+        r = None
+    if r and r.get("id") != st.get("reclock_cmd"):
+        d = _parse_utc_naive(str(r.get("created_at") or ""))
+        ts = d.replace(tzinfo=timezone.utc).timestamp() if d is not None else 0.0
+        if ts > t0:
+            st.update({"since": ts, "reclock_cmd": r.get("id")})
+            st.pop("switch_ext", None)
+            age = _rot_now() - ts
+            if _ROT.get(ns(tenant, base)) is st:       # 조회 await 사이 해제됐으면 죽은 순환에 말하지 않는다
+                await _rot_say(tenant, base,
+                               f"새 전환 명령({r.get('command')} #{r.get('id')}, {str(r.get('created_at'))[11:19]}Z)이 들어와 "
+                               f"전환 상한 {int(ROT_SWITCH_MAX / 60)}분을 그 시각부터 다시 잽니다", routine=True)
+            if age <= ROT_SWITCH_MAX:
+                return age, False
+    if age <= ROT_SWITCH_HARD and any(
+            str(c.get("status")) in ("acct_switching", "switching")
+            and _rot_recv_fresh(c, ROT_SWITCH_PROGRESS_FRESH) for c in (cards or [])):
+        if not st.get("switch_ext"):
+            st["switch_ext"] = True
+            await _rot_say(tenant, base,
+                           f"전환이 {int(age / 60)}분째지만 지금 진행 중(acct_switching 보고)이라 "
+                           f"{int(ROT_SWITCH_HARD / 60)}분까지 기다립니다", routine=True)
+        return age, True
+    return age, False
 
 
 # ── 상태 기계 ────────────────────────────────────────────────────────────────
@@ -12383,9 +14123,13 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             if st.get("busy"):
                 return                               # 이미 시작한 뒤의 딴 상태 — 기다린다
             # ── 그 작업이 아니라 ★딴 일★ 을 하고 있다 (사냥 등) ──────────────
-            if str(st.get("other") or "") != _s:
-                st["other"] = _s
+            # ★★B-ROT3 (2026-09-23)★★ 시계는 「딴 일」에 ★들어설 때만★ 건다. 초판은 status 가
+            #   바뀔 때마다(사냥↔이동은 2분마다 뒤집힌다) other_at 을 다시 걸어 20분 상한이
+            #   ★영영 안 찼다★ — 진행 지문(_rot_progress_fp)도 status 를 담아 무진전 상한까지 같이 리셋됐다.
+            #   이름표(other)만 최신으로 바꾸고 시계는 그대로 둔다.
+            if not st.get("other") or not st.get("other_at"):
                 st["other_at"] = _rot_now()
+            st["other"] = _s
             # ★영원히 기다리지 않는다★ — 사냥 중이면 진행 지문이 계속 바뀌어
             #   무진전 상한이 리셋되므로 여기서 끊지 않으면 순환이 굳는다.
             if _rot_now() - float(st.get("other_at") or 0) < ROT_OTHER_MAX:
@@ -12409,8 +14153,10 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                                           limit=40)
                 except Exception:
                     _tlg = []
-                if any(f"'{_task}'를 거부" in str(_l.get("message") or "")
-                       for _l in (_tlg or [])):
+                # ★B-ROT6 (2026-09-23)★ ★이번에 보낸 뒤★ 찍힌 줄만 본다 — 옛 거부 줄에 속지 않게
+                _t0 = float(st.get("sent_at") or st.get("since") or 0)
+                if any(_rot_rejected(_l.get("message"), _task)
+                       for _l in (_tlg or []) if _rot_log_after(_l, _t0)):
                     st["retask"] = True
                     print(f"[순환] {base} {_task} 거부 감지 → 재전송")
                     if not _alive():
@@ -12424,7 +14170,15 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     return
             _undone = (f"★{ROT_ST_KOR.get(_oth, _oth)} 중이라 못 했습니다★" if _oth
                        else f"할 게 없었습니다(status={_s})")
-        nxt, why = _rot_next_acct_task(cards, active, st)
+            # ★★B-ROT4 (2026-09-23)★★ 못 한 계정·작업을 적어 둔다 — 초판은 끝에서 이걸 잊고
+            #   「✅ 순환 종료 — 전 계정 완료」 라고 ★사실과 다른 초록★ 을 보냈다.
+            _ud = st.get("undone")
+            if not isinstance(_ud, dict):
+                _ud = {}
+            _ud[f"{_rot_acct_no(active.get('pc_id'))}:{_task}"] = (
+                f"계정{_rot_acct_no(active.get('pc_id'))} {_tlabel}: {_undone}")
+            st["undone"] = _ud
+        nxt, why = _rot_next_acct_task(cards, active, st, tenant)
         # ══════════════════════════════════════════════════════════
         # ★★계정-우선 — 이 계정에 남은 작업을 ★먼저★ 다 한다 (2026-08-28)★★
         #   주인님: "각 계정에 할일다하고 다음계정으로 넘어가는거 맞지?"
@@ -12471,6 +14225,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # ══════════════════════════════════════════════════════════
         if st.get("full") and not _aq:
             st["char_before"] = str(active.get("_char_collected_at") or "")
+            st["collect_pc"] = str(active.get("pc_id") or "")   # ★B-ROT1★ 수집 증거는 이 카드에서만
             if not _alive():
                 return
             if not await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
@@ -12520,7 +14275,10 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #   이 메시지는 routine 이 아니라 ★텔레그램으로 나간다.★
             _pl = [str(x) for x in (st.get("plan") or []) if str(x)]
             _plt = " → ".join(ROT_TASK_LABEL.get(t, t) for t in _pl) if _pl else _tlabel
+            _udl = _rot_undone_lines(st)
             await _rot_stop(tenant, base,
+                            (f"⚠ 순환 종료 — 「{_plt}」 {len(st.get('tvisit') or [])}개 계정을 돌았지만 "
+                             f"★못 한 것이 {len(_udl)}건★ 있습니다:\n" + "\n".join(_udl)) if _udl else
                             f"✅ 순환 종료 — 「{_plt}」 전 계정 완료 "
                             f"({len(st.get('tvisit') or [])}개 계정)")
             return
@@ -12550,7 +14308,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         if not ok or not _alive():
             return
         st.setdefault("tvisit", []).append(str(nxt))
-        _upd = {"stage": "switching", "since": _rot_now(),
+        _upd = {"stage": "switching", "since": _rot_now(), "switch_ext": False, "reclock_cmd": None,
+                "sess_since": None, "sess_restarted": False, "sess_said": False, "sess_idle_n": 0,
                 "expect_restart": True,
                 "expect_until": _rot_now() + ROT_SWITCH_MAX,
                 "target": ACCT_LABELS[nxt - 1],
@@ -12622,6 +14381,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                            routine=True)
             return
         st["char_before"] = str(active.get("_char_collected_at") or "")
+        st["collect_pc"] = str(active.get("pc_id") or "")   # ★B-ROT1★ 수집 증거는 이 카드에서만
         if not _alive():
             return
         if not await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
@@ -12647,8 +14407,16 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   사고 99(cdp 를 해시에 안 넣어 idle PC 가 영구 동결)와 ★완전히 같은 기계★ 다.
         #   → 수집 증거(_char_collected_at)는 ★어느 카드에든★ 남는다. 신선도와 상관없이
         #     그것부터 본다. '살아있냐' 보다 '끝냈냐' 가 먼저다.
+        # ★★B-ROT1 (2026-09-23)★★ 단 ★수집을 보낸 그 계정 카드★ 에서만 본다. 초판은 형제 카드
+        #   (PC-20b 등, 며칠 전 수집값)도 증거로 읽어 _ev 가 즉시 참 → 아래 타임아웃(`not _ev`)이
+        #   영영 안 울리고, active=None 인 채 다음 계정 고르기로 내려가 ★매 틱 AttributeError★ 였다.
+        #   collect_pc 가 없는 옛 저장본은 ★다른 계정/꺼짐이 아닌 카드★ 만 본다.
+        _cpc = str(st.get("collect_pc") or "")
         _ev = ""
         for _c in cards:
+            if (str(_c.get("pc_id") or "") != _cpc) if _cpc else (
+                    str(_c.get("status")) in ("other_account", "offline", "no_account")):
+                continue
             _g = str(_c.get("_char_collected_at") or "")
             if _g and _g != str(st.get("char_before") or ""):
                 _ev = _g
@@ -12665,6 +14433,15 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   → 서버가 실제로 char_info 를 ★새로 받았는지★ 로 판정한다.
         #     그 값은 전송에 성공한 것만 갱신되므로 '전달됨 ≠ 적용됨' 함정을 넘는다.
         if not active and not _ev:
+            return
+        if not active:
+            # ★★B-ROT1 (2026-09-23)★★ 수집 증거는 있는데 살아있는 카드가 없다 — 다음 계정을 고를
+            #   기준(현재 계정)도, 전환을 쏠 곳도 없다. idle 보고(= 수집 잠금 해제, 🔴2)를 기다린다.
+            #   ★무한 무음 금지★(TTL 은 사고 522 로 없앴다) — 상한 + 5분이 지나도 안 오면 세운다.
+            if age > _cmax + 300.0:
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — 정보수집은 끝났는데(char_info 갱신) 매크로가 "
+                                f"{int(age/60)}분째 idle 보고를 안 합니다. 화면 확인 필요", st)
             return
         got = str(active.get("_char_collected_at") or "") if active else _ev
         if st.pop("skip_collect", False):
@@ -12694,17 +14471,23 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #     (호스트는 원격컴이 못 만든다 — 본컴 런처를 눌러야 하므로 사람/파섹 일이다)
             try:
                 _lg = await get_logs(ns(tenant, str(active.get("pc_id") or base)), limit=25)
+                # ★B-ROT6 (2026-09-23)★ ★이번 수집을 보낸 뒤★ 찍힌 줄만 센다 — 옛 무호스트·거부
+                #   줄이 남아 있으면 멀쩡한 수집을 ⛔ 로 죽이거나 헛재전송을 불렀다.
+                _t0 = float(st.get("since") or 0)
+                _lg = [_l for _l in (_lg or []) if _rot_log_after(_l, _t0)]
                 _nh = sum(1 for _l in (_lg or [])
                           if "아직 호스트 없음" in str(_l.get("message") or ""))
             except Exception:
                 _lg, _nh = [], 0
+            if not _alive():
+                return                               # ★B-ROT7 (2026-09-23)★ await 사이 정지/재무장
             if _nh >= 3:                             # 새로고침 3회 = 최소 60초째 무호스트
                 await _rot_stop(
                     tenant, base,
-                    "⛔ 순환 정지 — ★본컴이 스트리밍 대기가 아닙니다★ "
-                    "(웹플레이: '퍼플온이 실행된 PC가 없습니다'). "
-                    "정보수집은 게임 화면이 있어야 되므로 여기서는 절대 성공하지 않습니다. "
-                    "본컴 퍼플 런처에서 '재시작' 을 누르거나 계정전환으로 호스트를 잡아주세요",
+                    # ★B-TG6 (2026-09-23) 관측만 적는다★ — nohost = 본컴에 그 계정이 로그인 안 된 것(§C8·사고 309),
+                    #   「퍼플 런처 '재시작'」 처방은 폐기됐다. 알람 문구에 원인 단정·폐기된 처방 금지(§D).
+                    "⛔ 순환 정지 — 웹플레이 '퍼플온이 실행된 PC가 없습니다' 3회+ (nohost) — "
+                    "본컴에 이 계정이 로그인 안 됐을 수 있음 · 계정전환으로 호스트 잡기",
                     st)
                 return
             # ★★매크로가 수집을 '거부' 했으면 한 번 다시 보낸다 (2026-08-21 PC-09)★★
@@ -12714,11 +14497,13 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #   (추측이 아니라 그 PC 가 직접 찍은 줄이다 — A2 를 만족한다)
             #   → 딱 한 번만 재전송한다. 무한 재시도로 바꾸지 않는다.
             if not st.get("recollect") and any(
-                    "'collect_info'를 거부" in str(_l.get("message") or "")
+                    _rot_rejected(_l.get("message"), "collect_info")
                     for _l in (_lg or [])):
                 st["recollect"] = True
                 print(f"[순환] {base} 수집 거부 감지 → collect_info 재전송")
                 if await _rot_send(tenant, str(active.get("pc_id")), "collect_info", {}):
+                    if not _alive():
+                        return                       # ★B-ROT7★ 송신 await 사이 정지됐으면 옛 무장에 안 쓴다
                     st["since"] = _rot_now()         # 상한도 그 시점부터 다시 센다
                     await _rot_say(tenant, base,
                                    "정보수집이 거부돼 있었습니다 → 다시 보냈습니다")
@@ -12740,9 +14525,9 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   full 은 할 일을 하러 가는 것이므로 ★이번 무장에서 안 간 계정★ 을 고른다.
         # ══════════════════════════════════════════════════════════════
         if st.get("full"):
-            nxt, why = _rot_next_acct_task(cards, active, st)
+            nxt, why = _rot_next_acct_task(cards, active, st, tenant)
         else:
-            nxt, why = _rot_next_acct(cards, active)
+            nxt, why = _rot_next_acct(cards, active, tenant)
         if nxt < 0:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — {why}\n"
@@ -12752,8 +14537,11 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             # ★N8★ '남은 계정 없음' 은 성공이지만 '구버전이라 보류' 는 실패다.
             #   둘 다 0 이라 초판은 배포 안 된 PC 에서 ★초록 ✅ 로 조용히 끝났다.★
             _ok_end = "남은 계정" in why
+            _udl = _rot_undone_lines(st)             # ★B-ROT4★ full 순환에서 못 한 작업
             await _rot_stop(tenant, base,
-                            (f"✅ 순환 종료 — {why}" if _ok_end else f"⛔ 순환 정지 — {why}"))
+                            ((f"⚠ 순환 종료 — {why}. ★못 한 것이 {len(_udl)}건★ 있습니다:\n"
+                              + "\n".join(_udl)) if (_ok_end and _udl) else
+                             f"✅ 순환 종료 — {why}" if _ok_end else f"⛔ 순환 정지 — {why}"))
             return
 
         # ★무한 왕복 방지★ 미완 계정을 계속 도는 설계라, 어떤 계정이 영영 진행이 안 되면
@@ -12804,7 +14592,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         _vis[str(nxt)] = _prog
         if st.get("full"):
             st.setdefault("tvisit", []).append(str(nxt))   # ★안 간 계정 목록을 갱신★
-        st.update({"stage": "switching", "since": _rot_now(),
+        st.update({"stage": "switching", "since": _rot_now(), "switch_ext": False, "reclock_cmd": None,
+                   "sess_since": None, "sess_restarted": False, "sess_said": False, "sess_idle_n": 0,
                    # ★만료를 같이 심는다 [C2]★ — 부팅 지문이 유실되면(실측 83회 중 4회)
                    #   expect_restart 가 True 로 남아 ★다음번 주인님의 재시작을 삼킨다.★
                    #   그러면 "껐다 켜면 순환 해제"(요구 1) 가 조용히 깨진다.
@@ -12836,7 +14625,10 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   전부 들고 ★반드시 return 한다.★
         if _task:
             _s = str((active or {}).get("status") or "")
-            if active and _rot_acct_no(active.get("pc_id")) == want_no                     and _s in ("idle", "hunting", "moving"):
+            if active and _rot_acct_no(active.get("pc_id")) == want_no and _s in ROT_SESS_HOLD:
+                await _rot_session_wait(tenant, base, st, _s, want_no)   # 상한 넘으면 안에서 ⛔
+                return                               # ★v4 반증 F3★ 세션 중 — 작업을 보내면 거부돼 버려진다
+            if active and _rot_acct_no(active.get("pc_id")) == want_no                     and _s in ("idle",) + ROT_HUNT_OK:
                 if not _alive():
                     return
                 if not await _rot_send(tenant, str(active.get("pc_id")), _task, {}):
@@ -12847,14 +14639,25 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                            "busy": False, **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 전환 완료 → {_tlabel} 시작", routine=True)
                 return
-            if age > ROT_SWITCH_MAX:
+            age, _ext = await _rot_switch_age(tenant, base, st, cards, age)   # 새 전환 명령·진행 중 (2026-09-24 PC-21)
+            if not _alive():
+                return
+            if age > ROT_SWITCH_MAX and not _ext:
+                _sw = (f"세션 대기가 끝나고 {int(age/60)}분째 작업을 못 보냈습니다" if st.get("sess_since")
+                       else f"전환이 {int(age/60)}분째 안 끝났습니다")
                 await _rot_stop(tenant, base,
-                                f"⛔ 순환 정지 — 계정{want_no} 전환이 {int(age/60)}분째 "
-                                f"안 끝났습니다(status={_s or '카드 없음'}). 화면 확인 필요")
+                                f"⛔ 순환 정지 — 계정{want_no} {_sw}"
+                                f"(status={_s or '카드 없음'}). 화면 확인 필요")
             return
         if active and _rot_acct_no(active.get("pc_id")) == want_no:
             s = str(active.get("status"))
-            if s in ("hunting", "moving"):
+            if s in ROT_SESS_HOLD:
+                # ★v4 반증 F1★ 전환은 됐다(목표 계정 카드) — 그런데 세션 중이라 사냥이 아니다. start 도 지금은 거부된다.
+                #   starting 으로 넘겨 세션이 끝나길 기다리고, idle 이 되면 이 단계로 되돌아와 start 를 보낸다.
+                st.update({"stage": "starting", "since": _rot_now(), **_rot_boot_grace(st)})
+                await _rot_session_wait(tenant, base, st, s, want_no)
+                return
+            if s in ROT_HUNT_OK:
                 st.update({"stage": "hunting", "since": _rot_now(),
                            **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                 await _rot_say(tenant, base, f"계정{want_no} 사냥 시작 확인", routine=True)
@@ -12887,6 +14690,7 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                     #    미완 계정이 남아 있어도 거기서 끝 → 사용자 요구 4가 깨진다.)
                     st.update({"stage": "collecting", "since": _rot_now(),
                                "char_before": "", "skip_collect": True,
+                               "collect_pc": str(active.get("pc_id") or ""),   # ★B-ROT1★
                                **_rot_boot_grace(st)})   # ★전환 확인 → 아직 안 온 부팅에만 유예 (사고 188)★
                     await _rot_say(tenant, base,
                                    f"계정{want_no} 는 오늘 이미 완주 — 다음 계정을 찾습니다", routine=True)
@@ -12910,7 +14714,10 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
             #    2026-09-09 에 없앴으므로 ★이제 이 상한이 유일한 그물이다★.)
             #   → return 이 아니라 pass. 더 기다리되 ★상한은 적용한다.★
             pass
-        if age > ROT_SWITCH_MAX:
+        age, _ext = await _rot_switch_age(tenant, base, st, cards, age)   # 새 전환 명령·진행 중 (2026-09-24 PC-21)
+        if not _alive():
+            return
+        if age > ROT_SWITCH_MAX and not _ext:
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — 계정{want_no} 전환이 {int(age/60)}분째 "
                             f"안 끝났습니다. 화면 확인 필요")
@@ -12918,11 +14725,48 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
 
     # ── ④ 시작 대기 ────────────────────────────────────────────────────────
     if stage == "starting":
-        if active and str(active.get("status")) in ("hunting", "moving"):
-            st.update({"stage": "hunting", "since": _rot_now()})
+        _ss = str((active or {}).get("status") or "")
+        if active and _ss in ROT_SESS_HOLD:
+            await _rot_session_wait(tenant, base, st, _ss, _rot_acct_no(active.get("pc_id")))
+            return                                   # ★v4 반증 F1★ 세션은 사냥이 아니다 — 상한은 _rot_session_wait
+        if _ss != "idle":
+            st["sess_idle_n"] = 0                   # ★연속★ 이어야 한다 — 다른 상태가 끼면 처음부터
+        if active and _ss == "idle" and st.get("sess_since") and not st.get("sess_restarted"):
+            st["sess_idle_n"] = int(st.get("sess_idle_n") or 0) + 1
+            if st["sess_idle_n"] < ROT_SESS_IDLE_N:
+                return                              # ★v4 델타 반증 중간★ 세션 도중 idle 한 틱 — 한 번뿐인 재시작을 아직 안 쓴다
+            # 세션이 끝났다 → ▶start 를 ★한 번★ 다시(세션 가드가 밀어낸 start 를 대신). 오늘 할 게 끝난 카드면
+            #   전환 단계 idle 길(완주 → 할 일·다음 계정)로 되돌린다 — 그 판정은 거기 한 곳에만 있다(§A12).
+            st["sess_restarted"] = True
+            _an = _rot_acct_no(active.get("pc_id"))
+            if _rot_done(active) and st.get("target"):
+                st.update({"stage": "switching", "since": _rot_now()})
+                await _rot_say(tenant, base, f"계정{_an} 세션이 끝났습니다 — 오늘 사냥은 끝난 계정이라 다음 할 일을 봅니다",
+                               routine=True)
+                return
+            if not await _rot_send(tenant, str(active.get("pc_id")), "start", {}):
+                return
+            if not _alive():
+                return
+            st["since"] = _rot_now()
+            await _rot_say(tenant, base, f"계정{_an} 세션이 끝났습니다 → ▶시작을 다시 보냈습니다", routine=True)
+            return
+        if active and _ss in ROT_HUNT_OK:
+            st.update({"stage": "hunting", "since": _rot_now(),
+                       "sess_since": None, "sess_restarted": False, "sess_said": False})
             await _rot_say(tenant, base, f"계정{_rot_acct_no(active.get('pc_id'))} 사냥 시작 확인", routine=True)
             return
         if age > ROT_START_MAX:
+            if st.get("sess_since"):
+                # ★v4 델타 반증★ 세션 대기 뒤의 ⛔ — start 를 안 보냈는데 «▶시작 뒤» 라고 하지 않는다. 관측만 적는다(§D).
+                _why = (f"사냥이 안 잡힙니다(status={ROT_ST_KOR.get(_ss, _ss)})" if active
+                        else "카드 보고가 없습니다(오프라인·보고 끊김)")
+                _sm = int((_rot_now() - float(st.get("sess_since") or _rot_now())) / 60)
+                await _rot_stop(tenant, base,
+                                f"⛔ 순환 정지 — 세션 대기가 끝나고 {int(age/60)}분째 {_why} "
+                                f"(세션 대기 {_sm}분{', ▶시작 한 번 다시 보냄' if st.get('sess_restarted') else ''}). "
+                                f"화면 확인 필요")
+                return
             await _rot_stop(tenant, base,
                             f"⛔ 순환 정지 — ▶시작 뒤 {int(age/60)}분째 사냥이 안 잡힙니다. "
                             f"화면 확인 필요")
@@ -12960,11 +14804,17 @@ EFF_LOW_PCT  = 15.0            # %/h — 이 아래면 '낮다'
 EFF_LOW_SEC  = 45 * 60.0       # 이만큼 계속 낮으면 알람 (20분 워밍업의 2배 이상)
 EFF_RENOTIFY = 3 * 3600.0      # 같은 PC 재알람 간격 — 안 고치면 3시간마다 한 번 더
 EFF_TICK     = 120.0           # 감시 주기(초)
+EFF_TG_RETRY = 600.0           # ★B-TG2★ 텔레그램 전송 실패 뒤 다시 보내볼 간격(초) — 3시간을 안 기다린다
 _EFF: dict = {}                # ns키 → {'since': ts, 'last': ts, 'worst': float}
 
 
-async def _eff_say(tenant: str, pc_id: str, text: str) -> None:
+async def _eff_say(tenant: str, pc_id: str, text: str, tg_only: bool = False) -> "bool | None":
     """효율 알람 — 로그 + 텔레그램. _rot_say 와 ★같은 로그 포맷★ 을 쓴다.
+
+    ★B-TG2 (2026-09-23) 반환값 = 텔레그램 결과★ True 보냄 · False 보내려다 실패 · None 미설정.
+      예전엔 보내기 ★전★ 에 「중계 전송」 을 적고 결과(tg_send_text 는 실패 때 None)를 안 봤다
+      → 실패해도 로그·watch_all 은 「보냈다」, 호출부는 3시간 재알람을 걸었다(= 알람 유실).
+      tg_only=True 는 실패 뒤 재시도 — 대시보드 알림(말하기)·로그를 또 울리지 않고 텔레그램만.
 
     ★포맷을 흉내내는 이유★ ops/watch_all.py 는 '[텔레그램] 중계 전송' 이라는
       문자열로 알람을 줍는다. 접두 [YYYY-MM-DD HH:MM:SS] 가 없으면 tg_sweep 이
@@ -12975,8 +14825,24 @@ async def _eff_say(tenant: str, pc_id: str, text: str) -> None:
     _chat = (TENANTS.get(tenant) or {}).get('chat_id') or ''
     # ⚠ 효율 저하는 '멈춘 것' 에 준한다 — 음소거된 PC 라도 보낸다(_rot_say 의 hard 와 같은 취급)
     _will = bool(_chat) and tg_enabled()
+    if not tg_only:
+        try:
+            await push_alert(tenant, str(pc_id), 'warn', f'효율 저하 — {text}',
+                             speak=True, say='효율이 오래 낮습니다')
+        except Exception:
+            pass
+    _sent = None
+    if _will:
+        try:
+            _sent = bool(await tg_send_text(_chat, f'📉 {base} · {text}'))
+        except Exception as e:
+            print(f'[효율] 텔레그램 실패: {e}')
+            _sent = False
+    else:
+        print(f'[효율] {base} 텔레그램 생략(미설정): {text}')
+    # ★B-TG2★ 로그는 보낸 ★뒤★ 에 실제 결과로 — 「중계 전송」 은 텔레그램이 message_id 를 준 때만.
     _line = (f'[{_ts}] [텔레그램] '
-             + ('중계 전송' if _will else '중계 생략(미설정)')
+             + ('중계 전송' if _sent else ('중계 실패' if _will else '중계 생략(미설정)'))
              + f': {base} | [효율] {text}')
     _targets = {base}
     if str(pc_id) != base:
@@ -12986,18 +14852,7 @@ async def _eff_say(tenant: str, pc_id: str, text: str) -> None:
             await insert_log(ns(tenant, _t), 'warn', _line)
         except Exception:
             pass
-    try:
-        await push_alert(tenant, str(pc_id), 'warn', f'효율 저하 — {text}',
-                         speak=True, say='효율이 오래 낮습니다')
-    except Exception:
-        pass
-    if not _will:
-        print(f'[효율] {base} 텔레그램 생략(미설정): {text}')
-        return
-    try:
-        await tg_send_text(_chat, f'📉 {base} · {text}')
-    except Exception as e:
-        print(f'[효율] 텔레그램 실패(무시): {e}')
+    return _sent
 
 
 async def _eff_watch() -> None:
@@ -13042,11 +14897,19 @@ async def _eff_watch() -> None:
                         continue
                     if now - st.get('last', 0.0) < EFF_RENOTIFY:
                         continue
-                    st['last'] = now
-                    await _eff_say(tenant, pid,
-                                   f'⚠️ 효율이 {int(dur // 60)}분째 낮습니다 — '
-                                   f'지금 {float(eff):.1f}%/h (가장 낮았을 때 {st["worst"]:.1f}) · '
-                                   f'사냥 중인 다른 PC 중앙값 {med:.1f}%/h · 화면 확인 필요')
+                    # ★B-TG2 (2026-09-23) 'last' 는 보냈을 때만 찍는다★ — 예전엔 보내기 전에 찍어
+                    #   전송 실패(None)도 3시간 침묵이 됐다. 실패면 EFF_TG_RETRY 뒤 ★텔레그램만★ 다시.
+                    _r = await _eff_say(tenant, pid,
+                                        f'⚠️ 효율이 {int(dur // 60)}분째 낮습니다 — '
+                                        f'지금 {float(eff):.1f}%/h (가장 낮았을 때 {st["worst"]:.1f}) · '
+                                        f'사냥 중인 다른 PC 중앙값 {med:.1f}%/h · 화면 확인 필요',
+                                        tg_only=bool(st.get('tg_retry')))
+                    if _r is False:
+                        st['last'] = now - EFF_RENOTIFY + EFF_TG_RETRY
+                        st['tg_retry'] = True
+                    else:
+                        st['last'] = now
+                        st['tg_retry'] = False
                 # ★사라진 카드 청소 — 접두사가 아니라 split_ns 로 판정한다★
                 #   ns() 는 main 테넌트에 접두사를 ★안 붙인다★(기존 데이터 호환).
                 #   그래서 startswith(tenant+'::') 로 거르면 main 에서는 영영 안 걸리고,
@@ -13254,7 +15117,7 @@ async def rotate_set(pc_id: str, request: Request):
         raise HTTPException(status_code=400, detail="객체가 필요합니다")
     pc_id = clean_pc_id(pc_id)
     if body.get("on"):
-        ok, why = await _rot_arm(tenant, pc_id)
+        ok, why = await _rot_arm(tenant, pc_id, need_card=True)   # ★B-ROT8★ 카드 없는 id 는 좀비
         await _rot_save(force=True)
         return JSONResponse({"ok": ok, "on": ok, "pc": _base_pc(pc_id), "why": why})
     _rot_disarm(tenant, pc_id, "수동 해제")
@@ -13294,6 +15157,31 @@ from database import get_commands_since as _fv_cmds_since
 FV_TOKEN    = (os.getenv("FV_TOKEN", "") or "").strip()
 FV_TENANT   = (os.getenv("FV_TENANT", "main") or "main").strip()
 FV_FLEET_N  = 8     # 통합 2026-09-12 (CONTRACTS_대시보드 #3) — 이 대수 이상은 confirm_fleet:true 없이 안 보낸다(A7)
+FV_IP_MAX_FAILS = 300        # v2 반증 1부 — 팜뷰 토큰: 한 IP 에서 서로 다른 틀린 토큰 합이 이만큼이면 IP 전체 429(창 KEY_WINDOW)
+FV_FLEET_WINDOW_S = 15 * 60   # v2 반증 1부 — 이 시간 안에 명령 받은 PC 를 합쳐 센다(7+7 로 가드를 지나지 않게)
+_FV_FLEET_SEEN: dict = {}     # 물리 PC → 확인 없이 명령을 ★처음★ 받은 시각(monotonic) — 창(15분)이 지나면 빠진다
+_FV_FLEET_OK: dict = {}       # 물리 PC → 마지막으로 confirm_fleet 로 명령 받은 시각 — 창 안에선 이 PC 들은 안 센다
+# 창에 세지도 막지도 않는 명령 — 정지 쪽(멈추는 손은 막지 않는다)과 보기 전용
+FV_FLEET_WINDOW_FREE = frozenset({"stop", "stop_tour", "stop_nightmare", "stop_corridor", "stop_surface",
+                                  "chrome_view", "live_on", "live_off", "get_logs", "request_logs", "netprobe"})
+FV_CMD_DEADLINE_S = 8.0   # /api/fv/command 한 번의 시간 상한 — 팜뷰 12초 타임아웃보다 짧게(2026-09-23)
+_FV_PC_LOCKS: dict = {}   # nspc → asyncio.Lock — 시간초과로 뒤에서 도는 명령보다 다음 명령이 먼저 들어가지 않게(반증 B6)
+
+
+async def _fv_dispatch_in_order(pid: str, cmd: str, args: dict) -> dict:
+    """같은 PC 로 가는 팜뷰 명령은 들어온 순서대로 — 시간초과로 뒤에서 도는 stop 을 뒤에 온 start 가 앞지르면
+    stop 의 순환 해제가 start 의 무장을 지웠다(반증 B6)."""
+    k = ns(FV_TENANT, pid)
+    lk = _FV_PC_LOCKS.get(k)
+    if lk is None:
+        lk = _FV_PC_LOCKS[k] = asyncio.Lock()
+        while len(_FV_PC_LOCKS) > 2000:
+            _old = next(iter(_FV_PC_LOCKS))
+            if _FV_PC_LOCKS[_old].locked():
+                break
+            _FV_PC_LOCKS.pop(_old, None)
+    async with lk:
+        return await _dispatch_macro_command(FV_TENANT, pid, cmd, args)
 FV_SNAP_TTL = 3.0                      # 스냅샷 서버 캐시(초) — 주인님 지시
 FV_ALERT_KEEP = 200                    # global.alerts 링버퍼 길이
 FV_AGE_UNKNOWN_S = 10 ** 9             # progress.kina_age_s 「모름」 — 팜뷰 계약(CONTRACTS_팜뷰 2026-09-13): 정수, 모르면 10^9
@@ -13302,6 +15190,19 @@ FV_KINA_DELTA_MAX = 10 ** 12           # kina_adjust 한 번에 옮길 수 있�
 _fv_snap: dict = {"ts": 0.0, "body": None}
 _FV_ALERTS = _fv_deque(maxlen=FV_ALERT_KEEP)
 _FV_TS_FMT = "%Y-%m-%dT%H:%M:%S"       # DB 가 쓰는 형식(UTC naive) — 문자열 비교가 곧 시간 비교
+# ★B-FV2 (2026-09-23) 아직 안 닫힌 초는 내주지 않는다★ — 커서가 초 단위 `> since` 라, 폴링이
+#   next_since=T 를 내준 뒤 ★같은 초 T 로 찍힌 행★ 이 커밋되면 영영 안 왔다(계약 FV_API 「2026-09-12 통합」
+#   #4 「같은 초 유실 없음」 위반). 이벤트는 `at < 지금-FV_EVENT_SETTLE_S`(초 절삭) 인 것만 준다 —
+#   _now() 를 찍고 커밋하기까지의 틈까지 덮으려고 한 초가 아니라 2초. 지연은 그만큼 늘 뿐 모양은 같다.
+FV_EVENT_SETTLE_S = 2
+# ★B-FV3 (2026-09-23)★ 지금까지 어느 폴링이든 내준 위 끝(미만)의 최댓값. 업데이터 로그처럼
+#   ★클라 시각★ 으로 찍히는 행은 이보다 옛날이면 커서가 이미 지나갔으므로 이 값으로 올려 적는다
+#   (receive_updater_logs). 재배포 직후엔 팜뷰 커서가 옛 프로세스 값(< 지금)일 수 있어 기동 시각으로 시작.
+_FV_HORIZON_HI = [datetime.now(timezone.utc).strftime(_FV_TS_FMT)]
+# ★B-FV3 보강 (2026-09-23 병합 반증)★ 시각은 정했지만 아직 커밋 안 된 업데이터 로그 줄의 시각들
+#   (receive_updater_logs 가 insert_log 를 기다리는 동안만). fv_events 는 위 끝을 이 중 최솟값으로 누른다 —
+#   안 누르면 폴링이 그 줄을 못 본 채 커서를 그 너머로 내주고, 뒤늦게 커밋된 줄이 영영 안 온다.
+_FV_INFLIGHT: list = []
 
 # ─── 업데이트/재시작 큐 (2026-09-22, 팜뷰 설계 승인분) ───────────────────────────
 #   「대시보드 업데이트·재시작은 잘 안 된다, 팜뷰에서 업데이트하는 방식으로」.
@@ -13313,18 +15214,181 @@ FV_UPDCMD_SEQ = [0]
 FV_UPDCMD_QUEUE: dict = {}   # nspc → {"id","pc","act","at"}
 # act ↔ updater 큐 command 매핑. update_only 는 사람이 이 경로로 안 눌러 대상 밖(범위 그대로).
 FV_UPDCMD_ACT = {"update": "updater", "restart": "restart"}
+_FV_UPDCMD_OUT = ("id", "pc", "act", "at")     # 계약 모양(FV_API §4-3) — 안쪽 칸(ucmd·claimed)은 안 내보낸다
 
 
-def _fv_updcmd_push(tenant: str, pc_id: str, act: str) -> None:
+# ★한 명령은 한 길로만 (2026-09-23 팜뷰 반증 #1)★ — 같은 명령이 업데이터 큐(10초 폴링)와 이 큐(팜뷰)에
+#   둘 다 있어서, 업데이터가 갱신을 시작한 뒤 팜뷰가 에이전트로 또 kill+restart 할 수 있었다(사고 499 모양).
+#   업데이터 행 id(ucmd) 마다 «누가 집었나» 를 적는다. 먼저 집은 쪽만 실행한다:
+#     · 업데이터 폴링이 주면 → 이 큐에서 뺀다(팜뷰 목록에 안 나온다)
+#     · 팜뷰 목록이 주면 → 업데이터 행을 fv_claimed 로(업데이터 폴링에 안 나온다, 재배포 뒤에도)
+#   판정+표시는 await 없는 한 함수(_updcmd_take)라 두 폴링이 동시에 와도 한쪽만 이긴다.
+_UPDCMD_OWNER: dict = {}      # ucmd_id → "updater" | "fv"
+_UPDCMD_OWNER_MAX = 2000
+_UPDCMD_FV_PC: dict = {}      # (업데이터 큐 키 nspc, 명령) → 팜뷰가 집은 가장 새 ucmd_id (반증 B1 — 두 번 누름, 같은 종류만)
+_FV_ACT_CMD = {v: k for k, v in FV_UPDCMD_ACT.items()}     # 팜뷰 act → 업데이터 큐 command
+# ★업데이터가 방금 같은 종류를 받아 갔다 (배포 반증 3차 #3·s5)★ — (nspc, 명령) → (ucmd_id, 받은 monotonic).
+#   업데이터가 옛 restart 를 들고 도는 중에 사람이 다시 누른 새 restart 를 팜뷰가 에이전트로 또 돌리면 두 길이 겹쳐
+#   돈다(사고 499 모양). 이 시간 안의 같은 종류 새 명령은 팜뷰에 안 주고 업데이터 큐에 남긴다 — 업데이터가 차례로
+#   받는다(다음 폴링 10초). 이 시간이 지나 다시 누른 것은 «업데이터가 멈춰서 다시 누름» 일 수 있어 팜뷰가 받는다.
+_UPDCMD_UP_PC: dict = {}
+UPDCMD_UP_BUSY_SEC = 90
+_FV_REBUILT = [False]         # 부팅 뒤 팜뷰 목록을 DB 에서 다시 세웠나(배포 반증 3차 #2)
+_FV_ACKED_RECENT = _fv_deque(maxlen=500)   # 최근 ack 받은 팜뷰 id(복구가 되살리지 않게, H4)
+
+
+async def _fv_rebuild_from_db() -> None:
+    """재배포로 비워진 팜뷰 목록을 DB 의 «팜뷰가 집었는데 안 끝난» 명령으로 다시 세운다 — 같은 팜뷰 id 그대로라
+    팜뷰는 UPD_DONE 으로 다시 실행하지 않고 기억한 결과로 ack 만 다시 보낸다. 같은 PC 칸이 이미 새 명령으로
+    차 있으면 옆 칸(nspc#id)에 둔다(ack 는 id 로 찾는다)."""
+    try:
+        rows = await open_fv_claims()
+    except Exception as e:
+        print(f"[FV] updcmd 목록 복구 실패(다음 목록 요청에 다시): {e}")     # ★H3★ 한 번 실패로 복구를 영영 끄지 않는다
+        return
+    if _FV_REBUILT[0]:
+        return              # 겹친 목록 요청이 먼저 세웠다
+    _FV_REBUILT[0] = True
+    # ★H4★ open_fv_claims 를 기다리는 사이 ack 로 끝난 명령은 다시 세우지 않는다
+    known = {v.get("id") for v in FV_UPDCMD_QUEUE.values()} | set(_FV_ACKED_RECENT)
+    for r in rows:
+        act = FV_UPDCMD_ACT.get(str(r["command"]))
+        if not act or r["fv_id"] in known:
+            continue
+        nspc = str(r["pc_id"])
+        key = nspc if nspc not in FV_UPDCMD_QUEUE else f"{nspc}#{r['fv_id']}"
+        FV_UPDCMD_QUEUE[key] = {"id": r["fv_id"], "pc": split_ns(nspc)[1], "act": act, "at": r["at"],
+                                "ucmd": r["ucmd_id"], "claimed": True, "nspc": nspc}
+        _UPDCMD_OWNER[r["ucmd_id"]] = "fv"
+        _mk = (nspc, str(r["command"]))
+        if (_UPDCMD_FV_PC.get(_mk) or 0) < r["ucmd_id"]:
+            _UPDCMD_FV_PC[_mk] = r["ucmd_id"]
+        FV_UPDCMD_SEQ[0] = max(FV_UPDCMD_SEQ[0], int(r["fv_id"]))
+# ★팜뷰가 살아 있나 (배포 반증 2차 F4)★ — 목록·ack 를 부를 때마다 적는다. 이만큼 조용할 때만 팜뷰가 집은 명령을
+#   업데이터에 되돌린다(살아서 차례로 돌리는 중인 팜뷰의 명령을 뺏으면 두 번 실행). 부팅 직후도 «조용함» 이 아니다 —
+#   재배포 뒤 팜뷰가 다시 붙을 시간을 준다.
+FV_QUIET_SEC = 60
+_FV_LAST_SEEN = [time.monotonic()]
+
+
+# ★팜뷰 실패 중 «PC 에 아예 안 갔다» 가 확실한 것 (배포 반증 2차 F5)★ — 팜뷰 macro_act 가 돌려주는 실패 문구(farmview
+#   server.py macro_act): 설정에 없는 PC · nobulk · 에이전트 없음 · act 거부 · 연결 거부. 이것만 업데이터로 되돌린다.
+#   읽기 시간초과(«Timeout on reading…»)·빈 예외(«실패»)·결과 기록 없음은 ★에이전트가 이미 받았을 수 있다★ — 되돌리면
+#   재시작이 두 번 난다 → fv_failed 로 남겨 대시보드 «업데이터 명령» 내역에 보인다(조용히 사라지지 않는다).
+#   팜뷰가 `reached` 를 명시하면 그게 이긴다(false=되돌림, true=안 되돌림).
+_FV_NOT_REACHED = ("없는 PC", "이 PC 는 매크로 대상이 아닙니다", "에이전트 없음", "act 는",
+                   "Cannot connect to host", "Connect call failed", "Connection refused")
+
+
+def _fv_not_reached(body: dict) -> bool:
+    r = body.get("reached")
+    if r is True:
+        return False
+    if r is False:
+        return True
+    why = str(body.get("why") or "")
+    return any(m in why for m in _FV_NOT_REACHED)
+
+
+def _updcmd_fv_newer(pc_key: str, command: str, ucmd_id) -> bool:
+    """팜뷰가 이 PC 에서 ★같은 종류★ 의 더 새 업데이터 명령을 집었나(screenshot 은 늘 False)."""
+    if command in ("screenshot",) or ucmd_id is None:
+        return False
+    _fvn = _UPDCMD_FV_PC.get((pc_key, command))
+    return _fvn is not None and _fvn > ucmd_id
+
+
+def _fv_q_drop(entry) -> None:
+    """팜뷰 목록에서 그 항목(객체 그대로)을 뺀다 — 칸 이름(nspc 또는 옆 칸 nspc#id)과 무관하게."""
+    for k in [k for k, v in FV_UPDCMD_QUEUE.items() if v is entry]:
+        FV_UPDCMD_QUEUE.pop(k, None)
+
+
+def _fv_q_drop_ucmd(ucmd_id) -> None:
+    """★fv_unknown 이 된 명령은 팜뷰 목록에서 뺀다 (반증 v2 #2)★ — 소유(_UPDCMD_OWNER=fv)는 그대로(업데이터엔 안 준다).
+    남겨 두면 팜뷰가 재시작(UPD_DONE 빈 채)해 옛 X 와 사람이 다시 누른 Y 를 둘 다 실행했다(재시작 두 번) — PC 로그의
+    «다시 보내지 않았습니다» 약속과도 어긋났다. 늦게라도 팜뷰가 ack 하면 id 로 DB 짝 행을 찾아 닫는다."""
+    for k in [k for k, v in FV_UPDCMD_QUEUE.items() if v.get("ucmd") == ucmd_id]:
+        FV_UPDCMD_QUEUE.pop(k, None)
+
+
+def _updcmd_release_fv(ucmd_id) -> None:
+    """팜뷰가 가져갔던 ucmd 를 업데이터 몫으로 되돌린다(DB 행이 pending 으로 돌아간 뒤 부른다) — 소유·표식·팜뷰 항목을 지운다."""
+    _UPDCMD_OWNER.pop(ucmd_id, None)
+    for mk in [mk for mk, v in _UPDCMD_FV_PC.items() if v == ucmd_id]:
+        _UPDCMD_FV_PC.pop(mk, None)
+    for k in [k for k, v in FV_UPDCMD_QUEUE.items() if v.get("ucmd") == ucmd_id]:
+        FV_UPDCMD_QUEUE.pop(k, None)
+
+
+def _updcmd_up_busy(pc_key: str, command: str, ucmd_id) -> bool:
+    """업데이터가 이 PC 의 같은 종류 옛 명령을 UPDCMD_UP_BUSY_SEC 안에 받아 갔나(반증 3차 s5) — 그러면 새 것도
+    업데이터가 차례로 받는다. 팜뷰 목록은 이걸로 ★빼지 않고★ 이번만 건너뛴다(H1 — 업데이터가 그 뒤 멈추면
+    90초 뒤 팜뷰가 받는다). 재배포로 이 표식이 비면 DB 쪽(claim 의 busy_out, H5)이 같은 판정을 한다."""
+    if ucmd_id is None or command in ("", "screenshot") or _UPDCMD_OWNER.get(ucmd_id) is not None:
+        return False
+    _up = _UPDCMD_UP_PC.get((pc_key, command))
+    return bool(_up and _up[0] < ucmd_id and time.monotonic() - _up[1] < UPDCMD_UP_BUSY_SEC)
+
+
+def _updcmd_take(ucmd_id, who: str, pc_key: "str | None" = None, command: str = "") -> bool:
+    """ucmd_id 를 who 가 가져간다. 이미 다른 쪽이 가져갔으면 False. 연결 없는 명령(ucmd_id None)은 늘 True.
+    ★두 번 누름 (반증 B1)★ — 업데이터가 옛 행(1)을, 팜뷰가 새 행(2)을 집는 틈: 업데이터 폴링의 get_pending await 가
+    이미 1 을 들고 있을 때 팜뷰가 2 를 집는다. 팜뷰가 이 PC 에서 더 새 명령을 집었으면 업데이터는 옛 상태변경 명령을
+    받지 않는다 — ★같은 종류일 때만★(배포 반증 #2: update 뒤 restart 는 둘 다 나간다)."""
+    if ucmd_id is None:
+        return True
+    if who == "updater" and pc_key is not None and _updcmd_fv_newer(pc_key, command, ucmd_id):
+        return False
+    cur = _UPDCMD_OWNER.get(ucmd_id)
+    if cur and cur != who:
+        return False
+    if cur is None:
+        _UPDCMD_OWNER[ucmd_id] = who
+        while len(_UPDCMD_OWNER) > _UPDCMD_OWNER_MAX:
+            _UPDCMD_OWNER.pop(next(iter(_UPDCMD_OWNER)), None)
+    if who == "updater":
+        for k in [k for k, v in FV_UPDCMD_QUEUE.items() if v.get("ucmd") == ucmd_id]:
+            FV_UPDCMD_QUEUE.pop(k, None)
+        if pc_key is not None and command:
+            _UPDCMD_UP_PC[(pc_key, command)] = (ucmd_id, time.monotonic())
+            while len(_UPDCMD_UP_PC) > _UPDCMD_OWNER_MAX:
+                _UPDCMD_UP_PC.pop(next(iter(_UPDCMD_UP_PC)), None)
+    elif who == "fv" and pc_key is not None:
+        _mk = (pc_key, command)
+        if (_UPDCMD_FV_PC.get(_mk) or 0) < ucmd_id:
+            _UPDCMD_FV_PC[_mk] = ucmd_id
+            while len(_UPDCMD_FV_PC) > _UPDCMD_OWNER_MAX:
+                _UPDCMD_FV_PC.pop(next(iter(_UPDCMD_FV_PC)), None)
+    return True
+
+
+def _fv_updcmd_push(tenant: str, pc_id: str, act: str, ucmd_id: "int | None" = None) -> None:
     nspc = ns(tenant, pc_id)
-    FV_UPDCMD_SEQ[0] += 1
+    # ★B-FV4 (2026-09-23)★ id 를 벽시계(ms)에서 시작한다 — 예전엔 [0] 에서 시작해 Railway
+    #   재배포마다 1 로 되돌아갔고, 팜뷰 커서(since=7 등, 받은 가장 큰 id)보다 작아 ★새 명령이
+    #   영영 안 보였다★. max(+1, 지금 ms) 라 재배포 뒤에도 항상 커지고 같은 ms 연타도 겹치지 않는다
+    #   (정수 그대로 — FV_API §4-3 「정수」, 팜뷰 fvdash 는 int() 로 받는다, 2^53 한참 아래).
+    FV_UPDCMD_SEQ[0] = max(FV_UPDCMD_SEQ[0] + 1, int(time.time() * 1000))
+    # ★집힌 항목은 덮지 않는다 (배포 반증 3차 H2)★ — 팜뷰가 집은(claimed) 명령의 목록 응답이나 ack 가 한 번 사라진 뒤
+    #   같은 PC 에 다른 명령을 누르면 칸이 덮여 팜뷰가 그 명령을 다시 못 보고(실행도 ack 도 못 함) «모름» 으로 끝났다.
+    #   옆 칸(nspc#id)으로 옮긴다 — ack 는 id 로 찾는다(부팅 복구 항목과 같은 모양).
+    #   ★집는 중(claiming)도 같다, 그리고 ★같은 객체★ 를 옮긴다 (반증 v2 #3)★ — 목록 요청이 DB 집기를 기다리는 사이
+    #   눌린 새 명령이 칸을 덮으면 집힌 표식이 칸 밖 사본에 찍혀 한 번만 나가고, 그 응답이 사라지면 영영 안 돌았다.
+    _old = FV_UPDCMD_QUEUE.get(nspc)
+    if _old and (_old.get("claimed") or _old.get("claiming")):
+        _old["nspc"] = nspc
+        FV_UPDCMD_QUEUE[f"{nspc}#{_old['id']}"] = _old
     FV_UPDCMD_QUEUE[nspc] = {"id": FV_UPDCMD_SEQ[0], "pc": pc_id, "act": act,
-                             "at": datetime.now(timezone.utc).strftime(_FV_TS_FMT)}
+                             "at": datetime.now(timezone.utc).strftime(_FV_TS_FMT),
+                             "ucmd": ucmd_id}     # 짝 업데이터 행 id — 밖으로는 안 나간다(_FV_UPDCMD_OUT)
 
 
 def _fv_err(code: int, msg: str) -> JSONResponse:
-    """에러 모양을 하나로 — {"error": "...", "code": ...}"""
-    return JSONResponse({"error": msg, "code": code}, status_code=code)
+    """에러 모양을 하나로 — {"ok": false, "error": "...", "err": "...", "code": ...}.
+    ★ok:false·err 는 (v3 델타 반증 #1)★ — 배포된 팜뷰(5.54 ui dashCmd)는 `j.ok===false` 일 때만 실패로 그리고 문구는 `j.err` 에서
+    읽는다. {error, code} 만 주면 함대 가드 400 이 «보냈습니다» + 성공음이었다. 더하기만(error·code 는 그대로)."""
+    return JSONResponse({"ok": False, "error": msg, "err": msg, "code": code}, status_code=code)
 
 
 def _fv_guard(request: Request):
@@ -13333,13 +15397,25 @@ def _fv_guard(request: Request):
         return _fv_err(404, "Not Found")          # 토큰 미설정 = API 전체를 숨긴다
     # ★추측 카운터를 API 키와 공유한다 (2026-09-12)★ — 이 토큰 하나로 함대 명령이
     #   나가는데 락아웃이 0 이었다. 성공하면 카운터를 안 건드리므로 정상 폴링은 무관하다.
-    _ip = _ip_from_xff(request.headers.get("x-forwarded-for", ""),
-                       request.client.host if request.client else "")
-    if _key_probe_blocked(_ip):
-        return _fv_err(429, "too many attempts")
+    #   ★칸은 따로 (배포 반증 D)★ — 같은 칸이면 API 키 30번 틀린 것만으로 올바른 팜뷰 토큰이 5분 429 였다
+    #   (관제컴·함대가 같은 공인 IP 면 반대로 팜뷰 토큰 오타가 매크로를 잠근다). 팜뷰는 «fv:<ip>» 칸.
+    #   ★칸 = IP + 보낸 토큰의 해시 머리 (v2 반증 1부)★ — IP 만이면 같은 공인 IP(관제컴·함대·집) 에서 틀린 토큰 30번이
+    #   올바른 팜뷰 토큰을 5분 잠갔다(낡은 토큰을 든 팜뷰 하나가 계속 두드리면 진짜 팜뷰가 멈춘다). 틀린 토큰은 제 칸만
+    #   30번에 잠근다(잠긴 뒤엔 세지 않으니 IP 칸에 30 까지만 보탠다). 토큰을 바꿔 가며 찍는 추측은 칸이 흩어지므로
+    #   IP 전체 칸(«fv:<ip>:*»)을 FV_IP_MAX_FAILS 에 잠근다 — 그땐 올바른 토큰도 막는다(추측을 아예 평가하지 않게).
+    _ipb = "fv:" + _ip_from_xff(request.headers.get("x-forwarded-for", ""),
+                                request.client.host if request.client else "")
     supplied = (request.headers.get("X-FV-Token") or "").encode("utf-8", "replace")
+    _ip = _ipb + ":" + hashlib.sha256(supplied).hexdigest()[:4]
+    _all = _KEY_FAILS.get(_ipb + ":*")
+    if _key_probe_blocked(_ip) or (_all and time.time() - _all["since"] <= KEY_WINDOW and _all["n"] >= FV_IP_MAX_FAILS):
+        return _fv_err(429, "too many attempts")
+    if not supplied:
+        # 빈 토큰은 추측이 아니다(반증 v2 #5) — 30번이면 같은 IP 의 올바른 토큰이 5분 429 였다(check_api_key 와 같게)
+        return _fv_err(401, "X-FV-Token 이 올바르지 않습니다")
     if not hmac.compare_digest(supplied, FV_TOKEN.encode("utf-8", "replace")):
         _key_probe_failed(_ip)
+        _key_probe_failed(_ipb + ":*")
         return _fv_err(401, "X-FV-Token 이 올바르지 않습니다")
     return None
 
@@ -13471,16 +15547,334 @@ def _fv_ticket_reset_aware(collected_at, raw, full: int):
     if n >= full or not collected_at:
         return n
     try:
-        dt = datetime.fromisoformat(str(collected_at)).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(str(collected_at).replace("Z", "+00:00"))
+        # ★오프셋이 붙어 오면 버리지 말고 UTC 로 바꾼다 (2026-09-23 B2)★ — .replace 는 +09:00 을
+        #   지워 9시간 어긋났다(리셋 직전 수집이 「리셋 뒤」로 읽혀 0). 붙은 게 없으면 UTC(_age_s 와 같다).
+        dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
     except Exception:
         return n
     return full if dt < _fv_last_weekly_reset_utc() else n
 
 
 def _fv_pc_excluded(tenant: str, pid: str) -> bool:
-    """JS isExcludedPc 와 같은 규칙 — 은퇴·계정없음은 전광판 합계에서 뺀다(카드 자체는 남는다)."""
+    """전광판 합계에서 뺄 PC(카드 자체는 스냅샷 pcs 에 남는다).
+    ① 은퇴·계정없음 — JS isExcludedPc 와 같은 규칙.
+    ② ★검증용 가짜 PC-TEST·PC-DEMO(2026-09-23 반증 #1)★ — 화면 dkSubCount 는 둘을 빼는데
+       서버 합계는 안 빼서 「구독 모름」이 +1 이었다. 화면은 카드로도 안 그리므로 합계 전부에서 뺀다."""
+    pid = split_ns(str(pid or ""))[1]
     nspc = ns(tenant, pid)
-    return nspc in RETIRED_PCS or nspc in NO_ACCOUNT_PCS
+    if nspc in RETIRED_PCS or nspc in NO_ACCOUNT_PCS:
+        return True
+    return _is_fake_pc(pid)
+
+
+# ─── ★어비스 수익 전광판 (2026-09-23, 주인님 장부 #104)★ ─────────────────────────────
+#   「어비스 수익(오늘)」 + 「시간당」 — 대시보드 /summary 와 팜뷰 스냅샷이 ★같은 함수★(§A12).
+#   재료: 매크로 1.1.1004 가 /report 에 싣는 숫자 칸 abyss_kina_state/gain/rate/since/mins
+#   (lc/loot.py _kina_fields). 옛 매크로는 글자 칸 abyss_kina 뿐 — 아래 _abyss_parse_legacy 가 읽는다.
+#   ★오늘 합계는 서버가 PC 마다 쌓는다★ — 매크로는 「이번 구간(since 부터) 번 것」 만 준다.
+#     · 구간 = since(시작 epoch). since 가 ★커지면★ 앞 구간의 마지막 gain 을 은행에 넣는다(banked).
+#     · 같은 since 에 더 작은 gain(늦게 도착한 재전송) → 줄이지 않는다(max). 더 작은 since → 통째로 무시.
+#     · KST 00:00 이 지나면 banked=0, 진행 중 구간은 그 순간의 gain 을 base 로 — 자정 전 몫은 어제 것.
+#       (선택: 구간을 「마지막 보고의 KST 날짜」에 넣되, 자정을 넘는 구간은 자정 시점 gain 으로 쪼갠다.)
+#     · 처음 보는 구간이 오늘 00:00 KST 전에 시작했으면 base=gain — 어제 번 몫을 오늘로 세지 않는다
+#       (배포 첫날·서버가 못 본 구간). ★과소 집계는 있어도 과대 집계는 없다★.
+#   ★키는 물리 PC(_base_pc)★ — 정산 세션은 매크로 프로세스 하나에 하나라, 계정 전환으로 PC-03 →
+#     PC-03b 로 같은 since 가 넘어와도 두 번 세지 않는다.
+#   ★시간당은 「지금 재는 중」 인 PC 만★ — 숫자 칸은 Delete OFF 뒤에도 다음 세션까지 남는다(매크로가
+#     안 지운다). 값이 ABYSS_LIVE_S 동안 안 바뀐 구간은 끝난 것으로 보고 시간당·대수에서 뺀다.
+#   ★적대 검증 R1~R9 (2026-09-23 refute_abyss) — 고친 규칙★
+#     R1 옛 끝 글자(「· M분 (HH:MM부터)」)는 날짜가 없다 → 실시간으로 못 본 구간은 오늘로 안 센다(base=gain).
+#     R2 since > 서버 시각+ABYSS_FUTURE_S 는 버린다. 이미 저장된 미래 since 는 복원·보고(날짜 넘김 포함) 때 비운다.
+#     R3 gain·시간당 상한 넘는 보고는 버리고 mins 는 자른다.  R4 옛 실시간 글자는 ★도착만으로★ 살아 있다
+#       (0 수익이면 글자가 안 바뀐다) · status=abyss 로 오는 보고도 살아 있다.
+#     R5 매크로는 10분까지 state=waiting(lc/loot.py ABYSS_KINA_OK_MINS) — mins≥abyss_min_mins 면 gain/mins 로 잰다.
+#     R6 옛 글자 HH:MM 이 어제→오늘로 뒤집히면(매크로 시계가 빠름) 같은 세션 — 날짜만 고친다(이중 집계 없음).
+#     R8 자정 뒤 버려진 보고만 오면 「측정 대기」 그대로(seen).  R9 옛 글자 gain 감소(수리비)는 표시·생존엔 반영,
+#       은행은 max 그대로.  기타: 가짜 PC 는 안 쌓는다(상한을 안 먹고 진짜를 안 밀어낸다).
+ABYSS_RED_RATE_DEFAULT = 1_000_000   # 설정 abyss_red_rate — 시간당 이보다 낮으면 빨강(주인님 2026-09-23)
+ABYSS_MIN_MINS_DEFAULT = 5           # 설정 abyss_min_mins — 이만큼 재기 전엔 시간당을 안 믿는다(튄다)
+ABYSS_LIVE_S = 300                   # 매크로 판독 주기 60초 × 5 — 이만큼 값이 안 바뀌면 끝난 구간
+ABYSS_FUTURE_S = 60                  # R2 — since 가 서버 시각보다 이만큼 넘게 미래면 버린다(시계 틀림·쓰레기)
+ABYSS_GAIN_MAX = 10 ** 12            # R3 — 구간당 gain 상한(1조 키나). 넘으면 그 보고를 버린다
+ABYSS_RATE_MAX = 10 ** 12            # R3 — 시간당 상한. 넘으면 그 보고를 버린다
+ABYSS_MINS_MAX = 7 * 24 * 60         # R3 — mins 상한(일주일). 넘으면 자른다
+ABYSS_ACC_KEY = "abyss_acc_all"      # 설정 KV(볼륨 DB /data) — CORRIDOR_KEY 와 같은 영속 방식
+ABYSS_TENANT_MAX = 300               # 테넌트별 상한(_tenant_cap) — 가짜 id 폭주 방지
+ABYSS_SAVE_EVERY_S = 30              # gain 만 바뀐 것은 이 주기로 모아 저장(구간 은행은 즉시)
+ABYSS_ACC: dict = {}                 # {ns(tenant, 물리PC): {card, day, banked, since, gain, base, ...}}
+_abyss_dirty = [False]
+_ABYSS_LIVE_RE = re.compile(r"^\+([\d,]+) 키나 · 시간당 ([\d,]+) \((\d{1,2}):(\d{2})(?:부터|~)")
+_ABYSS_END_RE = re.compile(r"^([+-]?[\d,]+) 키나 · (\d+)분(?: \((\d{1,2}):(\d{2})부터\))?")
+_ABYSS_WAIT_RE = re.compile(r"^정산 (?:중|대기)(?: \((\d{1,2}):(\d{2})(?:부터| 시작))?")
+
+
+def _abyss_kst_day(now: float) -> str:
+    return datetime.fromtimestamp(now, _KST_TZ).strftime("%Y-%m-%d")
+
+
+def _abyss_day_start(now: float) -> float:
+    d = datetime.fromtimestamp(now, _KST_TZ)
+    return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def _abyss_int(v):
+    """정수 칸만 받는다 — bool·문자열 숫자 아님·음수는 None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except Exception:
+        return None
+    return n if n >= 0 else None
+
+
+def _abyss_hhmm_epoch(h: str, m: str, now: float):
+    """옛 글자 칸의 「HH:MM부터」 → epoch. 매크로 PC 는 KST 로 찍는다. 미래면 어제 것."""
+    try:
+        d = datetime.fromtimestamp(now, _KST_TZ).replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+    except Exception:
+        return None
+    t = d.timestamp()
+    return int(t - 86400 if t > now + 60 else t)
+
+
+def _abyss_parse_legacy(text, now: float):
+    """옛 매크로(글자 칸만) — 쓸 수 있는 것만. 「정산 생략」·「측정 실패」 등은 None(측정 대기)."""
+    s = str(text or "").strip()
+    m = _ABYSS_LIVE_RE.match(s)
+    # live = 이 글자 모양 자체가 「지금 세션 중」 인가(R1·R4). 끝 글자(「· M분」)는 다음 세션까지 남는 결과표라 아니다.
+    if m:
+        since = _abyss_hhmm_epoch(m.group(3), m.group(4), now)
+        mins = int(max(0, now - since) // 60) if since else 0
+        return {"state": "ok", "gain": int(m.group(1).replace(",", "")),
+                "rate": int(m.group(2).replace(",", "")), "since": since, "mins": mins, "legacy": True,
+                "live": True, "num": True}
+    m = _ABYSS_END_RE.match(s)
+    if m:
+        gain, mins = max(0, int(m.group(1).replace(",", "").replace("+", ""))), int(m.group(2))
+        since = _abyss_hhmm_epoch(m.group(3), m.group(4), now) if m.group(3) else None
+        return {"state": "ok", "gain": gain, "rate": (gain * 60 // mins) if mins > 0 else 0,
+                "since": since, "mins": mins, "legacy": True, "live": False, "num": True}
+    m = _ABYSS_WAIT_RE.match(s)
+    if m:
+        since = _abyss_hhmm_epoch(m.group(1), m.group(2), now) if m.group(1) else None
+        return {"state": "waiting", "gain": 0, "rate": 0, "since": since, "mins": 0, "legacy": True,
+                "live": True, "num": False}
+    return None
+
+
+def _abyss_parse(data: dict, now: float):
+    """보고 한 건 → {state, gain, rate, since, mins, legacy} 또는 None(쓸 것 없음)."""
+    st = data.get("abyss_kina_state")
+    if st in ("ok", "waiting"):
+        since = _abyss_int(data.get("abyss_kina_since"))
+        g, mi = _abyss_int(data.get("abyss_kina_gain")), _abyss_int(data.get("abyss_kina_mins"))
+        # num = gain·mins 가 실제로 실려 왔나(R5 — waiting 이어도 문턱 넘으면 gain/mins 로 잰다). 생존은 값 변화로(live=None)
+        return {"state": st, "gain": g or 0,
+                "rate": _abyss_int(data.get("abyss_kina_rate")) or 0,
+                "since": since if since else None,
+                "mins": mi or 0, "legacy": False, "live": None, "num": g is not None and bool(mi)}
+    if data.get("abyss_kina"):
+        return _abyss_parse_legacy(data.get("abyss_kina"), now)
+    return None
+
+
+def _abyss_sane(rec: dict, now: float) -> None:
+    """R2·R3 — 믿을 수 없는 구간 상태(미래 since · 상한 넘는 gain)를 비운다. 옛 판이 저장한 독도 여기서 빠진다.
+    비우면 다음 보고가 새 구간으로 들어온다(그 PC 가 영영 「stale」 로 얼지 않는다)."""
+    def _bad(v, cap):
+        return not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= cap)
+    since = rec.get("since")
+    if since is not None and (_bad(since, now + ABYSS_FUTURE_S)
+                              or any(_bad(rec.get(k) or 0, ABYSS_GAIN_MAX) for k in ("gain", "base", "cur"))):
+        rec.update(since=None, gain=0, base=0, cur=0, sig=None, sig_at=0, lv=False)
+    if _bad(rec.get("banked") or 0, ABYSS_GAIN_MAX * 100):
+        rec["banked"] = 0
+
+
+def _abyss_roll(rec: dict, day: str, now: float = None) -> None:
+    """KST 날짜가 바뀌었으면 오늘 은행을 비우고, 진행 중 구간의 지금까지 몫은 어제 것으로(base).
+    ★R2 — 날짜 넘김(과 매 보고) 때 믿을 수 없는 구간 상태를 먼저 비운다★ — 미래 since 가 자정·재시작을 못 넘긴다."""
+    if now is not None:
+        _abyss_sane(rec, now)
+    if rec.get("day") != day:
+        rec["day"], rec["banked"], rec["base"] = day, 0, int(rec.get("gain") or 0)
+
+
+def _abyss_apply(rec: dict, f: dict, now: float) -> str:
+    """구간 규칙 한 번. 반환: 'bank'(구간 바뀜·은행 입금) / 'same' / 'stale'(옛 since — 무시)."""
+    since, gain = f["since"], int(f["gain"])
+    cur = rec.get("since")
+    # ★R6 — 옛 글자 HH:MM 이 어제→오늘로 뒤집힘★ 매크로 시계가 60초 넘게 빠르면 「(13:10부터)」 가 13:10 전엔
+    #   어제 13:10, 뒤엔 오늘 13:10 으로 읽힌다. 방금까지 실시간 글자로 보던 구간이면 ★같은 세션★ — 날짜만 고친다.
+    #   (새 구간으로 치면 앞 구간 몫을 입금하고 새 구간을 0 부터 또 세어 시계 틀림 구간을 두 번 센다.)
+    if (cur is not None and f["legacy"] and since == cur + 86400 and rec.get("lv")
+            and now - _num_or0(rec.get("ts")) <= ABYSS_LIVE_S):
+        rec["since"] = cur = since
+    if cur is not None and since < cur:
+        return "stale"
+    if cur is not None and since == cur:
+        rec["gain"] = max(int(rec.get("gain") or 0), gain)     # 은행은 max — 줄었다 다시 올라도 두 번 안 센다(R9)
+        return "same"
+    if cur is not None:
+        rec["banked"] = int(rec.get("banked") or 0) + max(0, int(rec.get("gain") or 0) - int(rec.get("base") or 0))
+    rec["since"], rec["gain"] = since, gain
+    # ★R1 — 오늘 통째로 세는 구간 = since 가 오늘(KST) 이고, 숫자 칸(since 가 진짜 epoch)이거나 옛 글자를 실시간으로
+    #   본 것★. 옛 끝 글자는 날짜가 없어 어제 세션을 오늘 HH:MM 으로 읽을 수 있다 → 처음 본 뒤 늘어난 몫만(base=gain).
+    counted = since >= _abyss_day_start(now) and (not f["legacy"] or bool(f.get("live")))
+    rec["base"] = 0 if counted else gain
+    return "bank"
+
+
+def _abyss_cap_age(key: str):
+    """상한 넘칠 때 버리는 순서 — 은퇴·계정없음(합계에서 빠지는 PC) 먼저, 그다음 오래 안 온 것."""
+    rec = ABYSS_ACC.get(key) or {}
+    tenant, pid = split_ns(key)
+    if _fv_pc_excluded(tenant, str(rec.get("card") or pid)):
+        return float("-inf")
+    return _num_or0(rec.get("ts"))
+
+
+def _abyss_ingest(nspc: str, data: dict, now: float = None) -> str:
+    """매크로 보고 한 건을 쌓는다(동기·메모리). 반환: ''(쓸 것 없음·버림) / 'bank' / 'same' / 'stale'."""
+    now = time.time() if now is None else now
+    data = data if isinstance(data, dict) else {}
+    f = _abyss_parse(data, now)
+    if not f or f.get("since") is None:
+        return ""
+    if f["since"] > now + ABYSS_FUTURE_S:
+        return ""           # ★R2 — 미래 since(시계 틀림·1e30) 는 받지 않는다(받으면 뒤의 진짜 구간이 전부 stale)★
+    if int(f["gain"]) > ABYSS_GAIN_MAX or int(f["rate"]) > ABYSS_RATE_MAX:
+        return ""           # ★R3 — 말이 안 되는 값 한 번이 오늘 합계로 굳지 않게 보고째 버린다★
+    f["mins"] = min(int(f["mins"]), ABYSS_MINS_MAX)
+    tenant, pid = split_ns(nspc)
+    if _is_fake_pc(pid):
+        return ""           # ★가짜 PC(PC-TEST·PC-DEMO) 는 안 쌓는다 — 상한 300 을 먹고 진짜를 밀어내던 것★
+    key = ns(tenant, _base_pc(pid))
+    rec = ABYSS_ACC.get(key)
+    if rec is None:
+        rec = ABYSS_ACC[key] = {"day": _abyss_kst_day(now), "banked": 0, "since": None, "gain": 0, "base": 0}
+        _tenant_cap(ABYSS_ACC, tenant, ABYSS_TENANT_MAX,
+                    lambda k: _abyss_cap_age(k) if k != key else float("inf"))
+    day = _abyss_kst_day(now)
+    _abyss_roll(rec, day, now)
+    prev_cur, prev_mins = int(rec.get("cur", rec.get("gain")) or 0), int(rec.get("mins") or 0)
+    how = _abyss_apply(rec, f, now)
+    if how == "stale":
+        return how          # 옛 구간 — 표시·생존·「오늘 본 것(seen)」 전부 안 바꾼다(R8)
+    if how == "same" and not f["legacy"] and (int(f["gain"]) < prev_cur or int(f["mins"]) < prev_mins):
+        return how          # 숫자 칸은 gain·mins 가 줄지 않는다 — 줄었으면 늦게 도착한 재전송, 표시도 안 되돌린다
+    # ★R9 — 옛 글자 칸은 같은 구간 안에서 gain 이 준다(수리비 등, 1.1.1003 은 「지금-시작」)★ → 표시·시간당·생존은
+    #   새 값을 따르고, 은행(rec.gain)만 max 로 남긴다.
+    # ★R4 — 생존: 값(글자·mins)이 바뀌었거나, 글자 모양이 「세션 중」 이거나, status=abyss 로 온 보고★
+    #   0 수익 옛 PC 는 글자가 안 바뀌어도 매 분 도착한다 — 도착이 곧 생존. 끝 글자는 재전송돼도 생존이 아니다.
+    sig = [f["state"], f["since"], int(f["gain"]), f["rate"], f["mins"]]
+    if rec.get("sig") != sig or f.get("live") or data.get("status") == "abyss":
+        rec["sig"], rec["sig_at"] = sig, now
+    rec.update(card=pid, state=f["state"], rate=int(f["rate"]), mins=int(f["mins"]), cur=int(f["gain"]),
+               num=bool(f.get("num")), legacy=bool(f["legacy"]), lv=bool(f["legacy"] and f.get("live")),
+               seen=day, ts=now)
+    _abyss_dirty[0] = True
+    return how
+
+
+async def _abyss_note(nspc: str, data: dict) -> None:
+    """/report·WS status 두 입구에서 부른다. 구간이 바뀐(은행 입금) 때만 바로 저장, 나머지는 모아서."""
+    try:
+        if _abyss_ingest(nspc, data) == "bank":
+            await _abyss_persist()
+    except Exception as e:
+        print(f"[어비스] 수익 집계 실패(보고는 저장됨): {nspc} {e}")
+
+
+async def _abyss_persist() -> None:
+    try:
+        _abyss_dirty[0] = False
+        await set_setting(ABYSS_ACC_KEY, json.dumps(ABYSS_ACC, ensure_ascii=False))
+    except Exception as e:
+        _abyss_dirty[0] = True
+        print(f"[어비스] 영속 저장 실패(다음 바퀴에 다시): {e}")
+
+
+async def _abyss_restore() -> None:
+    """재배포 뒤 오늘 합계를 되살린다 — 없으면 새로 쌓는다(옛 값 추정 안 함)."""
+    try:
+        raw = await get_setting(ABYSS_ACC_KEY)
+        d = json.loads(raw) if raw else None
+        if isinstance(d, dict):
+            _now = time.time()
+            for k, v in d.items():
+                if isinstance(v, dict) and not _is_fake_pc(split_ns(str(k))[1]):
+                    _abyss_sane(v, _now)      # ★R2 — 옛 판이 저장한 미래 since·터무니없는 gain 은 재시작을 못 넘긴다★
+                    ABYSS_ACC[str(k)] = v
+            print(f"[어비스] 수익 집계 복원: {len(ABYSS_ACC)}대")
+    except Exception as e:
+        print(f"[어비스] 복원 실패(오늘 합계는 지금부터 다시 쌓인다): {e}")
+
+
+async def _abyss_saver() -> None:
+    while True:
+        try:
+            await asyncio.sleep(ABYSS_SAVE_EVERY_S)
+        except asyncio.CancelledError:
+            return
+        if _abyss_dirty[0]:
+            await _abyss_persist()
+
+
+async def _abyss_thresholds(tenant: str) -> tuple:
+    """설정 abyss_red_rate·abyss_min_mins(테넌트별 /setting/*). 숫자가 아니면 기본값."""
+    out = []
+    for key, dflt in (("abyss_red_rate", ABYSS_RED_RATE_DEFAULT), ("abyss_min_mins", ABYSS_MIN_MINS_DEFAULT)):
+        try:
+            v = _abyss_int(str(await get_setting(ns(tenant, key)) or "").replace(",", "").strip())
+        except Exception:
+            v = None
+        out.append(dflt if v is None else v)
+    return out[0], out[1]
+
+
+def _abyss_i(v) -> int:
+    """저장본 숫자 칸 → 정수. 문자열 숫자·NaN·inf·글자·목록이면 0 (v4 반증 3차 — 깨진 abyss_acc_all 한 칸이 전광판 전체를 500 으로)."""
+    try:
+        f = float(v or 0)
+        return int(f) if f - f == 0 else 0          # NaN·inf 는 f-f 가 0 이 아니다(math 를 안 들인다)
+    except Exception:
+        return 0
+
+
+def _abyss_billboard(tenant: str, now: float, red_rate: int, min_mins: int) -> dict:
+    """전광판 두 칸. today/rate_sum 이 None = 「측정 대기」(★0 이 아니다★ — 0 은 재서 0 일 때만)."""
+    day = _abyss_kst_day(now)
+    today, today_n, rate_sum, rate_n, wait_n = 0, 0, 0, 0, 0
+    for key, rec in list(ABYSS_ACC.items()):
+        if not isinstance(rec, dict):
+            continue                                  # 깨진 저장본 한 줄은 건너뛴다(전광판 전체를 죽이지 않는다)
+        if ns_of(key) != tenant or _fv_pc_excluded(tenant, str(rec.get("card") or split_ns(key)[1])):
+            continue
+        # ★R8 — 오늘 쓸 만한 보고(seen)가 온 PC 만 오늘 칸에★ — 자정 뒤 버려진(stale) 보고는 날짜만 넘기고 seen 은
+        #   안 바꾼다. 「측정 대기」(null) 가 가짜 0 이 되지 않는다. seen 이 없는 옛 저장본은 day 로 본다.
+        if rec.get("day") == day and rec.get("seen", rec.get("day")) == day:
+            today_n += 1
+            today += _abyss_i(rec.get("banked")) + max(0, _abyss_i(rec.get("gain")) - _abyss_i(rec.get("base")))
+        if now - _num_or0(rec.get("sig_at")) > ABYSS_LIVE_S:
+            continue
+        st, mins = rec.get("state"), _abyss_i(rec.get("mins"))
+        if st == "ok" and mins >= min_mins:
+            rate_sum += _abyss_i(rec.get("rate"))
+            rate_n += 1
+        elif st == "waiting" and rec.get("num") and mins > 0 and mins >= min_mins:
+            # ★R5 — 매크로는 10분까지 waiting(lc/loot.py ABYSS_KINA_OK_MINS=10), 주인님 문턱은 abyss_min_mins(5)★
+            #   문턱을 넘었으면 gain/mins 로 시간당을 잰다(카드 JS abyssCardLine 과 같은 식).
+            rate_sum += _abyss_i(rec.get("cur", rec.get("gain"))) * 60 // mins
+            rate_n += 1
+        else:
+            wait_n += 1
+    avg = (rate_sum // rate_n) if rate_n else None
+    return {"day": day, "today": today if today_n else None, "today_pcs": today_n,
+            "rate_sum": rate_sum if rate_n else None, "rate_avg": avg, "rate_n": rate_n, "wait_n": wait_n,
+            "red": bool(avg is not None and avg < red_rate), "red_rate": red_rate, "min_mins": min_mins}
 
 
 async def _fv_char_agg(tenant: str) -> dict:
@@ -13504,9 +15898,16 @@ async def _fv_char_agg(tenant: str) -> dict:
         if _fv_pc_excluded(tenant, pid):
             continue
         agg = out.setdefault(pid, {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0,
-                                   "awakening_ticket": 0, "chars_n": 0, "odd_den": 0})
+                                   "awakening_ticket": 0, "chars_n": 0, "odd_den": 0,
+                                   "_seen": set()})
         _collected_at = info.get("collected_at")
         for ch in info.get("chars") or []:
+            # ★「수집됨」 표식(2026-09-23 반증 #2)★ — 합이 0 인 것과 한 번도 못 읽은 것을 가른다.
+            #   화면 refreshSummary 의 awakenSeen·tradeSeen 과 같은 뜻(값이 null 이 아니면 읽은 것).
+            #   전광판 합계는 아무 카드도 안 읽었으면 null 로 나간다(화면 「–」·「거래키나 수집 전」).
+            for _k in ("trade_kina", "gakin_kina", "odd_energy", "awakening_ticket"):
+                if ch.get(_k) not in (None, ""):
+                    agg["_seen"].add(_k)
             # ★칸마다 따로 감싼다★ — 한 try 로 묶으면 trade_kina 하나가 이상할 때
             #   그 캐릭의 각성전 티켓까지 통째로 빠진다(값이 조용히 낮아진다).
             for _k in ("trade_kina", "gakin_kina"):
@@ -13517,7 +15918,9 @@ async def _fv_char_agg(tenant: str) -> dict:
             # ★각성전(3) 은 주간 리셋 보정을 거친다(2026-09-23)★ — JS resetAwareTicket 과 같은 규칙.
             try:
                 agg["awakening_ticket"] += int(
-                    _fv_ticket_reset_aware(_collected_at, ch.get("awakening_ticket"), 3) or 0)
+                    # ★B-JS1 (2026-09-23)★ 캐릭 자기 수집 시각(단일수집 merge) 우선 — /characters 와 같은 규칙.
+                    _fv_ticket_reset_aware(ch.get("collected_at") or _collected_at,
+                                           ch.get("awakening_ticket"), 3) or 0)
             except Exception:
                 pass
             agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
@@ -13568,6 +15971,30 @@ def _fv_maybe_raw(request: Request, body):
     return body
 
 
+_FV_ARG_SECRET_KEYS = ("비번", "PIN", "이메일", "휴대폰")
+
+
+def _fv_public_args(command, a):
+    """★B-FV6 (2026-09-23)★ FV 로 나가는 명령 args — `_public_args`(`_by`·`_note` 걷기) 뒤에
+    set_info 의 kv 에서 비번·PIN·이메일·휴대폰 칸 값을 "***" 로 가린다(빈 값은 빈 값 그대로).
+    ★DB 는 안 건드린다★ — set_info 재배달이 DB 행의 이메일·휴대폰 원문을 쓴다. 모양(문자열/dict)은 그대로."""
+    a = _public_args(a)
+    if command != "set_info":
+        return a
+    was_str = isinstance(a, str)
+    try:
+        d = json.loads(a) if was_str else a
+    except Exception:
+        return a
+    kv = d.get("kv") if isinstance(d, dict) else None
+    if not isinstance(kv, dict):
+        return a
+    d = {**d, "kv": {k: (("***" if v not in (None, "") else v)
+                         if any(s in str(k) for s in _FV_ARG_SECRET_KEYS) else v)
+                     for k, v in kv.items()}}
+    return json.dumps(d, ensure_ascii=False) if was_str else d
+
+
 def _fv_age_int(ts_str) -> int:
     """_age_s 를 팜뷰 계약 모양으로: 정수 초, 못 읽으면 FV_AGE_UNKNOWN_S. 음수(시계 앞섬)는 0."""
     a = _age_s(ts_str)
@@ -13585,7 +16012,9 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     # ★대시보드와 같은 완료 규칙 (2026-09-12 전수조사 H2)★ — completed 플래그는 늙지 않아
     #   서버가 today 를 얹는다(_build_full_state). 화면 dpDone 은 `completed && today!==false`
     #   인데 여기만 completed 만 봐서 ★어제 완주가 오늘 완주로★ 읽혔다.
-    done = sum(1 for d in dp if d.get("completed") and d.get("today") is not False)
+    if not isinstance(dp, list):
+        dp = []
+    done = sum(1 for d in dp if isinstance(d, dict) and d.get("completed") and d.get("today") is not False)
     return {
         "pc_id":       row.get("pc_id"),
         "online":      st != "offline",
@@ -13631,6 +16060,10 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
             "uptime_hours":  row.get("uptime_hours"),
             "deaths_30m":    row.get("deaths_30m"),
             "abyss_kina":    row.get("abyss_kina"),
+            # ★어비스 수익 숫자 칸(매크로 1.1.1004, 장부 #104)★ — 더하기만(기존 키 그대로). 옛 매크로·이상값은 null.
+            #   state ok|waiting · gain 키나 · rate 시간당 키나 · since 구간 시작 epoch(바뀌면 새 측정) · mins 잰 분
+            "abyss_kina_state": row.get("abyss_kina_state") if row.get("abyss_kina_state") in ("ok", "waiting") else None,
+            **{f"abyss_kina_{_ak}": _abyss_int(row.get(f"abyss_kina_{_ak}")) for _ak in ("gain", "rate", "since", "mins")},
             # 캐릭터 합(char_info) — 없으면 0. 이름은 FarmView fvdash._pick 이 아는 그대로(문서 규격)
             "trade_kina":       int((agg or {}).get("trade_kina") or 0),
             "gakin_kina":       int((agg or {}).get("gakin_kina") or 0),
@@ -13676,11 +16109,13 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
     online = 0
     tot4 = {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0, "awakening_ticket": 0}
     sub_counts = {"sub": 0, "nosub": 0, "unknown": 0}   # ★구독 O/X 집계(2026-09-23)★ — 대시보드 dkSubCount 와 같은 값
+    seen4: set = set()     # 캐릭 합 4종 중 한 카드라도 「읽은」 칸 — 없으면 합계 null(모름, 반증 #2)
     for r in rows:
         pid = str(r.get("pc_id") or "")
         if not pid:
             continue
-        v = _fv_pc_view(r, char_agg.get(split_ns(pid)[1]))
+        _agg = char_agg.get(split_ns(pid)[1])
+        v = _fv_pc_view(r, _agg)
         pcs[pid] = v                                  # ★카드 자체는 은퇴·계정없음도 그대로 남는다★
         by_status[v["status"]] = by_status.get(v["status"], 0) + 1
         if v["online"]:
@@ -13691,6 +16126,7 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
         if not _fv_pc_excluded(tenant, pid):
             for k4 in tot4:
                 tot4[k4] += int(v["progress"].get(k4) or 0)
+            seen4 |= (_agg or {}).get("_seen") or set()
             try:
                 total_kina += int(r.get("_total_kina") or 0)
             except Exception:
@@ -13747,11 +16183,27 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
         except Exception:
             return 0
 
+    # ★타일 툴팁 내역도 서버가 준다(2026-09-23 반증 #4)★ — 숫자는 서버, 툴팁은 화면 계산이면
+    #   둘이 다른 모집단(화면 캐시 corridorRemaining)을 세서 「남음 5 = 신선 3 + 미착수 4」 가 났다.
+    corridor_detail = {"fresh_n": 0, "fresh_left": 0, "stale_n": 0, "stale_left": 0}
+    for c in corridor.values():
+        _side = "stale" if c.get("stale") else "fresh"
+        corridor_detail[_side + "_n"] += 1
+        corridor_detail[_side + "_left"] += _cor_left(c)
+
     notice = None
     try:
         notice = await get_setting(ns(tenant, "notice"))
     except Exception:
         pass
+    # ★어비스 수익 전광판(2026-09-23 장부 #104)★ — 별도 키 totals.abyss 하나로만(기존 키는 그대로).
+    _red, _minm = await _abyss_thresholds(tenant)
+    try:
+        abyss = _abyss_billboard(tenant, time.time(), _red, _minm)
+    except Exception as e:                           # ★전광판 한 칸 때문에 스냅샷 전체(전 PC)가 500 이 되지 않게★
+        print(f"[어비스] 전광판 계산 실패({e.__class__.__name__}: {e}) — today:null 로 내보낸다")
+        abyss = {"day": None, "today": None, "today_pcs": 0, "rate_sum": None, "rate_avg": None, "rate_n": 0,
+                 "wait_n": 0, "red": False, "red_rate": _red, "min_mins": _minm, "error": True}
 
     return {
         "ts": _fv_now(),
@@ -13761,11 +16213,18 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
             "counts": {"total": len(pcs), "online": online,
                        "offline": len(pcs) - online, "by_status": by_status},
             "totals": {"total_kina": total_kina, "bugs": total_bugs,
-                       "corridor_remaining": sum(_cor_left(c) for c in corridor.values()),
-                       # 캐릭터 합 4종 (2026-09-09) — total_kina 는 위 그대로(계정 창고값)
-                       # 구독 O/X/모름 (2026-09-23) — 대시보드 dkSubCount 와 같은 값(은퇴·계정없음 제외)
+                       # 회랑 스냅샷이 하나도 없으면 null(모름) — 화면 폴백 「–」 와 같은 뜻(2026-09-23 전수 #8)
+                       "corridor_remaining": ((corridor_detail["fresh_left"] + corridor_detail["stale_left"])
+                                              if corridor else None),
+                       "corridor_detail": corridor_detail,
+                       # 구독 O/X/모름 (2026-09-23) — 대시보드 dkSubCount 와 같은 값(은퇴·계정없음·가짜 PC 제외)
                        "subscribed": sub_counts,
-                       **tot4},
+                       # 캐릭터 합 4종 (2026-09-09) — total_kina 는 위 그대로(계정 창고값).
+                       # ★한 카드도 못 읽은 칸은 null(2026-09-23 반증 #2)★ — 0 은 「읽었는데 0」 만.
+                       **{k4: (tot4[k4] if k4 in seen4 else None) for k4 in tot4},
+                       # 어비스 수익 — {today, rate_sum, rate_avg, rate_n, wait_n, red, red_rate, min_mins, …}
+                       #   today·rate_sum 이 null = 「측정 대기」(0 과 다르다)
+                       "abyss": abyss},
             "versions": vers,
             "rotate_armed": sorted(armed),
             "corridor": corridor,
@@ -13799,27 +16258,49 @@ async def fv_snapshot(request: Request):
     except Exception as e:
         return _fv_err(500, f"스냅샷 조립 실패: {e}")
     _fv_snap["ts"], _fv_snap["body"] = now, body
-    return _fv_json(request, {**body, "cached": False, "cache_age_s": 0})
+    # ★B-FV1 (2026-09-23)★ 캐시 미스 갈래도 raw 를 거른다 — 예전엔 캐시 적중 갈래만
+    #   _fv_maybe_raw 를 불러서 ★3초마다 한 번은★ ?raw=1 없이도 카드 59필드·PII 가 나갔다.
+    return _fv_json(request, _fv_maybe_raw(request, {**body, "cached": False, "cache_age_s": 0}))
 
 
 @app.get("/api/fv/events")
-async def fv_events(request: Request, since: str = "", limit: int = 500):
+async def fv_events(request: Request, since: str = "", limit: str = "500"):
     """since 이후의 로그·명령·버그를 ★시간순 한 배열★ 로. next_since 를 같이 준다."""
+    # ★B-FV9 (2026-09-23)★ limit 을 str 로 받는다 — int 로 선언하면 FastAPI 가 ★가드보다 먼저★
+    #   422 {"detail":…} 를 내서 토큰 없이도 답하고, FV_TOKEN 미설정(404 로 숨김)이어도 API 가
+    #   있다는 걸 드러냈다. 가드 뒤에서 직접 읽고 계약 모양(400)으로 답한다.
     bad = _fv_guard(request)
     if bad:
         return bad
     try:
-        limit = max(1, min(int(limit or 500), 2000))
+        limit = max(1, min(int(str(limit).strip() or 500), 2000))
     except Exception:
         return _fv_err(400, "limit 이 숫자가 아닙니다")
     default_since = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(_FV_TS_FMT)
     s_since = _fv_iso(since, default_since)
     if since and s_since == default_since and _fv_iso(since) == "":
         return _fv_err(400, "since 가 ISO8601 이 아닙니다 (예: 2026-09-08T05:00:00Z)")
+    # ★B-FV2★ 위 끝(미만) — 아직 안 닫힌 초는 다음 폴링으로. ★읽기 전에★ 올려 둔다:
+    #   읽는 동안 들어온 업데이터 로그가 옛 위 끝으로 판정돼 커서 뒤에 떨어지지 않게(B-FV3).
+    until = (datetime.now(timezone.utc) - timedelta(seconds=FV_EVENT_SETTLE_S)).strftime(_FV_TS_FMT)
+    # ★B-FV3 보강★ 커밋 중인 업데이터 줄이 있으면 그 시각 ★미만★ 까지만 — 그 줄은 다음 폴링이 준다(next_since < 그 시각).
+    #   위 끝도 거기서 멈춘다: 그 사이 새로 찍히는 줄은 ≥ 위 끝 ≥ until 이라 이번 판에 안 섞인다. await 없이 한 틱에.
+    if _FV_INFLIGHT:
+        until = min(until, min(_FV_INFLIGHT))
+    if until > _FV_HORIZON_HI[0]:
+        _FV_HORIZON_HI[0] = until
+    _nsp = "" if FV_TENANT == "main" else FV_TENANT   # 남의 테넌트 행이 LIMIT 을 먹지 않게 SQL 에서 거른다
+    # ★B-FV5★ 출처마다 limit+1 개를 읽는다 — limit 을 ★넘는지★ 알아야 잘렸는지 말할 수 있다.
+    #   예전엔 합친 길이로만 truncated 를 셌다: 로그만 딱 limit 줄이 오면 false 로 나가
+    #   그 초의 나머지가 영영 안 왔다. 넘친 출처는 「마지막으로 읽은 시각」 부터 뒤가 불완전하다.
+    cuts: list = []
 
     events: list = []
     try:
-        for r in await _fv_logs_since(s_since, limit):
+        _lrows = await _fv_logs_since(s_since, limit + 1, until=until, ns_prefix=_nsp)
+        if len(_lrows) > limit:
+            cuts.append(str(_lrows[-1].get("created_at") or ""))
+        for r in _lrows:
             t, pid = split_ns(str(r.get("pc_id") or ""))
             if t != FV_TENANT:
                 continue
@@ -13832,14 +16313,17 @@ async def fv_events(request: Request, since: str = "", limit: int = 500):
         return _fv_err(500, f"로그 조회 실패: {e}")
 
     try:
-        for c in await _fv_cmds_since(s_since, limit):
+        _crows = await _fv_cmds_since(s_since, limit + 1, until=until, ns_prefix=_nsp)
+        if len(_crows) > limit:
+            cuts.append(str(_crows[-1].get("updated_at") or _crows[-1].get("created_at") or ""))
+        for c in _crows:
             t, pid = split_ns(str(c.get("pc_id") or ""))
             if t != FV_TENANT:
                 continue
             events.append({"type": "command", "at": (c.get("updated_at") or c.get("created_at")),
                            "pc": pid, "command": c.get("command"),
                            "status": c.get("status"), "id": c.get("id"),
-                           "args": c.get("args")})
+                           "args": _fv_public_args(c.get("command"), c.get("args"))})   # ★B-FV6★
     except Exception as e:
         return _fv_err(500, f"명령 이력 조회 실패: {e}")
 
@@ -13854,7 +16338,7 @@ async def fv_events(request: Request, since: str = "", limit: int = 500):
             if not m:
                 continue
             at = f"{m.group(2)[:4]}-{m.group(2)[4:6]}-{m.group(2)[6:]}T"                  f"{m.group(3)[:2]}:{m.group(3)[2:4]}:{m.group(3)[4:]}"
-            if at > s_since:
+            if s_since < at < until:   # ★B-FV2★ 위 끝도 로그·명령과 같게
                 events.append({"type": "bug", "at": at, "pc": m.group(1),
                                "filename": fn, "size": b.get("size"),
                                "url": f"/bugs/image/{fn}"})
@@ -13862,17 +16346,20 @@ async def fv_events(request: Request, since: str = "", limit: int = 500):
         print(f"[FV] 버그 목록 실패(무시): {e}")
 
     events.sort(key=lambda e: (str(e.get("at") or ""), str(e.get("type"))))
-    truncated = len(events) > limit
+    if len(events) > limit:
+        cuts.append(str(events[limit - 1].get("at") or ""))
+    truncated = bool(cuts)
     if truncated:
         # ★같은 초의 이벤트를 반으로 자르지 않는다 (2026-09-12 전수조사 H5)★
         #   next_since 는 초 단위이고 다음 조회는 `created_at > since` 라, 잘려나간 쪽은
         #   다음 판에도 ★영영★ 안 온다. 경계 초에 걸린 것은 통째로 다음 장으로 미룬다.
-        #   전부 같은 초면(미룰 수 없으면) 예전처럼 자른다.
-        _cut_at = str(events[limit - 1].get("at") or "")
-        _keep = [e for e in events[:limit] if str(e.get("at") or "") != _cut_at]
-        events = _keep if _keep else events[:limit]
-    else:
-        events = events[:limit]
+        #   ★B-FV5★ 경계 = 합친 목록의 limit 번째 · limit 을 넘긴 출처의 마지막 시각 중 ★가장 이른 것★.
+        #   전부 그 한 초면(미룰 수 없으면) 그 초만 limit 개까지 준다 — 한 초에 limit 개를 넘는
+        #   행은 초 단위 커서로는 못 나눈다(fix_fvdb/CONTRACT_PROPOSALS.md P1).
+        _cut_at = min(cuts)
+        _keep = [e for e in events if str(e.get("at") or "") < _cut_at]
+        events = (_keep[:limit] if _keep
+                  else [e for e in events if str(e.get("at") or "") == _cut_at][:limit])
     next_since = events[-1]["at"] if events else s_since
     return _fv_json(request, {"since": s_since, "next_since": next_since,
                               "count": len(events), "truncated": truncated,
@@ -13880,13 +16367,14 @@ async def fv_events(request: Request, since: str = "", limit: int = 500):
 
 
 @app.get("/api/fv/pc/{pc_id}")
-async def fv_pc_detail(pc_id: str, request: Request, logs: int = 300):
+async def fv_pc_detail(pc_id: str, request: Request, logs: str = "300"):
+    # ★B-FV9 (2026-09-23)★ logs 는 str — int 선언이면 가드 전에 422 가 나간다(fv_events 와 같은 이유)
     bad = _fv_guard(request)
     if bad:
         return bad
     pc_id = clean_pc_id(pc_id)
     try:
-        logs = max(1, min(int(logs or 300), 2000))
+        logs = max(1, min(int(str(logs).strip() or 300), 2000))
     except Exception:
         logs = 300
     rows = await _build_full_state(FV_TENANT)
@@ -13906,7 +16394,8 @@ async def fv_pc_detail(pc_id: str, request: Request, logs: int = 300):
         out["updater_logs"] = []
     try:
         raw = await get_recent_commands(120, ns_prefix=("" if FV_TENANT == "main" else FV_TENANT))
-        out["commands"] = [{**c, "pc_id": split_ns(c.get("pc_id") or "")[1]}
+        out["commands"] = [{**c, "pc_id": split_ns(c.get("pc_id") or "")[1],
+                            "args": _fv_public_args(c.get("command"), c.get("args"))}   # ★B-FV6★
                            for c in raw if split_ns(c.get("pc_id") or "") == (FV_TENANT, pc_id)]
     except Exception:
         out["commands"] = []
@@ -13985,7 +16474,18 @@ async def fv_kina_adjust(request: Request):
     res = await adjust_char_kina(nspc, tid, delta, why)
     if res is None:
         return _fv_err(404, f"카드 '{pc_id}' 의 창고 키나 기록(char_info)이 없습니다")
+    if res.get("conflict"):
+        _other = split_ns(str(res["conflict"]))[1]
+        return _fv_err(409, f"tid '{tid}' 는 이미 다른 카드({_other})에서 뺐습니다 — 이 카드에선 빼지 않았습니다")
+    if res.get("too_big"):
+        return _fv_err(400, f"창고 키나가 상한({KINA_MAX:,})을 넘습니다 — 빼지 않았습니다")
     res["pc_id"] = pc_id
+    _healed = res.pop("healed", None)
+    if _healed:
+        # ★되돌려진 채였던 카드 — 이 판매 전에 장부를 먼저 다시 적용했다(P0 v3 반증 ①)★
+        await insert_log(nspc, "info",
+                         f"[팜뷰] 창고 키나 되돌림 복구 {_healed['stored']:,} → {res['before']:,} "
+                         f"(tid {', '.join(_healed['tids'])}) — 새 판매 전에")
     if not res["dup"]:
         # 증거는 그 PC 로그줄(A2) — 대시보드·팜뷰 events 양쪽에 보인다
         await insert_log(nspc, "info",
@@ -14002,6 +16502,7 @@ async def fv_kina_adjust(request: Request):
 
 @app.post("/api/fv/command")
 async def fv_command_send(request: Request):
+    _t0 = time.monotonic()      # ★시간 상한은 요청 첫 줄부터 (반증 B5)★ — 카드 목록을 만드는 시간도 팜뷰 12초에 든다
     bad = _fv_guard(request)
     if bad:
         return bad
@@ -14022,7 +16523,14 @@ async def fv_command_send(request: Request):
         return _fv_err(400, "args 는 객체여야 합니다")
 
     target = body.get("pc")
-    rows = await _build_full_state(FV_TENANT)
+    try:      # 카드 목록 만들기도 시간 상한 안에서(반증 B5) — 넘치면 아무 PC 에도 안 보냈다고 답한다
+        rows = await asyncio.wait_for(_build_full_state(FV_TENANT),
+                                      timeout=max(0.05, FV_CMD_DEADLINE_S - (time.monotonic() - _t0)))
+    except asyncio.TimeoutError:
+        return _fv_json(request, {"ok": False, "partial": True, "timeout": True, "cmd": cmd,
+                                  "targets": 0, "sent": 0, "results": [],
+                                  "err": "시간초과 — 아무 PC 에도 보내지 않았습니다(다시 보내도 됩니다)",
+                                  "error": "시간초과 — 아무 PC 에도 보내지 않았습니다(다시 보내도 됩니다)"})
     known_pcs = [str(r.get("pc_id")) for r in rows if r.get("pc_id")]
     confirm_fleet = body.get("confirm_fleet") is True
     if isinstance(target, str) and target.strip().lower() == "all":
@@ -14034,47 +16542,174 @@ async def fv_command_send(request: Request):
     elif isinstance(target, str):
         targets = [clean_pc_id(target)]
     elif isinstance(target, list):
-        targets = [clean_pc_id(str(x)) for x in target if str(x).strip()]
+        # ★같은 PC 는 한 번 (배포 반증 D)★ — 같은 id 7개가 함대 가드를 지나 한 PC 에 명령이 7번 갔다
+        targets = list(dict.fromkeys(clean_pc_id(str(x)) for x in target if str(x).strip()))
     else:
         return _fv_err(400, "pc 는 문자열·배열·'all' 중 하나여야 합니다")
     if not targets:
         return _fv_err(400, "대상 PC 가 없습니다")
-    if len(targets) >= FV_FLEET_N and not confirm_fleet:
-        return _fv_err(400, f"{len(targets)}대는 함대 규모입니다 — confirm_fleet:true 없이는 보내지 않습니다 (A7)")
+    # 요청 하나의 셈도 ★물리 PC★ (v4 반증 B3 — 창은 물리 PC 로 세는데 여기만 카드로 세면 물리 2대·카드 8장이 400 이었다)
+    _phys = {_base_pc(x) for x in targets}
+    if len(_phys) >= FV_FLEET_N and not confirm_fleet:
+        return _fv_err(400, f"PC {len(_phys)}대는 함대 규모입니다 — confirm_fleet:true 없이는 보내지 않습니다 (A7)")
+    # ★굴러가는 창 (v2 반증 1부)★ — 요청마다만 세면 7대+7대로 함대 가드를 지났다. 최근 FV_FLEET_WINDOW_S 안에 확인 없이
+    #   명령을 받은 PC 에 ★새 PC 를 더해★ FV_FLEET_N 대 이상이 되면 confirm_fleet 없이는 거부한다(A7 확산).
+    #   (반증 에이전트) 창에 이미 있는 PC 에 다시 보내는 것은 막지 않는다 · confirm_fleet 로 보낸 PC 는 창에 안 센다(주인님이
+    #   이미 함대로 확인함 — 셌더니 뒤이은 한 대 명령이 15분 전부 400 이었다) · 정지 종류·보기 전용은 세지도 막지도 않는다.
+    #   (v3 델타 반증 #1) ★물리 PC 로 센다★ — A7 의 «2대↑» 는 기계 수다. 계정 카드(PC-01b·PC-01c)는 같은 기계라 한 대
+    #   (물리 3대·카드 8장이 함대로 걸렸다). ★창에 든 시각은 처음 보낸 시각★ — 다시 보낼 때마다 15분을 새로 켜면 자주 쓰는
+    #   7대가 창을 영원히 붙잡아 8번째 PC 가 사실상 잠겼다.
+    _nowm = time.monotonic()
+    for _k in [k for k, t in _FV_FLEET_SEEN.items() if _nowm - t > FV_FLEET_WINDOW_S]:
+        _FV_FLEET_SEEN.pop(_k, None)
+    _known_t = {_base_pc(x) for x in targets if x in known_pcs}      # 물리 PC
+    for _k in [k for k, t in _FV_FLEET_OK.items() if _nowm - t > FV_FLEET_WINDOW_S]:
+        _FV_FLEET_OK.pop(_k, None)
+    if confirm_fleet and cmd not in FV_FLEET_WINDOW_FREE:
+        # ★확인은 그 명령에만 (v4 반증 B2)★ — 보기 전용·정지(창 면제)에 붙은 confirm_fleet 까지 «확인한 PC» 로 적으면
+        #   팜뷰가 8대↑ get_logs 에 자동으로 붙인 확인 하나로 그 PC 들의 start 가 15분 동안 창을 빠져나갔다.
+        for _x in _known_t:
+            _FV_FLEET_OK[_x] = _nowm
+    elif cmd not in FV_FLEET_WINDOW_FREE:
+        _unc = _known_t - set(_FV_FLEET_OK)               # 이번 요청 중 확인 안 된 물리 PC
+        _new = _unc - set(_FV_FLEET_SEEN)
+        _spread = set(_FV_FLEET_SEEN) | _unc
+        if _new and len(_spread) >= FV_FLEET_N:
+            return _fv_err(400, f"최근 {FV_FLEET_WINDOW_S // 60}분 동안 PC {len(_spread)}대에 명령 — 함대 규모입니다, "
+                                f"confirm_fleet:true 없이는 보내지 않습니다 (A7)")
+        for _x in _unc:
+            _FV_FLEET_SEEN.setdefault(_x, _nowm)
 
     results = []
+    # ★시간 상한 (2026-09-23 팜뷰 반증)★ — 팜뷰는 12초에 끊는다(fvdash C["timeout"]). 여러 대를 차례로
+    #   넣다 그 안에 못 끝내면 팜뷰는 본문을 못 받아 «실패» 로 보고 사람이 다시 눌렀다(이미 나간 PC 에 두 번).
+    #   FV_CMD_DEADLINE_S 안에 끝난 만큼 results[] 로 돌려준다: 시작 못 한 PC = sent:false(다시 보내도 됨),
+    #   시작했는데 안 끝난 PC = ok:null·unknown:true(뒤에서 끝까지 돈다 — 닿았는지 모름, 다시 누르지 말 것).
+    timed_out = False
     for pid in targets:
         if pid not in known_pcs:
             results.append({"pc": pid, "ok": False, "error": "그런 카드가 없습니다"})
             continue
+        left = FV_CMD_DEADLINE_S - (time.monotonic() - _t0)
+        # 앞 PC 가 상한에 걸렸으면 뒤는 시작하지 않는다 — 타이머가 몇 ms 일찍 깨면 left 가 0.00x 로 남아 다음 PC 를
+        #   시작했다가 곧바로 «닿았는지 모름» 이 됐다(윈도 시계 15ms 단위, test_fv_found T-4 흔들림 2026-09-23 밤)
+        if left <= 0 or timed_out:
+            timed_out = True
+            results.append({"pc": pid, "ok": False, "sent": False,
+                            "error": "시간초과 — 보내지 않았습니다(다시 보내도 됩니다)"})
+            continue
+        task = asyncio.ensure_future(_fv_dispatch_in_order(pid, cmd, args))
         try:
-            r = await _dispatch_macro_command(FV_TENANT, pid, cmd, args)
+            r = await asyncio.wait_for(asyncio.shield(task), timeout=left)
             results.append({"pc": pid, **r})
+        except asyncio.TimeoutError:
+            timed_out = True
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())   # 뒤에서 끝난 예외를 삼키지 않게 회수
+            results.append({"pc": pid, "ok": None, "unknown": True,
+                            "error": "시간초과 — 닿았는지 모름(뒤에서 계속 넣는 중, 다시 누르지 마십시오)"})
         except Exception as e:
             results.append({"pc": pid, "ok": False, "error": str(e)})
     # ★부분 성공을 성공이라 하지 않는다 (2026-09-11 전수조사)★
     #   초판은 `ok: sent > 0` 이라 24대 중 1대만 되어도 참이었다. `ok` 만 보는
     #   호출부(운영 스크립트·자동화)는 「전 함대에 나갔다」로 읽는다.
     sent = sum(1 for r in results if r.get("ok"))
-    return _fv_json(request, {"ok": sent == len(targets), "partial": 0 < sent < len(targets),
+    _ok_all = sent == len(targets) and not timed_out
+    # ★옛 팜뷰는 실패 토스트에 j.err 만 쓴다 (2026-09-23 배포 반증 a)★ — 없으면 «실패 —» 뒤가 비었다
+    _unk = sum(1 for r in results if r.get("unknown"))
+    _uns = sum(1 for r in results if r.get("sent") is False)
+    if _ok_all:
+        _err = ""
+    elif _unk:
+        _err = f"{int(FV_CMD_DEADLINE_S)}초 초과 — {_unk}대는 닿았는지 모름, 다시 누르지 마십시오 ({sent}/{len(targets)}대 확인)"
+    elif _uns:
+        _err = f"{int(FV_CMD_DEADLINE_S)}초 초과 — {_uns}대는 보내지 않았습니다(그 PC 만 다시 보내도 됩니다)"
+    else:
+        _err = f"{len(targets)}대 중 {len(targets) - sent}대 실패"
+    return _fv_json(request, {"ok": _ok_all,
+                              **({"err": _err} if _err else {}),
+                              "partial": (0 < sent < len(targets)) or timed_out,
+                              "timeout": timed_out,
                               "cmd": cmd,
                               "targets": len(targets), "sent": sent,
                               "results": results})
 
 
 @app.get("/api/fv/updcmd")
-async def fv_updcmd_list(request: Request, since: int = 0):
+async def fv_updcmd_list(request: Request, since: str = "0"):
     """업데이트/재시작 큐(2026-09-22, 팜뷰 설계 승인분) — PC당 최신 1건만 들고 있다가
     id > since 인 것만 준다. ack 전까지는 매 폴링에 계속 나온다(재전송 안전)."""
+    # ★B-FV9 (2026-09-23)★ since 는 str — int 선언이면 가드 전에 422 가 나간다
     bad = _fv_guard(request)
     if bad:
         return bad
     try:
-        since = int(since or 0)
+        since = int(str(since).strip() or 0)
     except Exception:
         return _fv_err(400, "since 가 숫자가 아닙니다")
-    cmds = [v for k, v in FV_UPDCMD_QUEUE.items()
-           if v["id"] > since and split_ns(k)[0] == FV_TENANT]
+    _FV_LAST_SEEN[0] = time.monotonic()
+    if not _FV_REBUILT[0]:
+        await _fv_rebuild_from_db()
+    # ★집힌(ack 전) 항목은 since 와 무관하게 준다 (배포 반증 3차 H6)★ — 팜뷰 커서는 «ack 한 가장 큰 id» 라, 더 작은 id 의
+    #   ack 가 (재배포 중) 사라지면 그 명령은 커서 아래로 숨어 영영 안 닫혔다. §4-3 «ack 전까지 매 폴링에 나온다» 그대로 —
+    #   팜뷰는 같은 id 를 UPD_DONE 으로 알아보고 기억한 결과로 ack 만 다시 보낸다(다시 실행하지 않는다).
+    cand = [(k, v) for k, v in FV_UPDCMD_QUEUE.items()
+            if (v["id"] > since or v.get("claimed")) and split_ns(k)[0] == FV_TENANT]
+    cmds = []
+    _stale_at = (datetime.now(timezone.utc) - timedelta(seconds=UPDATER_COMMAND_MAX_AGE_SEC + 60)).strftime(_FV_TS_FMT)
+    for k, v in cand:
+        u = v.get("ucmd")
+        k = v.get("nspc") or k          # 옆 칸(nspc#id)에 둔 복구 항목도 PC 키로 판정
+        _was = bool(v.get("claimed"))   # 이미 한 번 준 것(다시 주는 것) — redeliver 표식
+        if _was and str(v.get("at") or "") < _stale_at:
+            _fv_q_drop(v)            # 안전망(반증 v2 #2) — 청소(30초)가 못 돌았어도 11분 넘은 집힘은 다시 안 준다
+            continue
+        if v.get("claiming"):
+            continue                 # ★겹친 목록 요청 (반증 B2)★ — 다른 요청이 집는 중: 빼지도 주지도 않는다(다음 폴링에 나온다)
+        if not v.get("claimed") and _updcmd_up_busy(k, _FV_ACT_CMD.get(v.get("act"), ""), u):
+            continue                 # 업데이터가 같은 종류를 도는 중 — 빼지 않고 이번만 건너뛴다(H1)
+        # ★한 명령은 한 길로만 (팜뷰 반증 #1)★ — 업데이터가 먼저 집었으면 팜뷰에 안 준다
+        if not _updcmd_take(u, "fv", pc_key=k, command=_FV_ACT_CMD.get(v.get("act"), "")):
+            _fv_q_drop(v)
+            continue
+        if u is not None and not v.get("claimed"):
+            v["claiming"] = True
+            _busy: list = []
+            try:
+                _claimed = await claim_updater_command_for_fv(
+                    u, fv_id=v["id"], busy_ids=[x for x, o in _UPDCMD_OWNER.items() if o == "updater"], busy_out=_busy)
+            except Exception as e:
+                # ★반증 B4★ — 예전엔 «집은 것» 으로 두어 업데이터 큐가 10분 막혔다. 소유를 풀고 이번엔 안 준다.
+                print(f"[FV] updcmd claim 실패 ucmd={u}: {e}")
+                _UPDCMD_OWNER.pop(u, None)
+                for mk in [mk for mk, x in _UPDCMD_FV_PC.items() if x == u]:
+                    _UPDCMD_FV_PC.pop(mk, None)
+                v.pop("claiming", None)
+                continue
+            v.pop("claiming", None)
+            if _busy:
+                # 업데이터가 같은 종류를 방금 받아 ack 했다(DB — 재배포 뒤에도, H5) → 집지 않고 빼지도 않는다
+                if _UPDCMD_OWNER.get(u) == "fv":
+                    _UPDCMD_OWNER.pop(u, None)
+                for mk in [mk for mk, x in _UPDCMD_FV_PC.items() if x == u]:
+                    _UPDCMD_FV_PC.pop(mk, None)
+                continue
+            if not _claimed:
+                # 업데이터 행이 이미 acked(업데이터가 가져감)·만료·덮임·더 새 명령 대기·업데이터에 내줌 → 팜뷰도 실행하지 않는다.
+                #   ★소유도 푼다 (v3 델타 반증 #4)★ — «fv» 로 남으면 그 행을 업데이터 폴링이 _updcmd_take 로 못 집어 그 PC 의
+                #   업데이터 큐 머리가 만료(10분)까지 막혔다(재배포로 두 인스턴스가 겹칠 때 — 내준 행을 팜뷰가 거절하는 길).
+                if _UPDCMD_OWNER.get(u) == "fv":
+                    _UPDCMD_OWNER.pop(u, None)
+                for mk in [mk for mk, x in _UPDCMD_FV_PC.items() if x == u]:
+                    _UPDCMD_FV_PC.pop(mk, None)
+                _fv_q_drop(v)
+                continue
+            v["claimed"] = True
+        _out = {f: v[f] for f in _FV_UPDCMD_OUT}
+        if _was:
+            # ★다시 주는 것 (반증 v2 #2, 더하기만)★ — 팜뷰가 이 id 를 기억(UPD_DONE)하면 결과로 ack 만, ★기억이 없으면
+            #   실행하지 말 것★(재시작한 팜뷰가 이미 돈 명령을 또 돌린다) — ack {ok:false, reached:true} 로 «모름» 을 닫는다.
+            _out["redeliver"] = True
+        cmds.append(_out)
     cmds.sort(key=lambda c: c["id"])
     return _fv_json(request, {"cmds": cmds})
 
@@ -14090,16 +16725,67 @@ async def fv_updcmd_ack(request: Request):
         body = await request.json()
     except Exception:
         return _fv_err(400, "JSON 본문이 필요합니다")
+    if not isinstance(body, dict):   # ★B-NEW2 (2026-09-23)★ [1] 같은 본문이 .get 에서 500 이었다
+        return _fv_err(400, "JSON 본문이 필요합니다")
     pc = body.get("pc")
     if not pc:
         return _fv_err(400, "pc 필드가 필요합니다")
+    # ★B-FV10 (2026-09-23)★ id 는 필수 · 정수로 비교 — 예전엔 id 가 없으면 ★무엇이든★ 지웠고
+    #   (사람이 방금 다시 누른 새 명령까지), "7" 처럼 문자열이면 영영 안 맞았다. 계약 §4-3 은
+    #   「id 가 일치할 때만」 지운다고 약속한다.
     cid = body.get("id")
+    try:
+        if cid is None or isinstance(cid, bool):
+            raise ValueError
+        cid = int(str(cid).strip())
+    except Exception:
+        return _fv_err(400, "id 필드(정수)가 필요합니다")
+    _FV_LAST_SEEN[0] = time.monotonic()
+    _FV_ACKED_RECENT.append(cid)
     nspc = ns(FV_TENANT, clean_pc_id(str(pc)))
-    cur = FV_UPDCMD_QUEUE.get(nspc)
+    cur = None
     removed = False
-    if cur and (cid is None or cur.get("id") == cid):
-        del FV_UPDCMD_QUEUE[nspc]
+    for _k, _v in list(FV_UPDCMD_QUEUE.items()):     # id 로 찾는다 — 옆 칸(nspc#id, 부팅 복구)도
+        if _v.get("id") == cid and (_v.get("nspc") or _k) == nspc:
+            cur = _v
+            FV_UPDCMD_QUEUE.pop(_k, None)
+            removed = True
+            break
+    # ★짝 업데이터 행은 팜뷰 id 로 DB 에서 찾는다 (배포 반증 2차 F1·F2)★ — 칸이 새 누름에 덮였거나 재배포로 비어도
+    #   이 ack 는 제 행에 닿는다(예전엔 버려져 90초 뒤 업데이터가 한 번 더 돌렸다). 다른 테넌트 행은 안 건드린다.
+    _row = None
+    try:
+        _row = await updater_command_for_fv_id(cid)
+    except Exception as e:
+        print(f"[FV] updcmd ack 짝 찾기 실패 id={cid}: {e}")
+    if _row and split_ns(str(_row.get("pc_id") or ""))[0] != FV_TENANT:
+        _row = None
+    if _row is None and removed and cur.get("ucmd") is not None and cur.get("claimed"):
+        _row = {"id": cur["ucmd"]}
+    if _row is not None and _UPDCMD_OWNER.get(_row["id"]) == "updater":
+        # 회수돼 업데이터가 이미 받아 간 행 — 팜뷰가 늦게 «했다» 해도 되돌릴 수 없다(두 번 실행됐을 수 있음, 로그로 남긴다)
+        print(f"[FV] updcmd 늦은 ack — 업데이터가 이미 받은 명령 ucmd={_row['id']} ok={body.get('ok')} (두 번 실행됐을 수 있음)")
         removed = True
+        _row = None
+    if _row is not None:
+        removed = True
+        _u = _row["id"]
+        try:
+            # ★팜뷰 실패 → 업데이터 큐로 되돌린다 (2026-09-23 배포 반증 #1)★ — 팜뷰는 설정에 없는 PC·nobulk·
+            #   에이전트 없는 PC 에서 늘 실패한다(ack {ok:false, why}). 예전엔 fv_failed 로 끝나 업데이트가 사라졌다.
+            #   팜뷰가 `reached: true`(에이전트에 닿았다 — 다시 보내면 두 번 실행)라고 명시한 실패만 fv_failed 로 둔다.
+            #   같은 종류의 더 새 명령이 이미 가는 중이면 되살리지 않고 superseded(2차 F3).
+            if not body.get("ok") and _fv_not_reached(body) and await release_updater_command_from_fv(_u):
+                _updcmd_release_fv(_u)
+            else:     # 업데이터 행에 결과를 남긴다(/updater/commands/recent 에서 fv_done·fv_failed 로 보인다)
+                await finish_updater_command_fv(_u, bool(body.get("ok")))
+        except Exception as e:
+            print(f"[FV] updcmd 결과 기록 실패 ucmd={_u}: {e}")
     print(f"[FV] updcmd ack pc={pc} id={cid} ok={body.get('ok')} why={body.get('why', '')}"
           f"{'' if removed else ' (이미 없음·id 불일치)'}")
     return _fv_json(request, {"ok": True, "removed": removed})
+
+
+# ★OCR 라벨링 (2026-09-23 장부 #108)★ — 라우터·표·화면은 전부 ocr_label.py(머리 주석). 여기는 연결만.
+import ocr_label as _ocr_label   # noqa: E402
+_ocr_label.init(app, __name__)

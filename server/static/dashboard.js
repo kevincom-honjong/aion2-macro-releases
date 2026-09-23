@@ -12,6 +12,10 @@ const ACCT_SUF_RE  = new RegExp('([' + ACCT_SUFFIX + '])$');       // 'PC-20c' �
 const ACCT_SUF_RE2 = new RegExp('[0-9][' + ACCT_SUFFIX + ']$');    // 숫자 뒤 접미사만
 // ★''.includes('') 가 true 라 빈 문자열을 따로 막는다★ — 옛 'bcd'.includes(c) 의 잠복 버그
 function isAcctSuf(c){ return !!c && c.length === 1 && ACCT_SUFFIX.includes(c); }
+// ★검증용 가짜 PC 판정 한 곳(2026-09-23)★ — 서버 _is_fake_pc 와 같은 규칙. 예전엔 renderCards 는
+//   PC-TEST 만, dkSubCount 는 PC-TEST·PC-DEMO 를 따로 빼서 전광판 칸마다 모집단이 달랐다.
+const FAKE_PC_BASES = ['PC-TEST', 'PC-DEMO'];
+function isFakePc(id){ const s = String(id || '').trim(); return FAKE_PC_BASES.includes(baseId(s).toUpperCase()); }
 // 접미사 → 계정번호(2~). 접미사가 아니면 0 → 호출부의 `|| 1` 폴백이 살아난다.
 function acctNoOfSuf(c){ return isAcctSuf(c) ? ACCT_SUFFIX.indexOf(c) + 2 : 0; }
 
@@ -124,18 +128,46 @@ let _pendDupMemo = {cmd:'', at:0, yes:false};   // 일괄 전송(Promise.all) �
 // ★업데이트/재시작 결과만(2026-09-22, 주인님 지시)★ — pendingCmds 는 건드리지 않는다
 //   (범위가 넓고 손대면 회귀 위험). ★기준은 버전★ — updater.version 이 바뀌면 ✓,
 //   3분 안 안 바뀌면 ✗. 설명 문구는 카드에 안 띄운다(hover title 만).
-let UPD_RESULT = {};   // base → {before, deadline, result: null|'ok'|'fail'}
-function updResultStart(base, beforeVer){
-  UPD_RESULT[base] = {before: beforeVer||'', deadline: Date.now()+180000, result: null};
+// ★★B-CQ8 (2026-09-23) 증거가 없으면 ✗ 가 아니라 ?★★ — 예전엔 _updater_version 하나로만 봤다.
+//   그런데 restart 와 「매크로만 바뀐 update」 는 업데이터 버전을 ★안 바꾼다★ → 멀쩡히 된 것이
+//   3분 뒤 전부 ✗ 였다. 이제 증거 두 가지:
+//     ① 버전 — macro_version 또는 _updater_version 이 바뀜(update 의 ✓)
+//     ② 재기동 — uptime_hours(매크로 프로세스 시작부터, config._report_start_time)가 ★줄어듦★
+//        (restart 의 ✓ · 이미 최신이던 update 의 ✓). 0.01h 반올림이라 0.02h 넘게 줄어야 인정.
+//   ✗ 는 ★반대 증거★ 가 있을 때만: 3분 동안 uptime 이 끊김 없이 늘었다(=안 껐다) 또는
+//   재기동은 됐는데 최신이 아닌 버전 그대로(update). 둘 다 없으면 '?'(판정 불가).
+let UPD_RESULT = {};   // base → {cmd, before, beforeMacro, beforeUp, deadline, result: null|'ok'|'fail'|'unknown'}
+function updResultStart(base, beforeVer, command){
+  const p = state[base]||{};
+  const up = (typeof p.uptime_hours === 'number') ? p.uptime_hours : null;
+  UPD_RESULT[base] = {cmd: command||'update', before: beforeVer||'', beforeMacro: p.macro_version||'',
+                      beforeUp: up, deadline: Date.now()+180000, result: null};
 }
 function updResultSweep(){
   let changed = false;
   Object.keys(UPD_RESULT).forEach(b=>{
     const e = UPD_RESULT[b];
     if (e.result) return;   // 이미 확정된 건 재판정 안 한다(다음 시도가 덮어씀)
-    const cur = (state[b]||{})._updater_version || '';
-    if (cur && cur !== e.before) { e.result = 'ok'; changed = true; }
-    else if (Date.now() >= e.deadline) { e.result = 'fail'; changed = true; }
+    const p = state[b]||{};
+    const curU = p._updater_version || '';
+    const curM = p.macro_version || '';
+    const verChanged = (curU && curU !== e.before) || (curM && e.beforeMacro && curM !== e.beforeMacro);
+    const up = (typeof p.uptime_hours === 'number') ? p.uptime_hours : null;
+    const hasUp = (up !== null && e.beforeUp !== null);
+    const rebooted = hasUp && up < e.beforeUp - 0.02;
+    const kept = hasUp && up > e.beforeUp + 0.02;          // 안 끊기고 계속 늘었다 = 재기동 없음
+    const lm = (typeof latestVersions === 'object' && latestVersions) ? (latestVersions.macro || '') : '';
+    const atLatest = !!(lm && curM && curM === lm);
+    const done = Date.now() >= e.deadline;
+    let r = null;
+    if (e.cmd === 'restart') {
+      if (rebooted) r = 'ok';
+      else if (done) r = kept ? 'fail' : 'unknown';
+    } else {
+      if (verChanged || (rebooted && atLatest)) r = 'ok';
+      else if (done) r = (kept || rebooted) ? 'fail' : 'unknown';
+    }
+    if (r) { e.result = r; changed = true; }
   });
   return changed;
 }
@@ -686,9 +718,7 @@ function dkSubCount(){
   //   ★renderCards 와 같은 모집단★ 을 쓴다 — PC-TEST/PC-DEMO 는 카드로 안 그린다(4409).
   let sub = 0, nosub = 0, unknown = 0;
   Object.keys(state || {}).forEach(id => {
-    const b = baseId(id || '').toUpperCase();
-    if (b === 'PC-TEST' || b === 'PC-DEMO') return;
-    if (isExcludedPc(id)) return;   // ★계정없음·은퇴는 분모에서도 뺀다(2026-09-23)★ — unknown 도 아니다
+    if (isExcludedPc(id)) return;   // ★가짜·계정없음·은퇴는 분모에서도 뺀다(2026-09-23)★ — unknown 도 아니다(isExcludedPc 한 곳)
     const v = subState(id);
     if (v === 'on') sub++; else if (v === 'off') nosub++; else unknown++;
   });
@@ -704,26 +734,66 @@ function dkSubCount(){
 //   바로 다음 렌더에서 클라 계산으로 되돌아간다(깜빡임). 대신 SERVER_SUMMARY 에
 //   저장해 두고, 저 세 함수가 ★있으면 그 값을 최종값으로★ 쓰게 한다(§A12 — 규칙은
 //   여전히 서버 하나, 클라 계산은 서버값이 오기 전 첫 화면용 폴백으로만 남는다).
-let SERVER_SUMMARY = null;
+let SERVER_SUMMARY = null, SERVER_SUMMARY_AT = 0;
+// 폴백 재료가 언제 것인지(2026-09-23 전수 #6·#7) — 서버가 끊겨 화면 계산으로 돌아가도 그 재료
+//   (캐릭 표·회랑 목록)가 같이 낡았으면 「화면 계산」 이라는 말만으로는 거짓이 된다. 나이를 같이 적는다.
+let CHAR_TABLE_AT = 0, CORRIDOR_AT = 0;
+function ageNote(at, label, staleMs, now){
+  const t = (now == null ? sumClock() : now);
+  if(!at) return ' · ' + label + ' 아직 못 받음';
+  return (t - at) > staleMs ? ' · ' + label + ' ' + Math.round((t - at)/60000) + '분째 못 받음' : '';
+}
+// ★시각은 performance.now()(단조 시계)★ — 벽시계(Date.now)는 PC 시계가 뒤로 가면 낡은 값을
+//   그만큼 더 「신선」 하게 보고 「-N초 전」 을 적었다(2026-09-23 반증 B5).
+function sumClock(){ return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
+// ★낡은 서버값을 영원히 믿지 않는다(2026-09-23 반증 #4)★ — /summary 가 실패하면 예전엔
+//   마지막 값이 무기한 남았다. 주기(20초)의 세 배가 지나면 서버값을 버리고 화면 계산(폴백)으로
+//   돌아간다. 요청 하나가 걸려도 10초에 끊는다.
+const SERVER_SUMMARY_TTL_MS = 60000;
+function serverSum(now){
+  if(!SERVER_SUMMARY) return null;
+  return ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) < SERVER_SUMMARY_TTL_MS ? SERVER_SUMMARY : null;
+}
+// 전광판 칸 툴팁에 붙일 출처 한 줄 — 서버값인지, 끊겨서 화면 계산인지 사람이 가를 수 있게.
+function serverSumNote(now){
+  const t = (now == null ? sumClock() : now);
+  if(serverSum(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
+  return SERVER_SUMMARY
+    ? '※ 서버 요약이 ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초째 끊김 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t)
+    : '※ 서버 요약 대기 중 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t);
+}
+// ★renderCards 와 같은 모집단(가짜 PC 제외)★ — 예전엔 20초마다 여기서만 PC-TEST 가 섞여
+//   던전·캐릭 칸이 한 번 튀었다가 다음 renderCards 에 돌아왔다(2026-09-23 반증 B3).
+function summaryPcs(){ return Object.values(state||{}).filter(p => !isFakePc(p.pc_id)); }
+function redrawSummary(){
+  try { refreshSummary(summaryPcs()); } catch(e){ console.error('refreshSummary', e); }
+  try { updateCorridorTile(); } catch(e){ console.error('updateCorridorTile', e); }
+  try { dkHero(); } catch(e){ console.error('dkHero', e); }
+}
 async function loadServerSummary(){
+  const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+  const to = ac ? setTimeout(() => ac.abort(), 10000) : null;
   try{
-    const r = await fetch('/summary', {cache:'no-store'});
-    if(!r.ok) return;
+    const r = await fetch('/summary', ac ? {cache:'no-store', signal: ac.signal} : {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     SERVER_SUMMARY = await r.json();
-    refreshSummary(Object.values(state||{}));
-    updateCorridorTile();
-    dkHero();
+    SERVER_SUMMARY_AT = sumClock();
   }catch(e){ console.error('서버 전광판 요약 실패', e); }
+  finally{ if(to) clearTimeout(to); }
+  redrawSummary();   // 실패해도 다시 그린다 — 낡았으면 serverSum() 이 null 이라 폴백으로 바뀐다
 }
 
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
-  const pcs = Object.values(state||{});
+  // ★제외 PC(가짜·은퇴·계정없음)는 평균·스파크라인에서 뺀다(2026-09-23 반증 2바퀴)★ —
+  //   카드엔 안 보이는 PC-DEMO 90 이 PC-01 10 과 평균돼 50.0 으로 보였다.
+  const pcs = Object.entries(state||{}).filter(([id])=>!isExcludedPc(id)).map(([,p])=>p);
   if(!pcs.length) return;
   const ef = pcs.filter(p=>p.efficiency);
   const avg = ef.length ? ef.reduce((a,p)=>a+p.efficiency,0)/ef.length : 0;
-  $('dk-h-eff').innerHTML = avg.toFixed(1)+'<i>%/h</i>';
+  // 효율을 가진 카드가 하나도 없으면 「0.0」 이 아니라 「–」(모름, 팜뷰 eff:null 과 같게)
+  $('dk-h-eff').innerHTML = ef.length ? avg.toFixed(1)+'<i>%/h</i>' : '–';
   // ★키나 = 창고 + 거래 (2026-08-29 주인님)★ — 전광판이 센 값을 그대로 쓴다.
   const kw = DK_SUM.kina || 0, kt = DK_SUM.trade;
   const kEl = $('dk-h-kina');
@@ -733,13 +803,15 @@ function dkHero(){
     : `창고키나 ${fmtKina(kw)} + 거래키나 ${fmtKina(kt)} = ${fmtKina(kw + kt)}`;
 
   // ★구독 O / X★ — 서버값 있으면 그게 최종값(2026-09-23, §A12·/api/fv/snapshot 과 같은 계산)
-  const sc = SERVER_SUMMARY ? (SERVER_SUMMARY.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
+  const ssH = serverSum();
+  const sc = ssH ? (ssH.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
   const on = $('dk-h-sub-on'), off = $('dk-h-sub-off'), box = $('dk-h-subbox');
   if (on)  on.textContent  = sc.sub;
   if (off) off.textContent = sc.nosub;
   if (box) box.title = `오드에너지 분모로 판정합니다 — 840=구독 / 560=구독 해제 (계정 단위)`
     + `\n구독 ${sc.sub}개 · 해제 ${sc.nosub}개`
-    + (sc.unknown ? `\n★${sc.unknown}개는 오드에너지 미수집이라 판정 불가★ — 어느 쪽에도 안 셌습니다 (정보수집을 돌리면 채워집니다)` : '');
+    + (sc.unknown ? `\n★${sc.unknown}개는 오드에너지 미수집이라 판정 불가★ — 어느 쪽에도 안 셌습니다 (정보수집을 돌리면 채워집니다)` : '')
+    + `\n` + serverSumNote();
 
   // 스파크라인 — 각 PC 효율을 이어 그린 실제 데이터(장식 아님)
   const vs = ef.map(p=>p.efficiency);
@@ -771,6 +843,10 @@ function fmtKinaShort(n) {
   if (a>=1e4) return '₭'+Math.round(n/1e4).toLocaleString('en-US')+'만';
   return '₭'+Number(n).toLocaleString('en-US');
 }
+// 카드 안의 「N초 전」 은 이 꼴로 — 글자는 매초 바뀌지만 카드 HTML 비교(reconcileGrid)에서는 빼고,
+//   남겨 둔 카드는 이 칸 글자만 새로 쓴다(2026-09-23). 없으면 살아 있는 카드가 매 렌더 통째로 갈려
+//   호버·포커스·글자 선택이 날아갔다(반증 B2 참고).
+function relSpan(iso) { return `<span data-rt="${escAttr(iso||'')}">${relTime(iso)}</span>`; }
 function relTime(iso) {
   if (!iso) return '–';
   const d = Math.floor((Date.now()-new Date(iso+'Z').getTime())/1000);
@@ -785,11 +861,28 @@ const CLASS_LABEL = {gungsung:'궁성',spirit:'정령성',kumsung:'검성',chiyo
 // 오늘 완료로 둔갑하지 않게 시각 게이트.
 function fmtTs(d){const p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
-function lastDailyReset(){const d=new Date();if(d.getHours()<5)d.setDate(d.getDate()-1);d.setHours(5,0,0,0);return d;}
-function lastWeeklyReset(){const d=lastDailyReset();while(d.getDay()!==3)d.setDate(d.getDate()-1);return d;}  // 3=수요일
+// ★B-JS11 (2026-09-23) 리셋 경계는 ★KST 로 계산한다★ — 보는 기기 시간대가 아니다★
+//   예전엔 브라우저 로컬 05:00 을 썼다. 베트남(UTC+7) 직원 폰에선 경계가 07:00 KST 가 되고,
+//   수요일 05~07시 KST 사이엔 주간 경계가 ★지난주★ 로 잡혔다. 게임 리셋은 한국 서버 기준이다.
+//   반환값은 ★절대 시각(Date)★ — Date 비교(isBeforeReset)는 그대로 맞다.
+//   KST 문자열(completed_time·dungeon_done_at, 매크로가 KST 로 찍는다)과 비교할 땐 fmtKstTs 로.
+const KST_OFF_MS = 9 * 3600000, GAME_RESET_MS = 5 * 3600000;
+function kstGameDayNum(ms){ return Math.floor((ms + KST_OFF_MS - GAME_RESET_MS) / 86400000); }   // 1970-01-01(목)=0
+function fmtKstTs(d){const k=new Date(d.getTime()+KST_OFF_MS), p=n=>String(n).padStart(2,'0');
+  return `${k.getUTCFullYear()}-${p(k.getUTCMonth()+1)}-${p(k.getUTCDate())} ${p(k.getUTCHours())}:${p(k.getUTCMinutes())}:${p(k.getUTCSeconds())}`;}
+function lastDailyReset(){ return new Date(kstGameDayNum(Date.now()) * 86400000 + GAME_RESET_MS - KST_OFF_MS); }
+function lastWeeklyReset(){   // 가장 최근 수요일 05:00 KST
+  const D = kstGameDayNum(Date.now()), back = ((D + 4) % 7 - 3 + 7) % 7;   // (D+4)%7 = 요일(0=일), 3=수
+  return new Date((D - back) * 86400000 + GAME_RESET_MS - KST_OFF_MS);
+}
+// ★B-JS6 (2026-09-23)★ 서버 시각(UTC naive) → ★보는 기기의 로컬 시각★ 문자열. 못 읽으면 원문 조각.
+function fmtLocalAt(raw, a, b){
+  const d = collectedAtDate(raw);
+  return d ? fmtTs(d).slice(a, b) : String(raw || '').replace('T', ' ').slice(a, b);
+}
 function isHuntDone(dp){
   if(!dp||!dp.length) return false;
-  const cut=fmtTs(lastDailyReset());
+  const cut=fmtKstTs(lastDailyReset());   // ★B-JS11★ completed_time 은 KST 문자열
   return dp.every(c=>c.completed && ((c.completed_time||'').replace('T',' ')>=cut));
 }
 function isAwakenDone(pc_id){
@@ -923,7 +1016,7 @@ function isDungeonDone(pc){
   // 일일던전(계정 티켓 14장) 소진 — 매크로가 소진 시각(dungeon_done_at)을 보고.
   // 각성전과 같은 주간 리셋(수요일 05시) 경계 이후 기록만 인정 → 경계 지나면 자연 소멸.
   const t=(pc.dungeon_done_at||'').replace('T',' ');
-  return !!t && t>=fmtTs(lastWeeklyReset());
+  return !!t && t>=fmtKstTs(lastWeeklyReset());   // ★B-JS11★ dungeon_done_at = 원격컴 로컬(KST) time.strftime
 }
 
 // ★★'오늘 끝냈나' 판정은 여기 한 곳만 쓴다 (2026-08-20 PC-12 실측)★★
@@ -979,7 +1072,7 @@ const cdpMark = pc => {
 //   맨 앞에 남는 구분자를 여기서 한 번만 걷어낸다(「오늘 완료」를 지우면서 생긴 자리).
 function dpMarks(pc) {
   const head = (pc._char_collected_at
-      ? `<span class="text-cyan-600">수집 ${relTime(pc._char_collected_at)}</span>` : '')
+      ? `<span class="text-cyan-600">수집 ${relSpan(pc._char_collected_at)}</span>` : '')
     + cdpMark(pc) + nativeMark(pc) + nameMismatch(pc);
   return head.replace(/^\s*\u00b7\s*/, '');
 }
@@ -1001,7 +1094,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     // char_info OCR 이름 우선, 없으면 daily_progress 이름, 없으면 슬롯 번호
     const name = (charNames && charNames[c.slot-1]) || c.name || `${c.slot}`;
     const short = name.length > 3 ? name.slice(0,3) : name;
-    const time = (c.completed_time||'').slice(11,16);
+    const time = String(c.completed_time||'').slice(11,16);
     const cls = done
       ? 'bg-green-900/70 border-green-700 text-green-400'
       : isActive
@@ -1010,8 +1103,8 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     const icon = done ? '✓' : isActive ? '▶' : String(c.slot);
     const classLabel = isActive && pc.map ? (CLASS_LABEL[pc.map]||'') : '';
     return `<div class="flex flex-col items-center ${cls} border rounded-md px-1 py-0.5 text-center cursor-default"
-      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+time:isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
-      <span class="font-bold text-xs leading-none">${icon}</span>
+      style="min-width:0" title="${escAttr(name)}${done?' ✓ '+escAttr(time):isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
+      <span class="font-bold text-xs leading-none">${esc(icon)}</span>
       <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap${sZero?';color:#f87171;font-weight:700':''}">${esc(short)}</span>
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
@@ -1141,7 +1234,10 @@ function platLabel(v){
 }
 function acctNumOf(pcid){
   const c = (pcid||'').slice(-1);
-  return acctNoOfSuf(c) || ((state[pcid]||{}).acct_num || 1);
+  // ★B-JS3 (2026-09-23)★ acct_num 은 매크로 보고값 — ★정수로만★ 돌려준다. 이 값이 acctRow·acctTagSpread·
+  //   카드 메뉴 머리에 HTML 로 박힌다(문자열이면 그대로 주입). 0·음수·못 읽음 = 1(예전 `|| 1` 과 같은 뜻).
+  const n = parseInt((state[pcid]||{}).acct_num, 10);
+  return acctNoOfSuf(c) || (n > 0 ? n : 1);
 }
 // 이 PC가 멀티계정인가 — 형제 계정 카드가 있거나(접미사 카드 존재) 매크로가 acct_total>1 보고.
 function isMultiAcct(pid){
@@ -1225,11 +1321,50 @@ function switchStepChip(pc) {
                 title="${esc('계정전환 진행 단계 — 총 15단계 (본컴 런처 → 원격컴 크롬 → 매크로 재시작)')}"
           >${esc(pc.switch_mark || '')} ${esc(s)}</span>`;
 }
+// ★카드 「💰 어비스」 줄 (2026-09-23 주인님 장부 #104)★ — 매크로 1.1.1004 숫자 칸(abyss_kina_state/gain/
+//   rate/since/mins)으로 그린다. 옛 매크로(숫자 칸 없음)는 글자 칸 abyss_kina 를 ★예전 그대로★.
+//   빨강은 「시간당 < abyss_red_rate」 이고 ★abyss_min_mins 분 넘게 잰 뒤★ 에만 — 그 전엔 튀니까 중립색.
+//   문턱은 서버 설정(/summary 의 abyss.red_rate·min_mins) — renderAbyssTiles 가 serverSum() 에서 받아
+//   ABYSS_TH 에 남긴다(설정값이라 요약이 낡아도 그대로 유효). 아직 못 받았으면 서버 기본값과 같은 수.
+const ABYSS_TH_DEFAULT = {red_rate: 1000000, min_mins: 5};
+let ABYSS_TH = null;
+function abyssTh(){ return ABYSS_TH || ABYSS_TH_DEFAULT; }
+function abyssCardLine(pc){
+  const st = pc && pc.abyss_kina_state;
+  const box = 'mt-1.5 text-xs rounded px-2 py-0.5 truncate border ';
+  // 카드가 좁아 줄이 잘려도(truncate) 호버하면 전부 보이게 — 글자는 숫자·시각뿐이라 본문은 그대로, 툴팁만 escAttr
+  const line = (cls, body) => `<div class="${box}${cls}" title="${escAttr(body)} — 어비스(Delete) 세션: 이번 구간(시작 시각부터) 번 키나와 시간당. 다음 세션 시작까지 유지">💰 어비스 ${body}</div>`;
+  if (st === 'ok' || st === 'waiting') {
+    // ★음수·NaN·문자는 0 으로(글자에 「+-5」·「NaN」 이 안 나가게, 2026-09-23 적대 검증)★
+    const nn = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
+    const since = nn(pc.abyss_kina_since);
+    // ★R7 — 시각은 KST(fmtKstTs)★ 매크로 글자 「(HH:MM부터)」·다른 KST 화면과 같게. 보는 기기(베트남 등) 시간대가 아니다.
+    const hm = (since > 0 && since < 1e11) ? fmtKstTs(new Date(since * 1000)).slice(11, 16) : '?';
+    const th = abyssTh(), mins = nn(pc.abyss_kina_mins), gain = nn(pc.abyss_kina_gain);
+    // ★R5 — 매크로는 10분까지 waiting(lc/loot.py ABYSS_KINA_OK_MINS=10), 주인님 문턱은 min_mins(5)★
+    //   waiting 이어도 gain·mins 가 실려 있고 mins ≥ 문턱이면 gain/mins 로 시간당을 재서 빨강/중립(서버 _abyss_billboard 와 같은 식).
+    const hasNum = pc.abyss_kina_gain != null && pc.abyss_kina_gain !== '' && Number.isFinite(Number(pc.abyss_kina_gain)) && mins > 0;
+    if (st === 'waiting' && !(hasNum && mins >= th.min_mins))
+      return line('text-gray-400 bg-gray-800/40 border-gray-700', `측정 중 (${hm}부터)`);
+    const rate = st === 'ok' ? nn(pc.abyss_kina_rate) : Math.floor(gain * 60 / mins);
+    const txt = `+${fmtKinaKor(gain)} · 시간당 ${fmtKinaKor(rate)} (${hm}부터)`;
+    if (mins < th.min_mins)
+      return line('text-gray-300 bg-gray-800/60 border-gray-700', `${txt} (측정 ${mins}분)`);
+    const cls = rate < th.red_rate ? 'text-red-300 bg-red-950/40 border-red-800' : 'text-amber-300 bg-amber-900/20 border-amber-800/40';
+    return line(cls, txt);
+  }
+  return pc && pc.abyss_kina
+    ? `<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`
+    : '';
+}
+
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
   const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
-  const sel = selectedPcs.has(pc.pc_id)?' card-sel':'';
+  // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
+  //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
+  const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
   const bugBadge = (pc._bug_count||0)>0
@@ -1243,7 +1378,7 @@ function buildCard(pc) {
   const _ustale = (_uage !== null && _uage > 270);
   const ucls = _ustale ? 'text-gray-600 line-through'
     : ({'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600');
-  const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${_uage}초째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
+  const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${Math.floor(_uage/60)}분째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
   const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
   const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${esc(pc.macro_version)}</span>` : '';
@@ -1251,8 +1386,10 @@ function buildCard(pc) {
   const _ur = UPD_RESULT[baseId(pc.pc_id||'')];
   const updResultTxt = (_ur && _ur.result)
     ? (_ur.result === 'ok'
-        ? `<span class="text-green-400" title="버전 바뀜: ${esc(_ur.before)} → ${esc(pc._updater_version||'')}">✓</span>`
-        : `<span class="text-red-400" title="3분 안에 버전이 안 바뀜(${esc(_ur.before)} 그대로)">✗</span>`)
+        ? `<span class="text-green-400" title="${_ur.cmd==='restart'?'매크로 재기동 확인(가동시간 줄어듦)':'버전 바뀜/재기동 확인'}">✓</span>`
+        : (_ur.result === 'unknown'
+            ? `<span class="text-gray-500" title="3분 안에 판정할 증거 없음(보고 없음) — 로그 확인">?</span>`
+            : `<span class="text-red-400" title="${_ur.cmd==='restart'?'3분 동안 가동시간이 안 끊김 — 재기동 안 됨':'3분 안에 버전이 안 바뀜('+esc(_ur.before)+' 그대로)'}">✗</span>`))
     : '';
   const updaterRow = (pc._updater_state&&pc._updater_state!=='unknown')
     ? `<div class="mt-1 flex items-center gap-1 text-gray-600 whitespace-nowrap overflow-hidden" style="font-size:10px">${macroVer}${macroVer?'<span class="text-gray-800">|</span>':''}<span>업데이터</span><span class="${ucls}">${esc(pc._updater_state)}</span>${uageTxt}${pc._updater_version?`<span class="${uvcls}">v${esc(pc._updater_version)}</span>`:''}${updResultTxt}</div>`
@@ -1317,10 +1454,10 @@ function buildCard(pc) {
       <div class="col-span-2"><span class="pv-k">맵</span> <span class="text-gray-100 font-medium">${esc(pc.map_name||'–')}</span></div>
       <div><span class="pv-k">업타임</span> <span class="text-gray-100 font-medium">${fmtSlotUptime(pc.slot_uptime, pc.slot||0, pc.uptime_hours)}</span></div>
       ${pc.server?`<div><span class="pv-k">서버</span> <span class="text-gray-100 font-medium">${esc(pc.server)}</span></div>`:''}
-      <div><span class="pv-k">최근</span> <span class="text-gray-100 font-medium">${relTime(pc.last_active)}</span></div>
+      <div><span class="pv-k">최근</span> <span class="text-gray-100 font-medium">${relSpan(pc.last_active)}</span></div>
       <div><span class="pv-k">사망(30분)</span> <span class="${(pc.deaths_30m||0)>0?'text-red-400 font-bold':'text-gray-100 font-medium'}">${pc.deaths_30m||0}회</span></div>
     </div>
-    ${pc.abyss_kina?`<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`:''}
+    ${abyssCardLine(pc)}
     ${errHtml?`<div class="mt-2 space-y-0.5">${errHtml}</div>`:''}
     ${buildDailyProgress(pc.daily_progress, activeSlot, pc.chars, pc)}
     ${updaterRow}
@@ -1466,6 +1603,9 @@ function setupDrag(gridId, orderKey) {
   [...grid.children].forEach(card => {
     const handle = card.querySelector('.drag-handle');
     if (!handle) return;
+    // ★부분 갱신 뒤엔 안 바뀐 카드가 그대로 남는다 — 두 번 묶지 않는다(2026-09-23)★
+    if (card._dragBound) return;
+    card._dragBound = true;
     card.setAttribute('draggable','false');
     // 핸들에서만 드래그 시작
     handle.addEventListener('mousedown', e => {
@@ -1473,6 +1613,14 @@ function setupDrag(gridId, orderKey) {
       card.setAttribute('draggable','true');
       dragSrcId = gridKeyOf(card);
       dragSection = orderKey;
+      // ★끌지 않고 놓으면 되돌린다(2026-09-23 반증 B2-3)★ — dragend 는 실제로 끌었을 때만 온다.
+      //   예전엔 매 렌더가 카드를 새로 깔아 저절로 지워졌는데, 부분 갱신은 안 바뀐 카드를 그대로 둔다
+      //   → 카드 몸통 전체가 끌리고, 나중에 다른 카드를 끌면 이 카드가 옮겨졌다.
+      document.addEventListener('mouseup', () => {
+        if (card.classList.contains('card-dragging')) return;
+        card.setAttribute('draggable','false');
+        if (dragSrcId === gridKeyOf(card)) { dragSrcId = null; dragSection = null; }
+      }, {once: true});
     });
     handle.addEventListener('click', e => e.stopPropagation());
     card.addEventListener('dragstart', e => {
@@ -1646,13 +1794,63 @@ function buildStack(s){
     <div class="acct-body relative">${buildCard(s.top)}</div></div>`;
 }
 
+// 격자 부분 갱신 — items 순서대로 [{key, html}]. 같은 key 의 html 이 그대로면 그 DOM 을 ★건드리지 않는다★.
+//   바뀐 것만 새 노드로 바꾸고, 순서가 다르면 옮기고, 없어진 것은 뺀다. 한 뿌리 요소가 아닌
+//   html 이 섞이면 예전처럼 통째로 깐다(안전판). 반환 = 갈아끼운·뺀 노드 수(계측용).
+let RENDER_STATS = {calls: 0, replaced: 0, kept: 0, full: 0};
+// 「N초 전」 칸(relSpan)은 시각 값·글자를 비교에서 뺀다 — 하트비트마다 last_active 가 바뀌어도 카드는 남긴다.
+//   남긴 카드는 새 HTML 의 시각 값을 ★같은 순서로★ 옮겨 적고 글자를 다시 쓴다(정규화가 같으면 칸 수·순서도 같다).
+const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">');
+const _rkUnesc = v => v.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+function _rkTick(el, html){
+  const vals = [...String(html).matchAll(/data-rt="([^"]*)"/g)].map(m => _rkUnesc(m[1]));
+  el.querySelectorAll('[data-rt]').forEach((e, i) => {
+    if (i < vals.length && e.dataset.rt !== vals[i]) e.dataset.rt = vals[i];
+    const t = relTime(e.dataset.rt); if (e.textContent !== t) e.textContent = t;
+  });
+}
+function reconcileGrid(grid, items){
+  RENDER_STATS.calls++;
+  const tpl = document.createElement('template');
+  const cur = new Map();
+  let clean = true;
+  [...grid.children].forEach(el => { const k = el.dataset ? el.dataset.rk : null; if (k && !cur.has(k)) cur.set(k, el); else clean = false; });
+  const fresh = items.map(it => {
+    const old = clean ? cur.get(it.key) : null;
+    const norm = _rkNorm(it.html);
+    if (old && old._rkHtml === norm) { RENDER_STATS.kept++; _rkTick(old, it.html); return old; }
+    tpl.innerHTML = String(it.html).trim();
+    if (tpl.content.childElementCount !== 1) return null;
+    const el = tpl.content.firstElementChild;
+    el.dataset.rk = it.key; el._rkHtml = norm;
+    RENDER_STATS.replaced++;
+    return el;
+  });
+  if (!clean || fresh.some(x => !x)) {
+    RENDER_STATS.full++;
+    grid.innerHTML = items.map(it => it.html).join('');
+    [...grid.children].forEach((el, i) => { if (items[i]) { el.dataset.rk = items[i].key; el._rkHtml = _rkNorm(items[i].html); } });
+    return items.length;
+  }
+  const keep = new Set(fresh);
+  let changed = 0;
+  [...grid.children].forEach(el => { if (!keep.has(el)) { el.remove(); changed++; } });
+  let prev = null;
+  fresh.forEach(el => {
+    const want = prev ? prev.nextElementSibling : grid.firstElementChild;
+    if (want !== el) { grid.insertBefore(el, want); changed++; }
+    prev = el;
+  });
+  return changed;
+}
+
 function renderCards() {
   migrateOrder();          // 옛 순서 목록 1회 이관(baseId 정의 뒤에 안전하게)
   // ★PC-TEST 는 화면에 안 띄운다 (2026-08-20 사용자: "거슬린다")★
   //   배포 검증이 pc_id=PC-TEST 로 /check 를 때리면서 카드가 생긴다. 지워도 다음
   //   검증 때 또 생기므로 ★렌더 단계에서 거른다★ (전광판 합계에서도 같이 빠진다).
   const pcs = Object.values(state)
-    .filter(p => baseId(p.pc_id||'') !== 'PC-TEST')
+    .filter(p => !isFakePc(p.pc_id))   // PC-DEMO 도(2026-09-23 — 전광판 모집단을 dkSubCount·서버와 같게)
     .sort((a,b)=>(a.pc_id||'').localeCompare(b.pc_id||''));
   const groups = {};
   pcs.forEach(p => { const b = baseId(p.pc_id||''); (groups[b] = groups[b] || []).push(p); });
@@ -1682,7 +1880,10 @@ function renderCards() {
   const offCnt = stacks.filter(s=>!s.online).length;
   const go  = document.getElementById('grid-online');
   const gof = document.getElementById('grid-offline');
-  go.innerHTML  = all.length ? all.map(buildStack).join('') : '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>';
+  // ★바뀐 카드만 갈아끼운다(2026-09-23 반응속도 2단계)★ — 예전엔 보고가 올 때마다 격자 전체를
+  //   innerHTML 로 새로 깔아 스크롤 위치·열린 메뉴·입력 포커스·호버가 매번 날아갔다.
+  if (all.length) reconcileGrid(go, all.map(s => ({key: s.base, html: buildStack(s)})));
+  else { go.innerHTML = '<div class="text-gray-700 text-sm col-span-full text-center py-10">매크로 연결 없음</div>'; }
   gof.innerHTML = '';
   document.getElementById('online-count').textContent  = `(${all.length - offCnt}/${all.length})`;
   document.getElementById('offline-count').textContent = `(${offCnt})`;
@@ -1788,8 +1989,9 @@ function refreshSummary(pcs) {
   let totalOdd = 0, totalAwaken = 0, awakenSeen = false, totalTrade = 0, tradeSeen = false;
   charTableData.forEach(r => {
     totalOdd += parseOddEnergy(r.odd_energy);
-    if (r.awakening_ticket != null) { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
-    if (r.trade_kina != null) { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
+    // 빈 문자열은 「못 읽음」 — 서버 _fv_char_agg 의 _seen 과 같은 뜻(2026-09-23 반증 B6)
+    if (r.awakening_ticket != null && r.awakening_ticket !== '') { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
+    if (r.trade_kina != null && r.trade_kina !== '') { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
   });
   const elOn = document.getElementById('cnt-online');
   elOn.textContent = c.onlineChars;
@@ -1798,25 +2000,63 @@ function refreshSummary(pcs) {
              + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
   // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
   //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
-  const ss = SERVER_SUMMARY;
-  document.getElementById('cnt-odd-energy').textContent = ss
+  //   ★서버 합계는 「한 카드도 못 읽은 칸」을 null 로 준다(반증 #2)★ — 0 과 모름을 가른다.
+  //   ★낡으면(60초) 서버값을 버린다(반증 #4)★ — serverSum() 이 null 을 준다.
+  const ss = serverSum();
+  const ssNote = serverSumNote();
+  const elOdd = document.getElementById('cnt-odd-energy');
+  elOdd.textContent = ss
     ? (ss.odd_energy > 0 ? ss.odd_energy.toLocaleString() : '–')
     : (totalOdd > 0 ? totalOdd.toLocaleString() : '–');
-  document.getElementById('cnt-awakening').textContent = ss
+  elOdd.title = ssNote;
+  const elAw = document.getElementById('cnt-awakening');
+  elAw.textContent = ss
     ? (ss.awakening_ticket != null ? ss.awakening_ticket.toLocaleString() : '–')
     : (awakenSeen ? totalAwaken.toLocaleString() : '–');
-  document.getElementById('cnt-trade-kina').textContent = ss
-    ? fmtKinaKor(ss.trade_kina || 0)
+  elAw.title = ssNote;
+  const elTr = document.getElementById('cnt-trade-kina');
+  elTr.textContent = ss
+    ? (ss.trade_kina != null ? fmtKinaKor(ss.trade_kina) : '–')
     : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
+  elTr.title = ssNote;
   document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
   const elDone = document.getElementById('cnt-completed');
   elDone.textContent = c.completedChars;
   elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
-  document.getElementById('cnt-total-kina').textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
+  const elTk = document.getElementById('cnt-total-kina');
+  elTk.textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
+  elTk.title = ssNote;
   // ★히어로가 ★같은 값★ 을 쓰게 넘겨둔다 (2026-08-29)★ — 따로 더하면 전광판과 갈린다.
   //   renderCards 안에서 refreshSummary 가 dkHero 보다 먼저 불린다(4389 → 4394).
   DK_SUM.kina  = ss ? (ss.total_kina || 0) : c.totalKina;
-  DK_SUM.trade = ss ? (ss.trade_kina || 0) : (tradeSeen ? totalTrade : null);
+  DK_SUM.trade = ss ? (ss.trade_kina != null ? ss.trade_kina : null) : (tradeSeen ? totalTrade : null);
+  try { renderAbyssTiles(ss, ssNote); } catch(e){ console.error('renderAbyssTiles', e); }
+}
+
+// ★어비스 수익 두 칸 (2026-09-23 주인님 장부 #104)★ — ★서버값만★ 쓴다. 「오늘」 은 서버가 PC 마다
+//   구간(since)을 은행에 쌓은 값이라 화면에서 다시 셀 재료가 없다. 서버값이 없거나 낡았으면(60초)
+//   「측정 대기」 — ★0 으로 칠하지 않는다★(모름 ≠ 0).
+function renderAbyssTiles(ss, note){
+  const a = ss && ss.abyss;
+  const $ = id => document.getElementById(id);
+  const tEl = $('cnt-abyss-today'), rEl = $('cnt-abyss-rate'), sub = $('cnt-abyss-rate-sub'), tile = $('tile-abyss-rate');
+  if (a && a.red_rate != null)
+    ABYSS_TH = {red_rate: a.red_rate, min_mins: a.min_mins != null ? a.min_mins : ABYSS_TH_DEFAULT.min_mins};
+  if (!tEl || !rEl) return;
+  tEl.textContent = (a && a.today != null) ? fmtKinaKor(a.today) : '측정 대기';
+  tEl.title = (a ? `오늘(KST ${a.day}) 어비스에서 번 키나 — PC ${a.today_pcs}대 합 · 00:00 초기화\n` : '') + (note || '');
+  const hasRate = !!(a && a.rate_sum != null);
+  rEl.textContent = hasRate ? fmtKinaKor(a.rate_sum) : '측정 대기';
+  const red = !!(hasRate && a.red);
+  if (tile) tile.dataset.red = red ? '1' : '';
+  if (sub) sub.textContent = a
+    ? (hasRate ? `대당 ${fmtKinaKor(a.rate_avg)} · ` : '') + `${a.rate_n}대 측정 중 / ${a.wait_n}대 대기`
+    : '';
+  rEl.title = a
+    ? `함대 시간당 합계 — ${a.min_mins}분 넘게 잰 PC 만 (${a.rate_n}대 측정 중 / ${a.wait_n}대 대기)`
+      + (hasRate ? `\n대당 평균 ${fmtKinaKor(a.rate_avg)}` + (red ? ` — ★문턱 ${fmtKinaKor(a.red_rate)} 아래★` : '') : '')
+      + '\n' + (note || '')
+    : (note || '');
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
@@ -1864,10 +2104,21 @@ function updateSelBar() {
 }
 
 function selectAllPcs() {
-  Object.keys(state).forEach(id=>selectedPcs.add(id));
-  document.querySelectorAll('[id^="card-"]').forEach(el=>el.classList.add('card-sel'));
+  // ★B-JS8 (2026-09-23)★ 가짜(PC-TEST·PC-DEMO)·은퇴·계정없음은 전체선택에 안 넣는다 — isExcludedPc 한 곳.
+  Object.keys(state).filter(id => !isExcludedPc(id)).forEach(id=>selectedPcs.add(id));
+  document.querySelectorAll('[id^="card-"]').forEach(el=>{ if (selectedPcs.has(el.id.slice(5))) el.classList.add('card-sel'); });
   updateSelBar();
 }
+// ★B-JS4 (2026-09-23) 명령이 ★실제로 닿을 카드★ — sendCmd 의 사고 307 우회와 같은 규칙★
+//   안 도는 카드면 같은 PC 의 살아 있는 카드로. 살아 있는 카드가 없으면 자기 자신(큐에 남는다).
+function cmdTargetOf(id){
+  const st = (state[id]||{}).status || 'offline';
+  if ((STATUS_CFG[st]||STATUS_CFG.offline).online) return id;
+  const live = liveCardOf(baseId(id));
+  return (live && live.pc_id) || id;
+}
+// 카드 id 목록 → 실제 대상 id(중복 없이). 스택 5장을 골라도 도는 매크로엔 ★1건★ 만 간다.
+function cmdTargets(ids){ return [...new Set([...ids].map(cmdTargetOf))]; }
 
 // ★멀티계정(v1.1.412 리뷰 결함 4/11): 업데이터 명령은 base id로★ — 업데이터는 PC 단위라
 //   base id(PC-03)로만 폴링한다. 부계정 카드(PC-03b)로 보내면 아무도 안 가져가는 고아 명령이
@@ -1921,6 +2172,7 @@ async function selUpdaterCmd(command, args={}) {
     } catch(e) { ok = false; }
     if(!ok) failed.push(b);
   }
+  loadUpdHistory();
   const n=sent.size;
   // ★★응답을 보고 말한다 (2026-08-22 사고 146)★★
   //   옛 코드는 fetch 결과를 ★쳐다보지도 않고★ 무조건 성공 토스트를 띄웠다.
@@ -1984,6 +2236,9 @@ async function toggleSlotFilter(pc_id, slot, enabled) {
 let livePc = null, liveTimer = null, liveImg = null, liveFails = 0, liveArmedAt = 0;
 
 async function openLive(pc) {
+  // ★B-JS5 (2026-09-23)★ 안 도는 계정 카드로 열면 live_on 은 sendCmd 가 살아 있는 카드로 돌리는데
+  //   화면은 /live/<누른 id> 를 당겨 영영 안 떴다. 처음부터 실제 대상 id 로 — live_off·beacon 도 이 id.
+  pc = cmdTargetOf(pc);
   livePc = pc; liveFails = 0; liveArmedAt = Date.now();
   document.getElementById('liveTitle').textContent = pc + ' — 실시간 화면';
   document.getElementById('liveStep').textContent = '연결 중…';
@@ -2193,10 +2448,12 @@ async function bulkCmd(command, args={}) {
   //   ★무장 없이★ 돌았고, 완주한 13대가 정보수집도 계정전환도 못 한 채 8시간을 섰다.
   //   주인님이 허용목록을 '*' 로 전체 개방하셨으므로 그 방어의 근거도 사라졌다.
   //   → sendCmd 의 rotate:true 를 그대로 통과시킨다(여기서 덮어쓰지 않는다).
-  const ids=Object.keys(state);
+  // ★B-JS4·B-JS8 (2026-09-23)★ 가짜·은퇴·계정없음 제외 + 물리 PC 당 1건(오프라인 형제가 살아 있는 카드로
+  //   우회돼 같은 매크로에 최대 5건이 쌓였다). 토스트 숫자도 물리 PC 수.
+  const ids=cmdTargets(Object.keys(state).filter(id => !isExcludedPc(id)));
   if(!ids.length){showToast('연결된 PC 없음');return;}
   await withBulk(() => Promise.all(ids.map(id=>sendCmd(id,command,args))));
-  showToast(`✓ ${command} → 전체 ${ids.length}대`);
+  showToast(`✓ ${command} → 전체 ${new Set(ids.map(baseId)).size}대`);
   loadCmdHistory();
 }
 
@@ -2234,7 +2491,9 @@ ${names}
   }
   // ★보내는 것은 안 바꾼다★ — 명령은 지금처럼 ★카드별★ 로 나간다(전체선택 때 이미 그랬다).
   //   바뀐 건 고르는 방법과 보여주는 숫자뿐이다(사고 337).
-  await withBulk(() => Promise.all([...selectedPcs].map(id=>sendCmd(id,command,args))));
+  // ★B-JS4 (2026-09-23)★ 실제 대상으로 접어서 보낸다 — 스택째 고르면(사고 337) 오프라인 형제마다
+  //   sendCmd 가 살아 있는 카드로 돌려 같은 명령이 한 매크로에 여러 건 쌓였다.
+  await withBulk(() => Promise.all(cmdTargets(selectedPcs).map(id=>sendCmd(id,command,args))));
   showToast(`✓ ${command} → 선택 ${n}대 (선택 해제됨)`);
   loadCmdHistory();
   clearSelection();   // ★명령 전송 완료 = 선택 자동 해제 — 같은 세트에 실수로 중복 명령 방지★
@@ -2342,7 +2601,7 @@ function autoIdleTargets(){
   }
   for (const b of Object.keys(byBase).sort()) {
     const cards = byBase[b];
-    if (b.toUpperCase() === 'PC-TEST' || b.toUpperCase() === 'PC-DEMO') {
+    if (isFakePc(b)) {
       if (picked && selBases.has(b)) skip.push({base:b, why:'검증용 가짜 PC — 순환 대상이 아님'});
       continue;
     }
@@ -2585,7 +2844,7 @@ async function switchAllToFirst() {
   const byBase = {};
   for (const id of Object.keys(state)) {
     const b = baseId(id);
-    if (b === 'PC-TEST' || b === 'PC-DEMO') continue;
+    if (isFakePc(id)) continue;
     const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
@@ -2714,7 +2973,7 @@ async function sellAllSel() {
   const p=getSalePrice();
   if(p<=0||!isSalePriceConfirmed()){alert('먼저 거래소 가격을 입력하고 [확정] 하세요');return;}
   if(!selectedPcs.size){alert('PC를 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;
+  if(!confirm(`선택 ${selectedBases().length}대 판매 실행\n거래소 지정가: ${p.toLocaleString()}`))return;   // ★B-JS4★ 물리 PC 수
   await selCmd('sell_all',{price:p});
 }
 async function sellAllCard(pc) {
@@ -2740,8 +2999,8 @@ function openCardMenu(pc_id, e) {
   // 헤더에 실시간 상태 + 매크로 버전 표시 (메뉴 v2 — 열 때마다 state에서 스냅샷)
   const pc=state[pc_id]||{};
   const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
-  const ver=pc.macro_version?`v${pc.macro_version}`:'';
-  const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${acctNumOf(pc_id)}</span>` : '';
+  const ver=pc.macro_version?`v${esc(pc.macro_version)}`:'';   // ★B-JS3 (2026-09-23)★ 매크로 보고값 → esc
+  const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${esc(acctNumOf(pc_id))}</span>` : '';
   document.getElementById('menu-pc-label').innerHTML=
     `<span class="font-bold text-gray-100">${baseId(pc_id)}${_mAcct}</span>`+
     `<span class="inline-flex items-center gap-1 ${cfg.text}" style="font-size:11px"><span class="w-2 h-2 rounded-full ${cfg.badge}"></span>${cfg.label}</span>`+
@@ -3044,7 +3303,7 @@ async function sellAllFromMenu() {
 // ─── 준비(prepare) — 전 캐릭 순회: 정산(계정1회)→추출→개인/서버창고→인벤정렬→귀환주문서 ───
 async function settleSel() {
   if(selectedPcs.size===0){showToast('PC를 먼저 선택하세요');return;}
-  if(!confirm(`선택 ${selectedPcs.size}대 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;
+  if(!confirm(`선택 ${selectedBases().length}대 준비 실행\n(전 캐릭: 정산(계정1회)→추출→창고보관→정렬→귀환주문서)`))return;   // ★B-JS4★ 물리 PC 수
   await selCmd('prepare');
 }
 
@@ -3087,16 +3346,50 @@ async function deletePCFromMenu() {
 let _renderTimer=null;
 function scheduleRender(){ if(_renderTimer) return; _renderTimer=setTimeout(()=>{_renderTimer=null; renderCards();},700); }
 
+// ★카드 상태 = 판 번호(2026-09-23 반응속도 2단계)★ — 서버는 앞 판을 가진 화면에 바뀐 카드만
+//   보낸다(state_diff: base=앞 판, upd=바뀐 카드, del=없어진 카드, retired·latest 는 바뀔 때만).
+//   base 가 내 판과 다르면(끊겼다 붙음·놓침) 적용하지 않고 전량을 다시 달라고 한다 — 틀린
+//   조각을 덧대는 것보다 한 통 늦는 게 낫다. 전량(state)은 언제나 통째로 갈아엎는다(예전과 같음).
+let STATE_VER = -1, _resyncAsked = false;
+function applyStateMsg(msg, sock){
+  if (msg.type === 'state') {
+    state = {}; (msg.pcs||[]).forEach(p=>{ state[p.pc_id] = p; });
+    RETIRED = new Set(msg.retired||[]);
+    if (msg.latest) latestVersions = msg.latest;
+    STATE_VER = (typeof msg.ver === 'number') ? msg.ver : -1;
+    _resyncAsked = false;
+    return true;
+  }
+  if (typeof msg.base !== 'number' || msg.base !== STATE_VER) {
+    STATE_VER = -1;
+    // 전량이 올 때까지 한 번만 조른다(이미 날아오던 조각들이 줄줄이 또 조르지 않게)
+    if (!_resyncAsked) {
+      _resyncAsked = true;
+      try { if (sock && sock.readyState === 1) sock.send(JSON.stringify({type:'resync'})); } catch(e) {}
+    }
+    return false;
+  }
+  (msg.upd||[]).forEach(p=>{ state[p.pc_id] = p; });
+  (msg.del||[]).forEach(id=>{ delete state[id]; });
+  if (msg.retired) RETIRED = new Set(msg.retired);
+  if (msg.latest) latestVersions = msg.latest;
+  STATE_VER = msg.ver;
+  return true;
+}
+
 let _ws=null, _wsLastMsg=0;
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws`);
   _ws=ws; _wsLastMsg=Date.now();
+  // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
+  //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
+  STATE_VER = -1; _resyncAsked = false;
   ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
   ws.onmessage=(e)=>{
     _wsLastMsg=Date.now();
     const msg=JSON.parse(e.data);
-    if(msg.type==='state'){state={};(msg.pcs||[]).forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(msg.retired||[]);if(msg.latest)latestVersions=msg.latest;pendSweep();updResultSweep();scheduleRender();}   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
+    if(msg.type==='state'||msg.type==='state_diff'){ if(applyStateMsg(msg, ws)){pendSweep();updResultSweep();scheduleRender();} }   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
     else if(msg.type==='char_info'){handleCharInfoMsg(msg);}
@@ -3142,22 +3435,28 @@ function updateCorridorTile(){
   if(el){
     // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — 아래 상세(nFresh/nStale)는
     //   클라 계산에서 그대로 보여준다(툴팁용, 서버는 총합만 준다).
-    const ss = SERVER_SUMMARY;
-    el.textContent = ss ? String(ss.corridor_remaining || 0) : (has?String(rem):'–');
+    const ss = serverSum();
+    // 서버가 회랑 스냅샷을 하나도 못 가졌으면 null → 「–」(폴백의 has=false 와 같은 뜻)
+    el.textContent = ss ? (ss.corridor_remaining != null ? String(ss.corridor_remaining) : '–') : (has?String(rem):'–');
+    // ★툴팁 내역도 숫자와 같은 출처에서(2026-09-23 반증 #4)★ — 숫자는 서버, 내역은 화면 캐시면
+    //   「남음 5 = 신선 3 + 미착수 4」 처럼 어긋났다. 서버값이 있으면 서버 corridor_detail 을 쓴다.
+    const cd = (ss && ss.corridor_detail) ? ss.corridor_detail
+      : {fresh_n: nFresh, fresh_left: rem-remStale, stale_n: nStale, stale_left: remStale};
     const t=el.closest('.stat-tile');
     // ★줄바꿈은 String.fromCharCode(10) 으로 만든다★ — 이 파일은 파이썬 문자열 안에
     //   들어 있어서 백슬래시 이스케이프가 중간 도구에 먹히는 일이 잦다(실제로 먹혔다).
     const NL = String.fromCharCode(10);
     if(t)t.title = '회랑을 아직 다 못 돈 캐릭터 수 (적 진영 제외 · 수·토 22시 리셋)'
-      + NL + `· 이번 판에 보고한 ${nFresh}대: 남은 ${rem-remStale}`
-      + NL + `· 리셋 뒤 아직 시작 안 한 ${nStale}대: 남은 ${remStale} (지난 판 정원 기준)`
-      + NL + '※ 회랑을 한 번도 보고한 적 없는 PC 는 아직 여기에 안 들어갑니다';
+      + NL + `· 이번 판에 보고한 ${cd.fresh_n}대: 남은 ${cd.fresh_left}`
+      + NL + `· 리셋 뒤 아직 시작 안 한 ${cd.stale_n}대: 남은 ${cd.stale_left} (지난 판 정원 기준)`
+      + NL + '※ 회랑을 한 번도 보고한 적 없는 PC 는 아직 여기에 안 들어갑니다'
+      + NL + serverSumNote() + (ss ? '' : ageNote(CORRIDOR_AT, '회랑 목록', 600000));
   }
 }
 async function loadCorridorSummary(){
   try{
     const r=await fetch('/corridor/progress');if(!r.ok)return;
-    const d=await r.json();corridorRemaining={};
+    const d=await r.json();CORRIDOR_AT=sumClock();corridorRemaining={};
     Object.entries(d.pcs||{}).forEach(([pc,v])=>{corridorRemaining[pc]={remaining:v.remaining,total:v.total,stale:!!v.stale};});
     updateCorridorTile();
     scheduleRender();   // 🌀 뱃지도 갱신 (만료로 사라진 PC 반영)
@@ -3236,21 +3535,79 @@ async function toggleRentalKill(idx, kill){
 loadRentalTenants();
 
 // ─── 서버 재시작 감지 → 자동 새로고침 ────────────────────────────────────────
-let serverBoot=null;
+// ★새로고침 연쇄 막기 (2026-09-23 팜뷰 반증 #2)★ — 재배포 동안 옛·새 인스턴스가 번갈아 /ping 에
+//   답하면 boot 가 A→B→A 로 흔들려 새로고침이 이어졌다(팜뷰 옆 창 «응답없음» 방아쇠 후보).
+//   ① 진행 중 가드(겹친 폴링·새로고침 중 재호출 무시) ② 같은 새 boot 를 ★연속 두 번★ 봐야 한 번 새로고침
+//   ③ 떠난 boot 는 sessionStorage 에 적어 새 화면이 옛 인스턴스 답을 기준값·변화로 안 읽는다
+//   ④ 한 탭에서 60초 안 재새로고침 금지. sessionStorage 가 막혀도 ①②는 그대로 돈다.
+let serverBoot=null, _bootCand=null, _bootBusy=false, _bootReloading=false;
+const _BOOT_SS='dashBootReload', BOOT_RELOAD_MIN_GAP_MS=60000;
+let BOOT_PING_TIMEOUT_MS=4000;
+// sessionStorage 가 막힌 창(반증 J2 — 막히면 새로고침이 다시 이어졌다)은 window.name 에 적는다(같은 탭 새로고침에 남는다)
+function _bootMem(){
+  let raw=null;
+  try{ raw=sessionStorage.getItem(_BOOT_SS); }catch(e){ try{ const n=String(window.name||''); if(n.startsWith(_BOOT_SS+':')) raw=n.slice(_BOOT_SS.length+1); }catch(_){} }
+  try{ const m=JSON.parse(raw||'null'); return (m&&typeof m==='object')?m:{}; }catch(e){ return {}; }
+}
+function _bootMemSet(v){
+  const t=JSON.stringify(v);
+  try{ sessionStorage.setItem(_BOOT_SS, t); }catch(e){ try{ window.name=_BOOT_SS+':'+t; }catch(_){} }
+}
 async function checkServerBoot(){
+  if(_bootBusy||_bootReloading) return;
+  _bootBusy=true;
   try{
-    const r=await fetch('/ping',{cache:'no-store'});
+    // ★답 없는 ping 이 가드를 영영 쥐지 않게 4초 제한 (반증 J1)★
+    const _ac=(typeof AbortController!=='undefined')?new AbortController():null;
+    let _to=null;
+    const _late=new Promise((_,rej)=>{ _to=setTimeout(()=>{ try{_ac&&_ac.abort();}catch(e){} rej(new Error('ping 시간초과')); }, BOOT_PING_TIMEOUT_MS); });
+    let r; try{ r=await Promise.race([fetch('/ping',_ac?{cache:'no-store',signal:_ac.signal}:{cache:'no-store'}), _late]); } finally { clearTimeout(_to); }
     if(!r.ok)return;
     const b=(await r.json()).boot;
-    if(serverBoot===null){serverBoot=b;return;}   // 최초 폴링 = 기준값 저장
-    if(b!==serverBoot)location.reload();            // boot 바뀜 = 서버 재시작 → 새로고침
+    if(!b) return;
+    const m=_bootMem(); const old=Array.isArray(m.old)?m.old:[];
+    if(serverBoot===null){ serverBoot=(old.includes(b)&&m.to)?m.to:b; return; }   // 최초 = 기준값(떠난 boot 면 옮겨 간 쪽)
+    if(b===serverBoot||old.includes(b)){ _bootCand=null; return; }
+    if(_bootCand!==b){ _bootCand=b; return; }                // 한 번 더 같은 새 boot 를 볼 때까지
+    if(typeof m.at==='number' && Date.now()-m.at < BOOT_RELOAD_MIN_GAP_MS) return;
+    _bootReloading=true;
+    _bootMemSet({old:[...old, serverBoot].slice(-5), to:b, at:Date.now()});
+    location.reload();                                        // boot 바뀜(두 번 확인) = 서버 재시작 → 새로고침 한 번
   }catch(e){/* 재시작 중이라 연결 실패 = 무시, 다음 폴링에서 감지 */}
+  finally{ _bootBusy=false; }
 }
 
 // ─── 명령 내역 ────────────────────────────────────────────────────────────────
 async function loadCmdHistory() {
+  loadUpdHistory();
   const res=await fetch('/commands/recent'); if(!res.ok) return;
   renderCmdHistory((await res.json()).commands||[]);
+}
+// ★업데이터 명령도 내역에 보인다 (2026-09-23 배포 반증 #2)★ — 업데이터 큐는 10분 만료·같은 종류 덮어쓰기·
+//   팜뷰 처리가 있는데 대시보드엔 보이는 곳이 없어 «눌렀는데 사라짐» 을 가를 수 없었다(사고 146 과 같은 눈).
+const UPD_ST={pending:['대기','text-yellow-500'], acked:['업데이터 받음','text-green-500'],
+  expired:['만료(10분 안 가져감)','text-red-400'], superseded:['덮임(같은 명령 다시 누름)','text-gray-500'],
+  handed_noack:['업데이터가 받아감 — ack 없음(돌았을 수 있음)','text-amber-400'],
+  fv_claimed:['팜뷰 처리 중','text-yellow-500'], fv_done:['팜뷰 완료','text-green-500'],
+  fv_failed:['팜뷰 실패','text-red-400'], fv_unknown:['팜뷰 응답 없음 — 실행됐는지 모름','text-red-400']};
+async function loadUpdHistory() {
+  try {
+    const res=await fetch('/updater/commands/recent?limit=20'); if(!res.ok) return;
+    renderUpdHistory((await res.json()).commands||[]);
+  } catch(e) {}
+}
+function renderUpdHistory(cmds) {
+  const el=document.getElementById('upd-history'); if(!el) return;
+  if(!cmds.length){el.innerHTML='<div class="text-gray-600">없음</div>';return;}
+  el.innerHTML=cmds.map(c=>{
+    const st=UPD_ST[c.status]||[String(c.status||''),'text-gray-500'];
+    return `<div class="flex gap-2 items-center py-0.5">
+      <span class="text-gray-600 shrink-0" title="보는 기기의 로컬 시각">${esc(fmtLocalAt(c.created_at, 11, 19))}</span>
+      <span class="text-indigo-400 shrink-0">${esc(c.pc_id)}</span>
+      <span class="text-gray-200">${esc(c.command)}</span>
+      <span class="${st[1]} ml-auto shrink-0" title="${esc(c.status)}">${esc(st[0])}</span>
+    </div>`;
+  }).join('');
 }
 function renderCmdHistory(cmds) {
   // ★사고 308-b — ack/만료/취소를 카드 표시에 반영한다★
@@ -3265,7 +3622,7 @@ function renderCmdHistory(cmds) {
       ? `<button onclick="cancelCmd(${c.id})" class="ml-1 text-gray-600 hover:text-red-400 transition-colors leading-none" title="취소">✕</button>`
       : '';
     return `<div class="flex gap-2 items-center py-0.5">
-      <span class="text-gray-600 shrink-0">${(c.created_at||'').slice(11,19)}</span>
+      <span class="text-gray-600 shrink-0" title="보는 기기의 로컬 시각">${esc(fmtLocalAt(c.created_at, 11, 19))}</span>
       <span class="text-indigo-400 shrink-0">${esc(c.pc_id)}</span>
       <span class="text-gray-200">${esc(c.command)}</span>
       <span class="${sc} ml-auto shrink-0">${esc(c.status)}</span>${cancelBtn}
@@ -3273,9 +3630,16 @@ function renderCmdHistory(cmds) {
   }).join('');
 }
 async function cancelCmd(cmd_id) {
-  const res=await fetch(`/commands/${cmd_id}`,{method:'DELETE'});
-  if(res.ok) showToast('✕ 명령 취소됨');
-  else showToast('✗ 취소 실패');
+  // ★B-N1 (2026-09-23) 200 ≠ 취소★ — 서버는 이미 처리된 명령에 200 + {ok:false} 를 준다.
+  //   예전엔 res.ok 만 봐서 못 취소한 것도 「✕ 명령 취소됨」 이었다. 본문 j.ok 로 가른다.
+  // ★B-CQ10★ WS 로 이미 매크로에 간 명령은 {delivered:true} — 취소가 아니라 정지로 끊어야 한다.
+  try {
+    const res=await fetch(`/commands/${cmd_id}`,{method:'DELETE'});
+    let j=null; try{ j=await res.json(); }catch(e){ j=null; }
+    if(res.ok && j && j.ok===true) showToast('✕ 명령 취소됨');
+    else if(j && j.delivered) showToast('⚠ 이미 전달됨 — 정지로 끊으세요');
+    else showToast(res.ok ? '✗ 취소 못 함 — 이미 처리된 명령' : '✗ 취소 실패');
+  } catch(e) { showToast('✗ 취소 실패'); }
 }
 
 // ─── 로그 모달 ────────────────────────────────────────────────────────────────
@@ -3331,7 +3695,8 @@ async function loadLogs(){
   rows.sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
   if(rows.length>2000) rows=rows.slice(-2000);   // 두 소스를 합치면 최대 3000줄 — 상한을 건다
   el.innerHTML='';
-  rows.forEach(l=>appendLogLine(l.level,`${String(l.created_at||'').slice(11,19)} ${l.message}`,l.src));
+  // ★B-JS6 (2026-09-23)★ 줄머리 시각은 보는 기기 로컬(created_at 은 UTC naive) — 매크로 원문 로그와 같은 벽시계
+  rows.forEach(l=>appendLogLine(l.level,`${fmtLocalAt(l.created_at, 11, 19)} ${l.message}`,l.src));
   el.scrollTop=el.scrollHeight;
 }
 
@@ -3469,9 +3834,8 @@ const AI_T = {
 
 // ★게임일 — 새벽 5시 경계 (주인님 지시)★ 5시 전이면 전날로 친다.
 function aiGameDay(){
-  const d = new Date();
-  if (d.getHours() < 5) d.setDate(d.getDate() - 1);
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  // ★B-JS11 (2026-09-23)★ 5시 경계는 ★KST★ — 베트남 폰에서도 한국 리셋에 맞춰 체크가 풀린다.
+  return fmtKstTs(new Date(kstGameDayNum(Date.now()) * 86400000 - KST_OFF_MS)).slice(0, 10);
 }
 
 // `840(+115)/840` → {daily:840, bonus:115, max:840}. 못 읽으면 null.
@@ -3693,15 +4057,12 @@ function setAiFilter(f){
 function aiStaleDays(p){
   const la = p && p.last_active;
   if (!la) return 0;
-  const gday = d => {
-    const x = new Date(d);
-    if (isNaN(x)) return null;
-    if (x.getHours() < 5) x.setDate(x.getDate() - 1);
-    return Math.floor(new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() / 86400000);
-  };
-  const a = gday(la), b = gday(new Date());
-  if (a === null || b === null) return 0;
-  return Math.max(0, b - a);
+  // ★B-JS2 (2026-09-23)★ last_active 는 UTC naive(lc/report_module._now) — new Date() 로 읽으면
+  //   로컬로 오해해 9시간(베트남 7시간) 어긋나 방금 보고한 계정이 「1일째 소식 없음」 이 됐다.
+  //   collectedAtDate 로 UTC 파싱 + 게임일은 KST 05:00 경계(kstGameDayNum).
+  const a = collectedAtDate(la);
+  if (!a) return 0;
+  return Math.max(0, kstGameDayNum(Date.now()) - kstGameDayNum(a.getTime()));
 }
 
 // ★★「사냥중」과 「사람이 가야 함」은 갈라서 보여준다 (2026-08-28 본방 실측 확인)★★
@@ -3721,8 +4082,7 @@ function aiBuildHunt(){
   for (const p of Object.values(state)) {
     const b = baseId(p.pc_id || '');
     if (!b) continue;
-    const U = b.toUpperCase();
-    if (U === 'PC-TEST' || U === 'PC-DEMO') continue;
+    if (isFakePc(b)) continue;
     (byBase[b] = byBase[b] || []).push(p);
   }
   const out = [];
@@ -4083,10 +4443,11 @@ function renderAiPlan(){
     a.chars.forEach(c => {
       const done = aiDone.keys.includes(c.key);
       // ★체크해도 자리는 그대로★ — 흐리게 + 취소선으로만 표시한다(정렬은 위에서 고정).
+      // ★키는 data-k 로 (2026-09-23)★ — slot 은 PC 가 보낸 값이라 onchange 문자열에 넣으면 XSS 였다.
       h += `<div class="flex items-center gap-2 px-3 py-1.5" style="${done?'opacity:.45':''}">
-        <input type="checkbox" ${done?'checked':''} onchange="aiToggleDone('${c.key}', this)"
+        <input type="checkbox" ${done?'checked':''} data-k="${esc(c.key)}" onchange="aiToggleDone(this.dataset.k, this)"
                style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
-        <span class="text-xs text-gray-500 w-10">${T.slot}${c.slot}</span>
+        <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
         <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
         <span class="text-xs text-gray-400">${T.power} <b class="text-amber-300">${c.pw.toLocaleString()}</b></span>
         <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
@@ -4341,7 +4702,7 @@ async function sendUpdaterCmd(pc_id, command, args={}) {
     }
     // ★결과만(2026-09-22)★ — update/restart 만 추적. update_only 는 대상 밖(사람이 안 부른다).
     if (res.ok && (command === 'update' || command === 'restart')) {
-      updResultStart(_base, (state[_base]||{})._updater_version || '');
+      updResultStart(_base, (state[_base]||{})._updater_version || '', command);
     }
     return res.ok;
   } catch (e) {          // ★네트워크 예외도 실패다 (2026-08-22)★ 안 잡으면 호출부가 통째로 죽는다
@@ -4410,7 +4771,7 @@ async function openBugsModal(pc_id) {
         <span class="text-xs text-gray-400 font-mono truncate mr-2">${esc(b.filename)}</span>
         <div class="flex items-center gap-2 shrink-0">
           <span class="text-xs text-gray-600">${(b.size/1024).toFixed(1)}KB</span>
-          <button onclick="deleteBug('${esc(encodeURIComponent(b.filename))}')" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
+          <button data-f="${esc(b.filename)}" onclick="deleteBug(this.dataset.f)" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
         </div>
       </div>
       <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${esc(b.filename)}" loading="lazy">
@@ -4495,12 +4856,23 @@ function fmtSlotUptime(slotUptime, activeSlot, fallback) {
 }
 function fmtAt(iso) {
   if (!iso) return '–';
-  return iso.replace('T',' ').slice(0,16);
+  return fmtLocalAt(iso, 0, 16);   // ★B-JS6 (2026-09-23)★ UTC 원문을 로컬처럼 보이던 것 → 보는 기기 로컬 시각
 }
 
 // ─── 전체 캐릭터 테이블 ────────────────────────────────────────────────────
 let charTableData = [];
 let charTableSort = {key:'pc_id', asc:true};
+// ★악몽 도전 티켓 상한 — 한 곳(2026-09-23)★ 예전엔 「N/14」 와 「>=14 빨강」 이 세 곳에 박혀 있었다.
+//   주인님이 악몽을 「쉬운 보스로 티켓만 소모」 로 바꾸시면서 상한을 다시 정하신다 — 정해지기 전엔
+//   null(모름): 칸에는 「N」 만 쓰고, 「가득 참」 빨간 표시도 안 한다(모르는 문턱으로 경고하지 않는다).
+const NIGHTMARE_TICKET_MAX = null;
+function nmTicketText(n){
+  if (n == null || n === '') return '–';
+  return NIGHTMARE_TICKET_MAX != null ? `${n}/${NIGHTMARE_TICKET_MAX}` : String(n);
+}
+function nmTicketFull(n){
+  return NIGHTMARE_TICKET_MAX != null && n != null && n !== '' && Number(n) >= NIGHTMARE_TICKET_MAX;
+}
 let charTableVisible = false;
 // ★은퇴·계정없음 PC 는 여기서 한 번에 뺀다(2026-09-23 주인님)★ — 「24번이 구독으로
 //   표시돼서 구독 자료 자체를 흐린다」. char_info 옛 행은 no_account 로 바뀌어도 안 지운다
@@ -4511,6 +4883,10 @@ let charTableVisible = false;
 function isExcludedPc(pc_id){
   if (!pc_id) return true;
   if (RETIRED.has(pc_id)) return true;
+  // ★가짜 PC(PC-TEST·PC-DEMO)도 같은 한 곳에서 뺀다(2026-09-23 반증 2바퀴)★ — 서버
+  //   _fv_pc_excluded 와 같은 규칙. 빠져 있으면 /summary 가 낡아 폴백으로 떨어질 때마다
+  //   거래키나·각성전·회랑 타일이 가짜 PC 몫만큼 튀었다(서버 K10 vs 폴백 K5010).
+  if (isFakePc(pc_id)) return true;
   return (state[pc_id]||{}).status === 'no_account';
 }
 
@@ -4528,6 +4904,7 @@ async function loadCharTable() {
     const r = await fetch('/characters?t=' + Date.now(), {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
+    CHAR_TABLE_AT = sumClock();
     // ★각성전(3)·일일던전(14) 티켓도 리셋 이전 값이면 가득 찬 값으로 보정(2026-09-23)★
     //   ★한 곳에서 바꾼다★ — 테이블 칸·isAwakenDone·전광판 각성 합계·베트남 표가 전부
     //   이 charTableData 하나만 보므로, 여기서 고치면 전부 같이 고쳐진다(§A12).
@@ -4608,11 +4985,23 @@ function sortVietnam(key){
   else vietnamSort = {key, asc:true};
   renderVietnam();
 }
+// ★B-JS7 (2026-09-23)★ 'PC-03' 이 숫자만 남겨 -3 이 돼 PC 순서가 거꾸로 섰다 → pc_id 는 문자열로 두고
+//   자연 정렬(numeric localeCompare). 빈 값(''·'–'·null)은 null — 정렬에서 방향과 무관하게 맨 뒤.
 function _vietnamVal(r, key){
   if(key==='odd_energy') return parseOddEnergy(r.odd_energy);
   const v = r[key];
-  const n = Number(String(v==null?'':v).replace(/[^\d.-]/g,''));
-  return isNaN(n) ? String(v==null?'':v) : n;
+  const t = String(v==null?'':v).trim();
+  if(key==='pc_id') return t || null;
+  if(!t || t==='–' || t==='-') return null;
+  const n = Number(t.replace(/[^\d.-]/g,''));
+  return isNaN(n) ? t : n;
+}
+function _vietnamCmp(a, b, key, asc){
+  const va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
+  if(va==null || vb==null) return (va==null) - (vb==null);   // 빈 값은 늘 맨 뒤
+  if(typeof va==='number' && typeof vb==='number') return asc?va-vb:vb-va;
+  const c = String(va).localeCompare(String(vb), undefined, {numeric:true, sensitivity:'base'});
+  return asc?c:-c;
 }
 function renderVietnam(){
   const L = vietnamLang, T = VN_T[L];
@@ -4622,12 +5011,7 @@ function renderVietnam(){
   document.getElementById('vn-lang-vi').className = L==='vi'?on:off;
   document.getElementById('vn-lang-ko').className = L==='ko'?on:off;
   const {key, asc} = vietnamSort;
-  const rows = [...vietnamData].sort((a,b)=>{
-    let va=_vietnamVal(a,key), vb=_vietnamVal(b,key);
-    if(typeof va==='number' && typeof vb==='number') return asc?va-vb:vb-va;
-    va=String(va).toLowerCase(); vb=String(vb).toLowerCase();
-    return asc?va.localeCompare(vb):vb.localeCompare(va);
-  });
+  const rows = [...vietnamData].sort((a,b)=>_vietnamCmp(a,b,key,asc));   // ★B-JS7★
   document.getElementById('vietnam-head').innerHTML =
     `<th class="px-2 py-2 text-center">${T.done}</th>` +
     VIETNAM_COLS.map(c=>{
@@ -4638,7 +5022,7 @@ function renderVietnam(){
     ? rows.map(r=>{
         const d = vnDone(r.pc_id, r.slot);
         return `<tr class="${d?'bg-green-900/40':'bg-gray-900'}">`+
-          `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${r.slot},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
+          `<td class="px-2 py-1.5 text-center"><input type="checkbox" ${d?'checked':''} onchange="vnToggle('${r.pc_id}',${Number(r.slot)|0},this.checked)" class="w-5 h-5 cursor-pointer accent-green-500 align-middle"></td>`+
           VIETNAM_COLS.map(c=>{
             const cls = (c.red && c.red(r)) ? 'text-red-400 font-bold' : 'text-gray-200';
             return `<td class="px-3 py-1.5 ${_ta(c.align)} ${cls}">${esc(c.fmt(r))}</td>`;
@@ -4648,6 +5032,18 @@ function renderVietnam(){
     : `<tr><td colspan="${VIETNAM_COLS.length+1}" class="text-center text-gray-600 py-8">${T.nodata}</td></tr>`;
 }
 
+// ★B-JS10 (2026-09-23) 빨간 줄 판정 한 곳★ — 행 배경(renderRow)과 그룹 헤더 (N) 뱃지가 각자 계산해서
+//   성역은 행이 「첫값>=분모」, 뱃지가 「첫값>=2」 로 갈렸다(2/5 → 뱃지만 빨강, 1/1 → 행만 빨강). §A12.
+function isRowRed(r){
+  const odd = r.odd_energy || '–', daily = r.daily_ticket || '–', sanc = r.sanctuary || '–', ext = r.extract_level || '–';
+  const oddFull = (odd !== '–' ? parseInt(odd) : 0) >= 840;
+  const dailyFull = (daily !== '–' ? parseInt(daily) : 0) >= 14;
+  const sp = sanc !== '–' ? String(sanc).match(/(\d+).*\/(\d+)/) : null;
+  const sFirst = sp ? parseInt(sp[1]) : 0, sMax = sp ? parseInt(sp[2]) : 0;
+  const sancFull = r.gear_power >= 2700 && sMax > 0 && sFirst >= sMax;
+  const extFull = String(ext).includes('입문') && String(ext).includes('50');
+  return oddFull || dailyFull || nmTicketFull(r.nightmare_ticket) || r.awakening_ticket >= 3 || sancFull || extFull;
+}
 function renderCharTable() {
   const filter = (document.getElementById('char-filter')?.value || '').toLowerCase();
   let rows = charTableData;
@@ -4678,7 +5074,7 @@ function renderCharTable() {
     const kina = r.total_kina ? '₭' + Number(r.total_kina).toLocaleString() : '–';
     const odd = r.odd_energy || '–';
     const daily = r.daily_ticket || '–';
-    const nmTicket = r.nightmare_ticket != null ? `${r.nightmare_ticket}/14` : '–';
+    const nmTicket = nmTicketText(r.nightmare_ticket);
     const nmProg = r.nightmare_progress || '';
     // ★nm 만 일부러 HTML 을 품는다★ — 조각을 여기서 감싸고, 쓰는 자리는 그대로 둔다 (2026-09-11)
     const nm = nmProg ? `${esc(nmTicket)} <span class="text-pink-400 text-[10px]">${esc(nmProg)}</span>` : esc(nmTicket);
@@ -4689,8 +5085,8 @@ function renderCharTable() {
     const scroll = r.return_scroll_count != null ? r.return_scroll_count : '–';
     const scrollLow = typeof r.return_scroll_count === 'number' && r.return_scroll_count <= 50;
     const ext = r.extract_level || '–';
-    const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${r.slot});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
-    const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${r.slot});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
+    const arcanaLink = r.arcana_image ? `<a href="#" onclick="showScreenshot('arcana','${r.pc_id}',${Number(r.slot)|0});return false" class="text-purple-400 hover:text-purple-300 underline">보기</a>` : '–';
+    const equipLink = r.equip_image ? `<a href="#" onclick="showScreenshot('equip','${r.pc_id}',${Number(r.slot)|0});return false" class="text-blue-400 hover:text-blue-300 underline">보기</a>` : '–';
     const gakin = r.gakin_kina ? Number(r.gakin_kina).toLocaleString() : '–';
     const trade = r.trade_kina ? Number(r.trade_kina).toLocaleString() : '–';
     const rc = (s) => `<span class="text-red-400 font-bold">${s}</span>`;
@@ -4698,24 +5094,24 @@ function renderCharTable() {
     const oddFull = oddFirst >= 840;
     const dailyNum = daily !== '–' ? parseInt(daily) : 0;
     const dailyFull = dailyNum >= 14;
-    const nmFull = r.nightmare_ticket >= 14;
+    const nmFull = nmTicketFull(r.nightmare_ticket);
     const awFull = r.awakening_ticket >= 3;
     const sancParts = sanc !== '–' ? sanc.match(/(\d+).*\/(\d+)/) : null;
     const sancFirst = sancParts ? parseInt(sancParts[1]) : 0;
     const sancMax = sancParts ? parseInt(sancParts[2]) : 0;
     const sancFull = r.gear_power >= 2700 && sancMax > 0 && sancFirst >= sancMax;
     const extFull = ext.includes('입문') && ext.includes('50');
-    const hasRed = oddFull || dailyFull || nmFull || awFull || sancFull || extFull;
+    const hasRed = isRowRed(r);   // ★B-JS10★ 그룹 뱃지와 같은 판정
     const bg = hasRed ? 'bg-red-950/40' : (i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800/50');
     return `<tr class="${bg} hover:bg-gray-700/50 transition-colors">
       <td class="px-3 py-1.5 text-center">
         <input type="checkbox" ${slotEnabled ? 'checked' : ''}
-          onchange="toggleSlotFilter('${r.pc_id}',${r.slot},this.checked)"
+          onchange="toggleSlotFilter('${r.pc_id}',${Number(r.slot)|0},this.checked)"
           onclick="event.stopPropagation()" class="cursor-pointer accent-green-500"></td>
       <td class="px-3 py-1.5 text-gray-400">${esc(r.slot||'–')}</td>
       <td class="px-3 py-1.5 text-white">${esc(r.name||'–')}</td>
       <td class="px-3 py-1.5 text-xs font-medium ${clsColor}">${esc(cls)}</td>
-      <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${r.slot})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
+      <td class="px-3 py-1.5 text-center"><button onclick="collectSlot('${r.pc_id}',${Number(r.slot)|0})" class="px-2 py-0.5 text-xs rounded bg-sky-900/60 hover:bg-sky-700 text-sky-300 whitespace-nowrap" title="이 캐릭터만 정보수집">📡</button></td>
       <td class="px-3 py-1.5 text-right ${gpLow?'':'text-gray-200'}">${gpLow?rc(gp):gp}</td>
       <td class="px-3 py-1.5 text-right font-medium ${ppLow?'':'text-cyan-400'}">${ppLow?rc(pp):pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(esc(odd)):esc(odd)}</td>
@@ -4749,12 +5145,7 @@ function renderCharTable() {
   let idx = 0;
   Object.keys(groups).sort().forEach(pc => {
     const pcRows = groups[pc];
-    const redCount = pcRows.filter(r => {
-      const odd = r.odd_energy||''; const sanc = r.sanctuary||''; const ext = r.extract_level||'';
-      return parseInt(odd)>=840 ||
-             parseInt(r.daily_ticket)>=14 || r.nightmare_ticket>=14 || r.awakening_ticket>=3 ||
-             (r.gear_power>=2700 && parseInt(sanc)>=2) || (ext.includes('입문')&&ext.includes('50'));
-    }).length;
+    const redCount = pcRows.filter(isRowRed).length;   // ★B-JS10★ 행 배경과 같은 판정
     const redBadge = redCount > 0 ? ` <span class="text-red-400 text-xs">(${redCount})</span>` : '';
     // ★서버는 계정별 우선(v1.1.424, 사용자: "2계정 서버를 못 읽는 것 같네")★ —
     //   info.txt 계정N_서버(지도) > 그 카드의 acct_server > 게임 감지 공통 서버 순.
@@ -4776,12 +5167,12 @@ function renderCharTable() {
           ${serverTag}${kinaTag}${acctIdTag(pc)}
           <span class="text-gray-500 text-xs font-normal">${pcRows.length}캐릭</span>${redBadge}
           <div class="flex items-center gap-1 ml-auto flex-wrap justify-end" onclick="event.stopPropagation()">
-            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
-            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>r.slot))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>Number(r.slot)|0))}, true)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-200 whitespace-nowrap">전체선택</button>
+            <button onclick="selectAllSlots('${pc}', ${JSON.stringify(pcRows.map(r=>Number(r.slot)|0))}, false)" class="px-1.5 py-0.5 text-xs rounded bg-gray-600/60 hover:bg-gray-500 text-gray-400 whitespace-nowrap">전체해제</button>
             <span class="text-gray-600">|</span>
             <button onclick="sendCmd('${pc}','start')" class="px-1.5 py-0.5 text-xs rounded bg-green-900/60 hover:bg-green-700 text-green-300 whitespace-nowrap">▶ 시작</button>
             <button onclick="sendCmd('${pc}','exit')" class="px-1.5 py-0.5 text-xs rounded bg-red-900/60 hover:bg-red-700 text-red-300 whitespace-nowrap">✕ 종료</button>
-            <button onclick="sendUpdaterCmd('${pc}','update')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">↺ 재시작</button>
+            <button onclick="sendUpdaterCmd('${pc}','restart')" class="px-1.5 py-0.5 text-xs rounded bg-yellow-900/60 hover:bg-yellow-700 text-yellow-300 whitespace-nowrap">↺ 재시작</button>
             <button onclick="sendCmd('${pc}','daily_dungeon')" class="px-1.5 py-0.5 text-xs rounded bg-purple-900/60 hover:bg-purple-700 text-purple-300 whitespace-nowrap">일일던전</button>
             <button onclick="sendCmd('${pc}','nightmare')" class="px-1.5 py-0.5 text-xs rounded bg-pink-900/60 hover:bg-pink-700 text-pink-300 whitespace-nowrap">악몽</button>
             <button onclick="sendCmd('${pc}','abyss')" class="px-1.5 py-0.5 text-xs rounded bg-blue-900/60 hover:bg-blue-700 text-blue-300 whitespace-nowrap">어비스</button>
@@ -4955,6 +5346,7 @@ function renderInfoContent(info) {
   }).join('');
   el.innerHTML = kinaHtml + charsHtml;
   document.getElementById('info-collected-at').textContent = `수집 시각: ${fmtAt(info.collected_at)}`;
+  document.getElementById('info-collected-at').title = '보는 기기의 로컬 시각';   // ★B-JS6★
 }
 
 async function openInfoModal(pc_id) {
@@ -5347,9 +5739,26 @@ function handleCharInfoMsg(msg) {
 
 // ─── 초기화 ──────────────────────────────────────────────────────────────────
 (async()=>{
-  const res=await fetch('/status');
-  if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
-  renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
+  // ★B-JS9 (2026-09-23)★ 첫 /status 가 던지면(서버 재시작 중·망 끊김) 이 IIFE 가 통째로 죽어
+  //   connectWS·setInterval·checkServerBoot 가 한 번도 안 돌았다 = 새로고침 전까지 죽은 화면.
+  //   → 실패해도 아래는 전부 돈다. /status 는 5초마다 성공할 때까지 다시 받는다(은퇴 목록은 여기에만 온다).
+  const _initStatus = async () => {
+    try {
+      const res=await fetch('/status', {cache:'no-store'});
+      if(!res.ok) return false;
+      const j=await res.json();
+      // ★WS 전량이 먼저 왔으면 덮지 않는다(2026-09-23 반증 B2-5)★ — 이 /status 는 그보다 낡은 판일 수
+      //   있고, 그 사이 지워진 카드를 되살리면 조각(state_diff)은 다시 그 카드를 지우지 않는다.
+      if (STATE_VER !== -1) return true;
+      j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);
+      return true;
+    } catch(e) { console.error('초기 /status 실패 — 5초 뒤 다시', e); return false; }
+  };
+  if(!(await _initStatus())){
+    const _t=setInterval(async()=>{ if(await _initStatus()){ clearInterval(_t); try{renderCards();}catch(e){console.error(e);} } },5000);
+  }
+  try { renderCards(); } catch(e) { console.error('초기 renderCards 실패', e); }
+  loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
   loadServerSummary();   // ★전광판 숫자를 팜뷰와 같은 서버 계산으로(2026-09-23)★
   setInterval(loadServerSummary, 20000);   // 정보수집·은퇴 등록은 즉시 안 보여도 20초면 따라잡는다
   setInterval(()=>{ updResultSweep(); renderCards(); },60000);   // ★3분 데드라인의 최소 보장 틱★ — WS state 가 안 와도 1분마다 판정
