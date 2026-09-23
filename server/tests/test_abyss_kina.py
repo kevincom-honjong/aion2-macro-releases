@@ -23,7 +23,7 @@ from datetime import datetime
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 from test_js_b import _js_func, _run_node, _DOM, _need_node   # noqa: E402
 
-MIN_CHECKS = 127    # 2026-09-24 주인님 #159 +13(L 옛 글자 빨강·음수 두 시간대 5×2 + 서버 3) · v4 반증 3차 +3(V3 깨진 저장본) · 2026-09-24 이식 +1(A8-e2) +4(S2 관리자 명세 2) · 2026-09-23 실측값(77 + 적대 검증 R1~R9·기타 29) — 검사가 조용히 빠지면 빨간불
+MIN_CHECKS = 131    # 2026-09-24 #159 운영 대조 +4(L-9~12 판독 오류 PC 의 낡은 시간당) · 주인님 #159 +13(L 옛 글자 빨강·음수 두 시간대 5×2 + 서버 3) · v4 반증 3차 +3(V3 깨진 저장본) · 2026-09-24 이식 +1(A8-e2) +4(S2 관리자 명세 2) · 2026-09-23 실측값(77 + 적대 검증 R1~R9·기타 29) — 검사가 조용히 빠지면 빨간불
 
 KST = main._KST_TZ if hasattr(main, "_KST_TZ") else None
 
@@ -734,6 +734,22 @@ async def l_legacy_negative_server():
        (b1["today"], b1["rate_sum"], b1["today_pcs"], b1["rate_n"]) == (b2["today"], b2["rate_sum"], b2["today_pcs"], b2["rate_n"]),
        "%s | %s" % (b1, b2))
     ok("L-8 합계에 음수가 없다", (b2["today"] or 0) >= 0 and (b2["rate_sum"] or 0) >= 0, str(b2))
+    # 운영 대조(아이온2 05:3x): 좋은 판 → 음수 판이면 ★마지막 좋은 시간당★ 이 5분 동안 합·대수에 남았다(rate_n 19 = 양수 17 + 음수 2)
+    from datetime import datetime as _dt
+    main.ABYSS_ACC.clear()
+    hm = _dt.fromtimestamp(_n - 720, main._KST_TZ).strftime("%H:%M")
+    good = "+400,000 키나 · 시간당 2,000,000 (%s~)" % hm
+    main._abyss_ingest("PC-23c", {"abyss_kina": good}, _n)
+    g1 = _today(now=_n)
+    main._abyss_ingest("PC-23c", {"abyss_kina": neg}, _n + 60)
+    g2 = _today(now=_n + 60)
+    ok("L-9 준비: 좋은 옛 글자 한 대 → 시간당 1대·200만", g1["rate_n"] == 1 and g1["rate_sum"] == 2_000_000, str(g1))
+    ok("L-10 ★old: 그 PC 의 다음 보고가 음수(판독 오류)면 낡은 200만을 시간당 합·대수에서 빼고 대기로 센다★",
+       g2["rate_n"] == 0 and g2["rate_sum"] is None and g2["wait_n"] == 1, str(g2))
+    ok("L-11 오늘 합계는 그대로(이미 번 것은 번 것)", g2["today"] == g1["today"], "%s %s" % (g1["today"], g2["today"]))
+    main._abyss_ingest("PC-23c", {"abyss_kina": good}, _n + 120)
+    g3 = _today(now=_n + 120)
+    ok("L-12 다시 좋은 판이 오면 곧바로 시간당에 돌아온다", g3["rate_n"] == 1 and g3["wait_n"] == 0, str(g3))
     main.ABYSS_ACC.clear()
 
 

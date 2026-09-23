@@ -15628,6 +15628,7 @@ _abyss_dirty = [False]
 _ABYSS_LIVE_RE = re.compile(r"^\+([\d,]+) 키나 · 시간당 ([\d,]+) \((\d{1,2}):(\d{2})(?:부터|~)")
 _ABYSS_END_RE = re.compile(r"^([+-]?[\d,]+) 키나 · (\d+)분(?: \((\d{1,2}):(\d{2})부터\))?")
 _ABYSS_WAIT_RE = re.compile(r"^정산 (?:중|대기)(?: \((\d{1,2}):(\d{2})(?:부터| 시작))?")
+_ABYSS_NEG_RE = re.compile(r"(^|[^\d,])-\s*\d")   # 옛 글자에 음수(「+-6,349,199 · 시간당 -12,622,269」) — 카드 JS 와 같은 식
 
 
 def _abyss_kst_day(now: float) -> str:
@@ -15762,6 +15763,15 @@ def _abyss_ingest(nspc: str, data: dict, now: float = None) -> str:
     now = time.time() if now is None else now
     data = data if isinstance(data, dict) else {}
     f = _abyss_parse(data, now)
+    if not f and not data.get("abyss_kina_state") and _ABYSS_NEG_RE.search(str(data.get("abyss_kina") or "")):
+        # ★주인님 #159 운영 대조(2026-09-24)★ 옛 글자가 음수(판독 오류)면 버리기만 하면 기록이 그대로라 전광판이
+        #   ★마지막 좋은 시간당★ 을 ABYSS_LIVE_S 동안 합·대수에 넣는다(좋은 판·음수 판이 번갈면 계속). 표시만 해 둔다.
+        _t, _p = split_ns(nspc)
+        _r = ABYSS_ACC.get(ns(_t, _base_pc(_p)))
+        if isinstance(_r, dict):
+            _r["unread_at"] = now
+            _abyss_dirty[0] = True
+        return ""
     if not f or f.get("since") is None:
         return ""
     if f["since"] > now + ABYSS_FUTURE_S:
@@ -15880,6 +15890,9 @@ def _abyss_billboard(tenant: str, now: float, red_rate: int, min_mins: int) -> d
             today_n += 1
             today += _abyss_i(rec.get("banked")) + max(0, _abyss_i(rec.get("gain")) - _abyss_i(rec.get("base")))
         if now - _num_or0(rec.get("sig_at")) > ABYSS_LIVE_S:
+            continue
+        if _num_or0(rec.get("unread_at")) > _num_or0(rec.get("sig_at")):
+            wait_n += 1                               # ★#159★ 마지막 보고가 판독 오류(음수) — 낡은 시간당을 합·대수에 안 넣는다
             continue
         st, mins = rec.get("state"), _abyss_i(rec.get("mins"))
         if st == "ok" and mins >= min_mins:
