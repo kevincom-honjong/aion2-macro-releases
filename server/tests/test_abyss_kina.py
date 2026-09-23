@@ -23,7 +23,7 @@ from datetime import datetime
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 from test_js_b import _js_func, _run_node, _DOM, _need_node   # noqa: E402
 
-MIN_CHECKS = 114    # 2026-09-24 v4 반증 3차 +3(V3 깨진 저장본) · 2026-09-24 이식 +1(A8-e2) +4(S2 관리자 명세 2) · 2026-09-23 실측값(77 + 적대 검증 R1~R9·기타 29) — 검사가 조용히 빠지면 빨간불
+MIN_CHECKS = 127    # 2026-09-24 주인님 #159 +13(L 옛 글자 빨강·음수 두 시간대 5×2 + 서버 3) · v4 반증 3차 +3(V3 깨진 저장본) · 2026-09-24 이식 +1(A8-e2) +4(S2 관리자 명세 2) · 2026-09-23 실측값(77 + 적대 검증 R1~R9·기타 29) — 검사가 조용히 빠지면 빨간불
 
 KST = main._KST_TZ if hasattr(main, "_KST_TZ") else None
 
@@ -364,7 +364,14 @@ out.neutral = abyssCardLine(P({abyss_kina_state:'ok', abyss_kina_gain:30000, aby
 out.good = abyssCardLine(P({abyss_kina_state:'ok', abyss_kina_gain:30000000, abyss_kina_rate:2500000, abyss_kina_since:S, abyss_kina_mins:12}));
 out.edge = abyssCardLine(P({abyss_kina_state:'ok', abyss_kina_gain:1, abyss_kina_rate:999999, abyss_kina_since:S, abyss_kina_mins:5}));
 out.wait = abyssCardLine(P({abyss_kina_state:'waiting', abyss_kina_gain:0, abyss_kina_rate:0, abyss_kina_since:S, abyss_kina_mins:0}));
-out.legacy = abyssCardLine(P({abyss_kina:'+1,000 키나 · 시간당 2,000 (21:30부터)<b>'}));
+out.legacy = abyssCardLine(P({abyss_kina:'정산 대기 (21:30 시작)<b>'}));
+// ★L — 옛 매크로(1.1.1003) 글자 칸: 빨강·음수 (2026-09-24 주인님 #159)★ — HH:MM 은 지금 KST 에서 N분 전
+const hmAgo = (m) => fmtKstTs(new Date(Date.now() - m * 60000)).slice(11, 16);
+out.lgRed = abyssCardLine(P({abyss_kina:`+123,456 키나 · 시간당 500,000 (${hmAgo(12)}~)`}));
+out.lgGood = abyssCardLine(P({abyss_kina:`+30,000,000 키나 · 시간당 2,500,000 (${hmAgo(12)}부터)`}));
+out.lgNew = abyssCardLine(P({abyss_kina:`+1,000 키나 · 시간당 500,000 (${hmAgo(2)}~)`}));
+out.lgNeg = abyssCardLine(P({abyss_kina:'+-6,349,199 키나 · 시간당 -12,622,269 (04:40~)'}));
+out.lgNeg2 = abyssCardLine(P({abyss_kina:'-5,000 키나 · 12분 (04:40부터)'}));
 out.none = abyssCardLine(P({}));
 renderAbyssTiles({abyss:{day:'2026-09-23', today:null, today_pcs:0, rate_sum:null, rate_avg:null, rate_n:0, wait_n:0, red:false, red_rate:3000000, min_mins:20}}, '');   // 문턱은 서버 요약에서 받는다
 out.thRed = abyssCardLine(P({abyss_kina_state:'ok', abyss_kina_gain:1, abyss_kina_rate:2500000, abyss_kina_since:S, abyss_kina_mins:25}));
@@ -421,11 +428,22 @@ def t_js_card_and_tiles():
         ok("B-6 %s waiting → 회색 「측정 중 (HH:MM부터)」, 빨강 아님" % tag,
            ("측정 중 (%s부터)" % want_hm) in o["wait"] and "text-gray-400" in o["wait"] and "text-red" not in o["wait"],
            o["wait"][:200])
-        ok("B-7 %s 숫자 칸 없는 옛 매크로 → 예전 줄 그대로(esc 포함)" % tag,
+        ok("B-7 %s 숫자 칸 없는 옛 매크로 · 못 읽는 모양 → 예전 줄 그대로(esc 포함)" % tag,
            o["legacy"] == ('<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded '
                            'px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. '
-                           '다음 세션 시작까지 유지">💰 어비스 +1,000 키나 · 시간당 2,000 (21:30부터)&lt;b&gt;</div>'),
+                           '다음 세션 시작까지 유지">💰 어비스 정산 대기 (21:30 시작)&lt;b&gt;</div>'),
            o["legacy"][:220])
+        ok("L-1 %s ★old: 옛 글자 「+X 키나 · 시간당 50만 (12분 전~)」 → 빨강(100만 미만) · 억/만 글자★" % tag,
+           "text-red-300" in o["lgRed"] and "시간당 50만" in o["lgRed"] and "+12만 · 시간당 50만 (" in o["lgRed"], o["lgRed"][:200])
+        ok("L-2 %s 옛 글자 시간당 250만 → 호박색(빨강 아님)" % tag,
+           "text-amber-300" in o["lgGood"] and "text-red" not in o["lgGood"] and "시간당 250만" in o["lgGood"], o["lgGood"][:200])
+        ok("L-3 %s 옛 글자 잰 지 2분(< 5분) → 중립 「(측정 N분)」, 빨강 아님" % tag,
+           "text-red" not in o["lgNew"] and "(측정 " in o["lgNew"] and "text-gray-300" in o["lgNew"], o["lgNew"][:200])
+        ok("L-4 %s ★old: PC-17b 「+-6,349,199 · 시간당 -12,622,269」 → 회색 «판독 오류 — 재측정 대기», 음수·숫자 안 나감★" % tag,
+           "판독 오류 — 재측정 대기" in o["lgNeg"] and "text-gray-400" in o["lgNeg"] and "-" not in o["lgNeg"].split("💰")[1]
+           and "6,349" not in o["lgNeg"] and "12,622" not in o["lgNeg"], o["lgNeg"][:220])
+        ok("L-5 %s 끝난 세션 글자도 음수면 «판독 오류»(「-5,000 키나 · 12분」)" % tag,
+           "판독 오류" in o["lgNeg2"] and "5,000" not in o["lgNeg2"], o["lgNeg2"][:200])
         ok("B-8 %s 아무 칸도 없으면 줄 없음" % tag, o["none"] == "")
         ok("B-9 %s 문턱은 서버 설정(/summary abyss.red_rate 300만·min 20분)을 따른다" % tag,
            "text-red-300" in o["thRed"] and "(측정 12분)" in o["thNeutral"] and "text-red" not in o["thNeutral"],
@@ -699,6 +717,26 @@ def s2_owner_item2():
        and "측정 중" in new_wait and "(측정 3분)" in new_short, "\n".join((old[:120], new_wait[:120], new_short[:120])))
 
 
+async def l_legacy_negative_server():
+    """주인님 #159 — PC-17b 옛 글자 「+-6,349,199 키나 · 시간당 -12,622,269 (04:40~)」 가 전광판 합계에 섞이나."""
+    import time as _t
+    neg = "+-6,349,199 키나 · 시간당 -12,622,269 (04:40~)"
+    _n = _t.time()
+    ok("L-6 서버 옛 글자 파서는 음수 글자를 못 읽는다(None = 측정 대기, 0·음수 아님)", main._abyss_parse({"abyss_kina": neg}, _n) is None,
+       str(main._abyss_parse({"abyss_kina": neg}, _n)))
+    main.ABYSS_ACC.clear()
+    main._abyss_ingest("PC-20", _rep(max(_n - 900, main._abyss_day_start(_n) + 1), 120_000, 1_500_000, 15), _n)
+    b1 = _today(now=_n)
+    for _ in range(3):
+        main._abyss_ingest("PC-17b", {"abyss_kina": neg}, _n)
+    b2 = _today(now=_n)
+    ok("L-7 ★음수 글자를 받아도 오늘 합계·시간당 합·대수가 그대로★",
+       (b1["today"], b1["rate_sum"], b1["today_pcs"], b1["rate_n"]) == (b2["today"], b2["rate_sum"], b2["today_pcs"], b2["rate_n"]),
+       "%s | %s" % (b1, b2))
+    ok("L-8 합계에 음수가 없다", (b2["today"] or 0) >= 0 and (b2["rate_sum"] or 0) >= 0, str(b2))
+    main.ABYSS_ACC.clear()
+
+
 async def v3_corrupt_store():
     """v4 반증 3차(아이온2) — 저장본(abyss_acc_all)에 글자·NaN 칸이 있는 채로 재시작하면 _abyss_billboard 의 int() 가 터져
     /summary·/api/fv/snapshot 이 ★전 PC 500★. → 칸마다 정수 변환(_abyss_i) + 전광판 계산 try(실패면 today:null)."""
@@ -755,7 +793,8 @@ def test_all():
     run_all([t_bank_and_idempotent, t_kst_rollover, t_persist_and_report, t_legacy, t_rate_and_exclusion,
              t_snapshot, t_feed_to_card, t_js_card_and_tiles, s2_owner_item2,
              r1_end_text_other_day, r2_future_since, r3_upper_bounds, r4_legacy_zero_earner, r5_waiting_until_10min,
-             r6_legacy_clock_ahead, r8_stale_after_midnight, r9_legacy_spend, rx_fake_cap_and_clamp, v3_corrupt_store])
+             r6_legacy_clock_ahead, r8_stale_after_midnight, r9_legacy_spend, rx_fake_cap_and_clamp, v3_corrupt_store,
+             l_legacy_negative_server])
     finish("test_abyss_kina", MIN_CHECKS)
 
 

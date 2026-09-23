@@ -48,6 +48,7 @@
 !la
 !lab
 !latest
+!lg
 !live
 !m
 !m.alive
@@ -949,6 +950,7 @@ d.characters
 d.is_main
 d.tenants
 d.truncated
+d/.test
 d/3600
 d/60
 daily
@@ -1561,6 +1563,7 @@ letter-spacing:.32em
 letter-spacing:.34em
 letter-spacing:.3em
 level
+lg
 lg-btn
 lg-field
 lg-lab
@@ -1596,6 +1599,10 @@ live.start
 live_off
 live_on
 lm
+lm[1].replace
+lm[2].replace
+lm[3]
+lm[4]
 lo
 load
 loading
@@ -1621,6 +1628,8 @@ login-card
 login-card::before
 loot.py
 low
+ls
+ls.match
 m.age
 m.alive
 m.at
@@ -1838,6 +1847,9 @@ numeric:true
 nums
 nums.join
 nums.length
+nw
+nw[0]
+nw[1]
 o[k]
 object
 object-fit:contain
@@ -2407,6 +2419,7 @@ spec
 spec.exp
 spin-border
 spirit
+split
 src
 srv
 srv-chip

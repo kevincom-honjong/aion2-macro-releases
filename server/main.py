@@ -5598,9 +5598,30 @@ function abyssCardLine(pc){
     const cls = rate < th.red_rate ? 'text-red-300 bg-red-950/40 border-red-800' : 'text-amber-300 bg-amber-900/20 border-amber-800/40';
     return line(cls, txt);
   }
-  return pc && pc.abyss_kina
-    ? `<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(pc.abyss_kina)}</div>`
-    : '';
+  // ★옛 매크로(숫자 칸 없음, 1.1.1003) 글자 칸 (2026-09-24 주인님 #159 «100만 이하 빨간 글씨 빠졌다 · 17번 − 돈 뜬다»)★
+  //   ① 음수(「+-6,349,199 키나 · 시간당 -12,622,269」 — 매크로 판독 오류)는 숫자를 ★화면에 안 낸다★ → 회색 한 줄.
+  //   ② 「+X 키나 · 시간당 Y (HH:MM~/부터)」 는 숫자 칸과 같은 규칙 — 문턱 분(min_mins) 전엔 중립, 뒤엔 Y < red_rate 빨강.
+  //      잰 분은 KST 지금 − HH:MM(자정 넘김은 +24시간, 기기 시계가 1~2분 빨라 미래로 보이면 0분).
+  //   ③ 못 읽는 모양은 예전 그대로(글자 esc).
+  const lg = pc && pc.abyss_kina;
+  if (!lg) return '';
+  const ls = String(lg);
+  if (/(^|[^\d,])-\s*\d/.test(ls))
+    return line('text-gray-400 bg-gray-800/40 border-gray-700', '판독 오류 — 재측정 대기');
+  const lm = ls.match(/^\+([\d,]+) 키나 · 시간당 ([\d,]+) \((\d{1,2}):(\d{2})(?:부터|~)/);
+  if (lm) {
+    const gain = Number(lm[1].replace(/,/g, '')), rate = Number(lm[2].replace(/,/g, ''));
+    const nw = fmtKstTs(new Date()).slice(11, 16).split(':').map(Number);
+    let mins = (nw[0] * 60 + nw[1]) - (Number(lm[3]) * 60 + Number(lm[4]));
+    if (mins < 0) mins += 1440;
+    if (mins > 1437) mins = 0;
+    const th = abyssTh(), hm = lm[3].padStart(2, '0') + ':' + lm[4];
+    const txt = `+${fmtKinaKor(gain)} · 시간당 ${fmtKinaKor(rate)} (${hm}부터)`;
+    if (mins < th.min_mins)
+      return line('text-gray-300 bg-gray-800/60 border-gray-700', `${txt} (측정 ${mins}분)`);
+    return line(rate < th.red_rate ? 'text-red-300 bg-red-950/40 border-red-800' : 'text-amber-300 bg-amber-900/20 border-amber-800/40', txt);
+  }
+  return `<div class="mt-1.5 text-xs text-amber-300 bg-amber-900/20 border border-amber-800/40 rounded px-2 py-0.5 truncate" title="어비스(Delete) 세션 키나 정산 — 켤 때/끌 때 보유 키나 차액. 다음 세션 시작까지 유지">💰 어비스 ${esc(ls)}</div>`;
 }
 
 function buildCard(pc) {
