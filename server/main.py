@@ -4307,6 +4307,27 @@ function dkSubCount(){
   return {sub, nosub, unknown};
 }
 
+// ★서버 전광판 숫자(2026-09-23)★ — 주인님 「팜뷰 전광판은 대시보드 전광판이 반영 안
+//   되냐, 숫자가 왜 이렇게 다르냐」. 오늘 넣은 보정(은퇴·계정없음 제외·각성전 리셋)이
+//   이 화면 JS 에만 있고 /api/fv/snapshot 은 옛 계산이라 서로 달랐다. 서버 GET /summary
+//   가 /api/fv/snapshot 과 ★같은 함수★(_fv_build_snapshot) 로 계산해 준다.
+// ★값을 바로 DOM 에 못 박지 않는다★ — refreshSummary·dkHero·updateCorridorTile 이
+//   더 잦은 주기(상태 갱신마다)로 그 자리를 다시 그리므로, fetch 로 한 번 덮어써도
+//   바로 다음 렌더에서 클라 계산으로 되돌아간다(깜빡임). 대신 SERVER_SUMMARY 에
+//   저장해 두고, 저 세 함수가 ★있으면 그 값을 최종값으로★ 쓰게 한다(§A12 — 규칙은
+//   여전히 서버 하나, 클라 계산은 서버값이 오기 전 첫 화면용 폴백으로만 남는다).
+let SERVER_SUMMARY = null;
+async function loadServerSummary(){
+  try{
+    const r = await fetch('/summary', {cache:'no-store'});
+    if(!r.ok) return;
+    SERVER_SUMMARY = await r.json();
+    refreshSummary(Object.values(state||{}));
+    updateCorridorTile();
+    dkHero();
+  }catch(e){ console.error('서버 전광판 요약 실패', e); }
+}
+
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
@@ -4323,8 +4344,8 @@ function dkHero(){
     ? `창고키나 ${fmtKina(kw)} — ★거래키나는 아직 수집 전이라 안 더해졌습니다★`
     : `창고키나 ${fmtKina(kw)} + 거래키나 ${fmtKina(kt)} = ${fmtKina(kw + kt)}`;
 
-  // ★구독 O / X★
-  const sc = dkSubCount();
+  // ★구독 O / X★ — 서버값 있으면 그게 최종값(2026-09-23, §A12·/api/fv/snapshot 과 같은 계산)
+  const sc = SERVER_SUMMARY ? (SERVER_SUMMARY.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
   const on = $('dk-h-sub-on'), off = $('dk-h-sub-off'), box = $('dk-h-subbox');
   if (on)  on.textContent  = sc.sub;
   if (off) off.textContent = sc.nosub;
@@ -5387,18 +5408,27 @@ function refreshSummary(pcs) {
   // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
   elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
              + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
-  document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
-  document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
-  document.getElementById('cnt-trade-kina').textContent=tradeSeen ? fmtKinaKor(totalTrade) : '–';
+  // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
+  //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
+  const ss = SERVER_SUMMARY;
+  document.getElementById('cnt-odd-energy').textContent = ss
+    ? (ss.odd_energy > 0 ? ss.odd_energy.toLocaleString() : '–')
+    : (totalOdd > 0 ? totalOdd.toLocaleString() : '–');
+  document.getElementById('cnt-awakening').textContent = ss
+    ? (ss.awakening_ticket != null ? ss.awakening_ticket.toLocaleString() : '–')
+    : (awakenSeen ? totalAwaken.toLocaleString() : '–');
+  document.getElementById('cnt-trade-kina').textContent = ss
+    ? fmtKinaKor(ss.trade_kina || 0)
+    : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
   document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
   const elDone = document.getElementById('cnt-completed');
   elDone.textContent = c.completedChars;
   elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
-  document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
+  document.getElementById('cnt-total-kina').textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
   // ★히어로가 ★같은 값★ 을 쓰게 넘겨둔다 (2026-08-29)★ — 따로 더하면 전광판과 갈린다.
   //   renderCards 안에서 refreshSummary 가 dkHero 보다 먼저 불린다(4389 → 4394).
-  DK_SUM.kina  = c.totalKina;
-  DK_SUM.trade = tradeSeen ? totalTrade : null;
+  DK_SUM.kina  = ss ? (ss.total_kina || 0) : c.totalKina;
+  DK_SUM.trade = ss ? (ss.trade_kina || 0) : (tradeSeen ? totalTrade : null);
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
@@ -6722,7 +6752,10 @@ function updateCorridorTile(){
   });
   const el=document.getElementById('cnt-corridor');
   if(el){
-    el.textContent=has?String(rem):'–';
+    // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — 아래 상세(nFresh/nStale)는
+    //   클라 계산에서 그대로 보여준다(툴팁용, 서버는 총합만 준다).
+    const ss = SERVER_SUMMARY;
+    el.textContent = ss ? String(ss.corridor_remaining || 0) : (has?String(rem):'–');
     const t=el.closest('.stat-tile');
     // ★줄바꿈은 String.fromCharCode(10) 으로 만든다★ — 이 파일은 파이썬 문자열 안에
     //   들어 있어서 백슬래시 이스케이프가 중간 도구에 먹히는 일이 잦다(실제로 먹혔다).
@@ -8929,6 +8962,8 @@ function handleCharInfoMsg(msg) {
   const res=await fetch('/status');
   if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
+  loadServerSummary();   // ★전광판 숫자를 팜뷰와 같은 서버 계산으로(2026-09-23)★
+  setInterval(loadServerSummary, 20000);   // 정보수집·은퇴 등록은 즉시 안 보여도 20초면 따라잡는다
   setInterval(()=>{ updResultSweep(); renderCards(); },60000);   // ★3분 데드라인의 최소 보장 틱★ — WS state 가 안 와도 1분마다 판정
   // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)
   //   `rot_allow` 가 빈 채로 얼마나 오래 있었는지 아무도 몰랐다. ▶시작은 눌리는데
@@ -8973,6 +9008,16 @@ async def all_statuses(request: Request):
     tenant = _require_session(request)
     pcs = await _build_full_state(tenant)
     return JSONResponse({"pcs": pcs, "retired": _retired_list(tenant)})
+
+
+@app.get("/summary")
+async def dashboard_summary(request: Request):
+    """전광판 숫자 — /api/fv/snapshot 과 ★같은 함수★(_fv_build_snapshot) 로 만든다(2026-09-23,
+    §A12). 「팜뷰 전광판이 대시보드랑 다르다」 는 오늘 보정(은퇴·계정없음 제외·각성전 리셋)이
+    대시보드 화면 JS 에만 있었기 때문 — 서버 한 곳으로 모으고 화면은 이 값을 그대로 쓴다."""
+    tenant = _require_session(request)
+    snap = await _fv_build_snapshot(tenant)
+    return JSONResponse(snap["global"]["totals"])
 
 
 def _public_args(a):
@@ -13397,6 +13442,47 @@ def _fv_odd_num(s) -> int:
     return a + b
 
 
+# ─── 전광판 숫자 — 대시보드·팜뷰 공용 규칙 (2026-09-23) ─────────────────────────
+#   주인님: 「팜뷰 전광판은 대시보드 전광판이 반영 안 되냐, 숫자가 왜 이렇게 다르냐」.
+#   오늘 넣은 보정(은퇴·계정없음 제외 · 각성전 주간 리셋 보정)이 대시보드 화면 JS 에만
+#   있고 /api/fv/snapshot 은 옛 계산 그대로였다 — ★서버 한 곳★ 으로 모은다(§A12).
+#   대시보드 JS 의 isExcludedPc·resetAwareTicket 과 ★같은 규칙★, Python 쪽 구현.
+_KST_TZ = timezone(timedelta(hours=9))
+
+
+def _fv_last_weekly_reset_utc() -> datetime:
+    """가장 최근 수요일 05:00(KST) 을 UTC 로 — JS lastWeeklyReset() 과 같은 규칙."""
+    now_kst = datetime.now(_KST_TZ)
+    d = now_kst
+    if d.hour < 5:
+        d = d - timedelta(days=1)
+    d = d.replace(hour=5, minute=0, second=0, microsecond=0)
+    while d.weekday() != 2:   # 0=월 … 2=수
+        d = d - timedelta(days=1)
+    return d.astimezone(timezone.utc)
+
+
+def _fv_ticket_reset_aware(collected_at, raw, full: int):
+    """JS resetAwareTicket 과 같은 규칙 — 리셋 전 수집한 낮은 값은 가득 찬 값으로."""
+    try:
+        n = int(raw)
+    except Exception:
+        return raw
+    if n >= full or not collected_at:
+        return n
+    try:
+        dt = datetime.fromisoformat(str(collected_at)).replace(tzinfo=timezone.utc)
+    except Exception:
+        return n
+    return full if dt < _fv_last_weekly_reset_utc() else n
+
+
+def _fv_pc_excluded(tenant: str, pid: str) -> bool:
+    """JS isExcludedPc 와 같은 규칙 — 은퇴·계정없음은 전광판 합계에서 뺀다(카드 자체는 남는다)."""
+    nspc = ns(tenant, pid)
+    return nspc in RETIRED_PCS or nspc in NO_ACCOUNT_PCS
+
+
 async def _fv_char_agg(tenant: str) -> dict:
     """char_info(캐릭터 단위) → pc_id(계정 카드) 단위 합.  FarmView 전광판이 못 받던 4개
     (거래키나·각인키나·오드에너지·각성전, docs/거래키나_프롬프트.txt 2026-09-09).
@@ -13412,16 +13498,28 @@ async def _fv_char_agg(tenant: str) -> dict:
         if not pid_full or ns_of(pid_full) != tenant:
             continue
         pid = split_ns(pid_full)[1]
+        # ★은퇴·계정없음은 전광판 합계에서 뺀다(2026-09-23)★ — JS isExcludedPc 와 같은 규칙.
+        #   agg 자체를 안 만든다 — char_agg.get(pid) 가 None 이 되어 _fv_pc_view 의
+        #   trade_kina/odd_energy/awakening_ticket/subscribed 가 전부 0/None 으로 나간다.
+        if _fv_pc_excluded(tenant, pid):
+            continue
         agg = out.setdefault(pid, {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0,
                                    "awakening_ticket": 0, "chars_n": 0, "odd_den": 0})
+        _collected_at = info.get("collected_at")
         for ch in info.get("chars") or []:
             # ★칸마다 따로 감싼다★ — 한 try 로 묶으면 trade_kina 하나가 이상할 때
             #   그 캐릭의 각성전 티켓까지 통째로 빠진다(값이 조용히 낮아진다).
-            for _k in ("trade_kina", "gakin_kina", "awakening_ticket"):
+            for _k in ("trade_kina", "gakin_kina"):
                 try:
                     agg[_k] += int(ch.get(_k) or 0)
                 except Exception:
                     pass
+            # ★각성전(3) 은 주간 리셋 보정을 거친다(2026-09-23)★ — JS resetAwareTicket 과 같은 규칙.
+            try:
+                agg["awakening_ticket"] += int(
+                    _fv_ticket_reset_aware(_collected_at, ch.get("awakening_ticket"), 3) or 0)
+            except Exception:
+                pass
             agg["odd_energy"] += _fv_odd_num(ch.get("odd_energy"))
             # ★구독 판정용 분모★ — 840(·800)=구독 / 560=해제. 계정 단위 속성이라 그 계정 캐릭터 중 최대값을 쓴다.
             m = _FV_ODD_FULL_RE.match(str(ch.get("odd_energy") or ""))
@@ -13563,10 +13661,12 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     }
 
 
-async def _fv_build_snapshot() -> dict:
-    """★대시보드가 쓰는 그 함수들★ 로만 만든다."""
-    rows = await _build_full_state(FV_TENANT)
-    char_agg = await _fv_char_agg(FV_TENANT)      # 캐릭터 합 4종 — 스냅샷마다 한 번
+async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
+    """★대시보드가 쓰는 그 함수들★ 로만 만든다. ★tenant 매개변수화(2026-09-23)★ —
+    세션 대시보드(/summary)도 이 함수로 같은 전광판 숫자를 받는다(§A12, FV_TENANT 는
+    기본값일 뿐 — 다른 테넌트 세션이 자기 걸 보게)."""
+    rows = await _build_full_state(tenant)
+    char_agg = await _fv_char_agg(tenant)      # 캐릭터 합 4종 — 스냅샷마다 한 번
     pcs = {}
     by_status: dict = {}
     vers: dict = {}
@@ -13575,23 +13675,33 @@ async def _fv_build_snapshot() -> dict:
     _bug_seen: set = set()     # ★PC 단위로 한 번만★ — _bug_count 는 물리 PC 값을 계정 카드마다 복사한 것
     online = 0
     tot4 = {"trade_kina": 0, "gakin_kina": 0, "odd_energy": 0, "awakening_ticket": 0}
+    sub_counts = {"sub": 0, "nosub": 0, "unknown": 0}   # ★구독 O/X 집계(2026-09-23)★ — 대시보드 dkSubCount 와 같은 값
     for r in rows:
         pid = str(r.get("pc_id") or "")
         if not pid:
             continue
         v = _fv_pc_view(r, char_agg.get(split_ns(pid)[1]))
-        for k4 in tot4:
-            tot4[k4] += int(v["progress"].get(k4) or 0)
-        pcs[pid] = v
+        pcs[pid] = v                                  # ★카드 자체는 은퇴·계정없음도 그대로 남는다★
         by_status[v["status"]] = by_status.get(v["status"], 0) + 1
         if v["online"]:
             online += 1
         ver = r.get("macro_version") or "?"
         vers[ver] = vers.get(ver, 0) + 1
-        try:
-            total_kina += int(r.get("_total_kina") or 0)
-        except Exception:
-            pass
+        # ★은퇴·계정없음은 여기서부터 「합계」에서만 뺀다(2026-09-23)★ — JS isExcludedPc.
+        if not _fv_pc_excluded(tenant, pid):
+            for k4 in tot4:
+                tot4[k4] += int(v["progress"].get(k4) or 0)
+            try:
+                total_kina += int(r.get("_total_kina") or 0)
+            except Exception:
+                pass
+            sub = v["progress"].get("subscribed")
+            if sub is True:
+                sub_counts["sub"] += 1
+            elif sub is False:
+                sub_counts["nosub"] += 1
+            else:
+                sub_counts["unknown"] += 1
         try:
             _bb = _base_pc(str(r.get("pc_id") or ""))
             if _bb not in _bug_seen:          # (2026-09-12 H4) 카드 72장 합산이 실제 장수의 ~3배였다
@@ -13605,7 +13715,7 @@ async def _fv_build_snapshot() -> dict:
     try:
         for key in list(_ROT.keys()):
             t, pid = split_ns(key)
-            if t == FV_TENANT:
+            if t == tenant:
                 armed.append(pid)
     except Exception:
         pass
@@ -13614,12 +13724,14 @@ async def _fv_build_snapshot() -> dict:
     # ★낡은 판(리셋 전 스냅샷)은 remaining 을 믿으면 안 된다★ — 화면 updateCorridorTile 은
     #   stale 이면 total 을 센다(2026-08-05 사고: 리셋이 지났는데 «완료» 로 남아 29 vs 참값 102).
     #   FV 는 그 표시를 안 붙여 보내서 팜뷰가 같은 사고를 되풀이했다(2026-09-10 주인님이 잡음).
+    # ★은퇴·계정없음 잔재도 뺀다(2026-09-23, 사고 「회랑 남음 31」)★ — 다시는 안 돌 PC 의
+    #   옛 스냅샷이 stale·total 로 계속 쌓이던 것과 같은 자리.
     corridor = {}
     _cor_cut = _corridor_cutoff()
     try:
         for key, val in CORRIDOR_PROG.items():
             t, pid = split_ns(key)
-            if t == FV_TENANT:
+            if t == tenant and not _fv_pc_excluded(tenant, pid):
                 v = dict(val)
                 v["stale"] = bool((v.get("ts") or 0) < _cor_cut)
                 corridor[pid] = v
@@ -13637,7 +13749,7 @@ async def _fv_build_snapshot() -> dict:
 
     notice = None
     try:
-        notice = await get_setting(ns(FV_TENANT, "notice"))
+        notice = await get_setting(ns(tenant, "notice"))
     except Exception:
         pass
 
@@ -13645,12 +13757,14 @@ async def _fv_build_snapshot() -> dict:
         "ts": _fv_now(),
         "pcs": pcs,
         "global": {
-            "tenant": FV_TENANT,
+            "tenant": tenant,
             "counts": {"total": len(pcs), "online": online,
                        "offline": len(pcs) - online, "by_status": by_status},
             "totals": {"total_kina": total_kina, "bugs": total_bugs,
                        "corridor_remaining": sum(_cor_left(c) for c in corridor.values()),
                        # 캐릭터 합 4종 (2026-09-09) — total_kina 는 위 그대로(계정 창고값)
+                       # 구독 O/X/모름 (2026-09-23) — 대시보드 dkSubCount 와 같은 값(은퇴·계정없음 제외)
+                       "subscribed": sub_counts,
                        **tot4},
             "versions": vers,
             "rotate_armed": sorted(armed),

@@ -695,6 +695,27 @@ function dkSubCount(){
   return {sub, nosub, unknown};
 }
 
+// ★서버 전광판 숫자(2026-09-23)★ — 주인님 「팜뷰 전광판은 대시보드 전광판이 반영 안
+//   되냐, 숫자가 왜 이렇게 다르냐」. 오늘 넣은 보정(은퇴·계정없음 제외·각성전 리셋)이
+//   이 화면 JS 에만 있고 /api/fv/snapshot 은 옛 계산이라 서로 달랐다. 서버 GET /summary
+//   가 /api/fv/snapshot 과 ★같은 함수★(_fv_build_snapshot) 로 계산해 준다.
+// ★값을 바로 DOM 에 못 박지 않는다★ — refreshSummary·dkHero·updateCorridorTile 이
+//   더 잦은 주기(상태 갱신마다)로 그 자리를 다시 그리므로, fetch 로 한 번 덮어써도
+//   바로 다음 렌더에서 클라 계산으로 되돌아간다(깜빡임). 대신 SERVER_SUMMARY 에
+//   저장해 두고, 저 세 함수가 ★있으면 그 값을 최종값으로★ 쓰게 한다(§A12 — 규칙은
+//   여전히 서버 하나, 클라 계산은 서버값이 오기 전 첫 화면용 폴백으로만 남는다).
+let SERVER_SUMMARY = null;
+async function loadServerSummary(){
+  try{
+    const r = await fetch('/summary', {cache:'no-store'});
+    if(!r.ok) return;
+    SERVER_SUMMARY = await r.json();
+    refreshSummary(Object.values(state||{}));
+    updateCorridorTile();
+    dkHero();
+  }catch(e){ console.error('서버 전광판 요약 실패', e); }
+}
+
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
@@ -711,8 +732,8 @@ function dkHero(){
     ? `창고키나 ${fmtKina(kw)} — ★거래키나는 아직 수집 전이라 안 더해졌습니다★`
     : `창고키나 ${fmtKina(kw)} + 거래키나 ${fmtKina(kt)} = ${fmtKina(kw + kt)}`;
 
-  // ★구독 O / X★
-  const sc = dkSubCount();
+  // ★구독 O / X★ — 서버값 있으면 그게 최종값(2026-09-23, §A12·/api/fv/snapshot 과 같은 계산)
+  const sc = SERVER_SUMMARY ? (SERVER_SUMMARY.subscribed || {sub:0,nosub:0,unknown:0}) : dkSubCount();
   const on = $('dk-h-sub-on'), off = $('dk-h-sub-off'), box = $('dk-h-subbox');
   if (on)  on.textContent  = sc.sub;
   if (off) off.textContent = sc.nosub;
@@ -1775,18 +1796,27 @@ function refreshSummary(pcs) {
   // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
   elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
              + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
-  document.getElementById('cnt-odd-energy').textContent=totalOdd > 0 ? totalOdd.toLocaleString() : '–';
-  document.getElementById('cnt-awakening').textContent=awakenSeen ? totalAwaken.toLocaleString() : '–';
-  document.getElementById('cnt-trade-kina').textContent=tradeSeen ? fmtKinaKor(totalTrade) : '–';
+  // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
+  //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
+  const ss = SERVER_SUMMARY;
+  document.getElementById('cnt-odd-energy').textContent = ss
+    ? (ss.odd_energy > 0 ? ss.odd_energy.toLocaleString() : '–')
+    : (totalOdd > 0 ? totalOdd.toLocaleString() : '–');
+  document.getElementById('cnt-awakening').textContent = ss
+    ? (ss.awakening_ticket != null ? ss.awakening_ticket.toLocaleString() : '–')
+    : (awakenSeen ? totalAwaken.toLocaleString() : '–');
+  document.getElementById('cnt-trade-kina').textContent = ss
+    ? fmtKinaKor(ss.trade_kina || 0)
+    : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
   document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
   const elDone = document.getElementById('cnt-completed');
   elDone.textContent = c.completedChars;
   elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
-  document.getElementById('cnt-total-kina').textContent=fmtKinaKor(c.totalKina);
+  document.getElementById('cnt-total-kina').textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
   // ★히어로가 ★같은 값★ 을 쓰게 넘겨둔다 (2026-08-29)★ — 따로 더하면 전광판과 갈린다.
   //   renderCards 안에서 refreshSummary 가 dkHero 보다 먼저 불린다(4389 → 4394).
-  DK_SUM.kina  = c.totalKina;
-  DK_SUM.trade = tradeSeen ? totalTrade : null;
+  DK_SUM.kina  = ss ? (ss.total_kina || 0) : c.totalKina;
+  DK_SUM.trade = ss ? (ss.trade_kina || 0) : (tradeSeen ? totalTrade : null);
 }
 
 // ─── 선택 ─────────────────────────────────────────────────────────────────────
@@ -3110,7 +3140,10 @@ function updateCorridorTile(){
   });
   const el=document.getElementById('cnt-corridor');
   if(el){
-    el.textContent=has?String(rem):'–';
+    // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — 아래 상세(nFresh/nStale)는
+    //   클라 계산에서 그대로 보여준다(툴팁용, 서버는 총합만 준다).
+    const ss = SERVER_SUMMARY;
+    el.textContent = ss ? String(ss.corridor_remaining || 0) : (has?String(rem):'–');
     const t=el.closest('.stat-tile');
     // ★줄바꿈은 String.fromCharCode(10) 으로 만든다★ — 이 파일은 파이썬 문자열 안에
     //   들어 있어서 백슬래시 이스케이프가 중간 도구에 먹히는 일이 잦다(실제로 먹혔다).
@@ -5317,6 +5350,8 @@ function handleCharInfoMsg(msg) {
   const res=await fetch('/status');
   if(res.ok){const j=await res.json();j.pcs?.forEach(p=>{state[p.pc_id]=p;});RETIRED=new Set(j.retired||[]);}
   renderCards(); loadCmdHistory(); loadCharTable(); connectWS(); loadSalePrice(); loadAwakenPreset();
+  loadServerSummary();   // ★전광판 숫자를 팜뷰와 같은 서버 계산으로(2026-09-23)★
+  setInterval(loadServerSummary, 20000);   // 정보수집·은퇴 등록은 즉시 안 보여도 20초면 따라잡는다
   setInterval(()=>{ updResultSweep(); renderCards(); },60000);   // ★3분 데드라인의 최소 보장 틱★ — WS state 가 안 와도 1분마다 판정
   // ★★사고 395 — ★꺼져 있는 걸 아무도 모른다★★ (주인님 2026-09-01)
   //   `rot_allow` 가 빈 채로 얼마나 오래 있었는지 아무도 몰랐다. ▶시작은 눌리는데

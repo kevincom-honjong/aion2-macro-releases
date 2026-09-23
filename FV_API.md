@@ -137,7 +137,8 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
     "totals": {
       "total_kina": 130801794,
       "bugs": 0,
-      "corridor_remaining": 0
+      "corridor_remaining": 0,
+      "subscribed": {"sub": 1, "nosub": 0, "unknown": 0}
     },
     "versions": {"1.1.926": 1, "1.1.923": 1},
     "rotate_armed": [],
@@ -605,3 +606,29 @@ asyncio.run(main())
 
 ## 2026-09-09 추가 — 캐릭터 합 4종
 `progress.trade_kina`(거래키나) · `progress.gakin_kina`(각인키나) · `progress.odd_energy`(오드에너지, `"300(+1,195)/840"` → 300+1195 규칙) · `progress.awakening_ticket`(각성전 티켓) — 그 카드(pc_id) 캐릭터들의 **합**, 없으면 0. `global.totals` 에도 같은 이름으로 전체 합. `total_kina` 는 그대로(계정 창고값, 캐릭마다 중복이라 합치지 않는다). 서버 `main.py _fv_char_agg`.
+
+## 2026-09-23 추가 — `global.totals` 계산을 대시보드 화면과 한 곳으로 모았다
+주인님: 「팜뷰 전광판은 대시보드 전광판이 반영 안 되냐, 숫자가 왜 이렇게 다르냐」.
+그날 대시보드 화면 JS 에만 넣었던 보정(은퇴·계정없음 PC 제외 · 각성전 3/3 주간
+리셋 보정)이 `/api/fv/snapshot` 에는 안 실려 있었다 — 서버 함수 `_fv_build_snapshot`
+(+ `_fv_char_agg`) 한 곳으로 계산을 모으고, 대시보드는 세션 인증 `GET /summary`(같은
+함수 결과, 팜뷰 전용 아님 — 화면 전용) 로 이 값을 받아 표시하게 바꿨다. 실측(같은
+서버, 같은 순간) 두 응답의 `global.totals`/`/summary` 가 **바이트까지 동일**함을
+확인했다(로컬 재현).
+
+- **`global.totals.subscribed`**(신설) — `{"sub": N, "nosub": N, "unknown": N}`. 대시보드
+  구독 O/X 집계(`dkSubCount`)와 같은 값. 은퇴·계정없음 PC 는 어느 쪽에도 안 세진다
+  (예전엔 `subscribed` 총계 자체가 없었다 — 카드별 `progress.subscribed` 만 있었다).
+- **은퇴·계정없음 PC 제외** — `total_kina`·`corridor_remaining`·`subscribed`·캐릭터 합
+  4종(`trade_kina`·`gakin_kina`·`odd_energy`·`awakening_ticket`) 전부 은퇴(카드 삭제)·
+  계정없음(no_account) PC 를 뺀다. ★카드 자체(`pcs[pid]`)는 그대로 남는다★ — 합계에서만
+  빠진다. 판정은 서버 `RETIRED_PCS`/`NO_ACCOUNT_PCS`(대시보드 `/admin/retire`·
+  `/admin/no_account` 로 관리).
+- **각성전 티켓 주간 리셋 보정** — `progress.awakening_ticket`·`global.totals.awakening_ticket`
+  둘 다, 그 캐릭터 정보수집 시각이 가장 최근 수요일 05:00(KST) 이전이면 raw 값 대신
+  ★3(가득 참)★ 을 합산한다(게임이 리셋으로 3/3 이 됐는데 다음 정보수집 전까지 옛 낮은
+  값을 들고 있던 것 — DB 원본은 안 바뀐다). 일일던전(`daily_ticket`)·성역(`sanctuary`)
+  은 캐릭터 테이블 컬럼일 뿐 `global.totals`/`progress` 에 없어 이 계산 밖이다(대시보드
+  화면에서만 같은 규칙으로 보정).
+- 악몽 티켓(`nightmare_ticket`)은 리셋 주기가 아직 실측 확정 전이라 이 보정 대상이
+  ★아니다★ — 값을 그대로 준다.
