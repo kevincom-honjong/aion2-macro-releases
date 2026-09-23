@@ -6,11 +6,15 @@
     cd updater/server && python -X utf8 tests/test_alarm_event.py
 """
 import json
+import os
+import re
+import sys
 import time
+import types
 
 from _harness import main, db, ok, Req, run_all, finish, TG_SENT   # noqa: E402
 
-MIN_CHECKS = 11
+MIN_CHECKS = 22    # 2026-09-24 #124 알람 지연 실측 +11(A-7~A-9)
 TOK = "fvsecret-alarm"
 H = {"X-FV-Token": TOK}
 
@@ -32,8 +36,16 @@ class _FormReq(Req):
         return {"caption": self._cap, "expect_reply": "0"}
 
 
-async def _alarms(pc):
+_TIMING = re.compile(r" \(⏱ [^()]*\)$")
+
+
+async def _alarms_raw(pc):
     return [x["message"] for x in await db.get_logs(pc, limit=50) if (x.get("message") or "").startswith("[알람]")]
+
+
+async def _alarms(pc):
+    """★#124★ 끝의 « (⏱ …)» 지연 꼬리를 뗀 본문 — 꼬리 자체는 A-7~A-9 가 따로 본다."""
+    return [_TIMING.sub("", m) for m in await _alarms_raw(pc)]
 
 
 async def _fv_alarm_events(pc):
@@ -65,7 +77,8 @@ async def t_text_alarm():
        str(TG_SENT[-1:]))
     ev = await _fv_alarm_events(pc)
     ok("A-2 ★팜뷰 /api/fv/events 가 그 줄을 type:log 로 준다(계약)★",
-       len(ev) == 1 and ev[0]["message"] == "[알람] PC-A1 | 🚨 캡차 — 답해 주세요" and ev[0]["level"] == "info", str(ev))
+       len(ev) == 1 and _TIMING.sub("", ev[0]["message"]) == "[알람] PC-A1 | 🚨 캡차 — 답해 주세요"
+       and ev[0]["level"] == "info", str(ev))
     # 음소거 — 보통 알림은 안 나가고 [알람] 도 안 남는다 / ⛔·🚨 는 뚫고 나가며 [알람] 도 남는다
     pc = "PC-A2"
     main._TG_MUTE[main.ns("main", pc)] = time.time() + 3600
@@ -128,8 +141,130 @@ async def t_photo_alarm():
        and await _alarms("PC-A6") == ["[알람] PC-A6 | 캡차 (사진) (텔레그램 실패)"], str(await _alarms("PC-A6")))
 
 
+class _FakeResp:
+    status_code = 200
+    text = ""
+
+    def __init__(self, js):
+        self._js = js
+
+    def json(self):
+        return self._js
+
+
+class _FakeClient:
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, data=None, files=None):
+        return _FakeResp({"ok": True, "result": {"message_id": 7, "date": 1790200000}})
+
+
+def _farmview_alarmvoice():
+    here = os.path.dirname(os.path.abspath(__file__))
+    fv = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview"))
+    if fv not in sys.path:
+        sys.path.insert(0, fv)
+    import alarmvoice                   # noqa: E402 — 팜뷰 실물(src/farmview)
+    return alarmvoice
+
+
+async def t_alarm_timing():
+    """★#124 (2026-09-24 아이온2 결정)★ [알람] 줄 끝 « (⏱ 발생→수신 X초 · 수신→전송 Y초 · 텔레그램 HH:MM:SS)»."""
+    main.TELEGRAM_BOT_TOKEN = "T"
+    main.TENANTS.setdefault("main", {})["chat_id"] = "12345"
+    main._TG_MUTE.clear()
+    pc = "PC-A7"
+    await main.telegram_send(pc, Req({"text": "🚨 캡차 — 답해 주세요", "t0": time.time() - 2.5}))
+    raw = await _alarms_raw(pc)
+    m = re.fullmatch(r"\[알람\] PC-A7 \| 🚨 캡차 — 답해 주세요 \(⏱ 발생→수신 (\d+\.\d\d)초 · 수신→전송 (\d+\.\d\d)초\)",
+                     raw[0] if raw else "")
+    ok("A-7 ★본문 t0 가 오면 «발생→수신 X초 · 수신→전송 Y초» 꼬리(텔레그램 date 없음 = 가짜 전송)★",
+       len(raw) == 1 and m is not None and 2.4 <= float(m.group(1)) < 4.0 and float(m.group(2)) < 2.0, str(raw))
+    pc = "PC-A7b"
+    await main.telegram_send(pc, Req({"text": "🚨 사망"}))
+    raw = await _alarms_raw(pc)
+    ok("A-7b t0 가 없으면 «발생→수신» 은 빼고 «수신→전송» 만",
+       len(raw) == 1 and re.fullmatch(r"\[알람\] PC-A7b \| 🚨 사망 \(⏱ 수신→전송 \d+\.\d\d초\)", raw[0]) is not None, str(raw))
+    bad_ok = []
+    for i, bad in enumerate(("abc", float("nan"), time.time() - 3 * 86400, True, [1], {"x": 1})):
+        pc = "PC-A7c%d" % i
+        try:
+            await main.telegram_send(pc, Req({"text": "🚨 캡차", "t0": bad}))
+            raw = await _alarms_raw(pc)
+            good = len(raw) == 1 and "발생→수신" not in raw[0] and "수신→전송" in raw[0]
+        except Exception as e:
+            good, raw = False, "exc:%s" % type(e).__name__
+        if i < 3:
+            ok("A-7c t0 가 이상하면(%r) 빼고 알람은 그대로" % (bad,), good, str(raw))
+        else:
+            bad_ok.append((good, raw))
+    ok("A-7d t0 가 bool·목록·객체여도 500 없이 뺀다", all(g for g, _ in bad_ok), str(bad_ok))
+    rs = await main.telegram_send("PC-A7e", Req({"text": "🚨 캡차", "t0": "%.3f" % (time.time() - 1.0)}))
+    raw = await _alarms_raw("PC-A7e")
+    ok("A-7e t0 가 숫자 글자여도 읽는다", json.loads(bytes(rs.body)).get("ok") is True and raw and "발생→수신 1." in raw[0], str(raw))
+    # ★실제 _tg_call 길★ — 가짜 httpx 로 텔레그램 응답 date 가 부른 과제에만 돌아오는지(하네스가 가짜로 바꾸지 않은
+    #   tg_send_photo 는 진짜 → _tg_call 까지 그대로 탄다)
+    real_httpx = sys.modules.get("httpx")
+    sys.modules["httpx"] = types.SimpleNamespace(AsyncClient=_FakeClient)
+    _en0, _ch0 = main.tg_enabled, main.tenant_chat_id
+
+    class _FormT8(_FormReq):
+        async def form(self):
+            return {"caption": self._cap, "expect_reply": "0", "t0": str(time.time() - 1.0)}
+    main.tenant_chat_id = lambda t: "1"
+    try:
+        r8 = await main.telegram_photo("PC-A8", _FormT8("캡차"), _UF(b"\x89PNG" + b"\0" * 10))
+    finally:
+        main.tenant_chat_id = _ch0
+        if real_httpx is not None:
+            sys.modules["httpx"] = real_httpx
+        else:
+            sys.modules.pop("httpx", None)
+    raw = await _alarms_raw("PC-A8")
+    from datetime import datetime as _dt
+    hhmmss = _dt.fromtimestamp(1790200000, main._KST_TZ).strftime("%H:%M:%S")
+    ok("A-8 ★진짜 _tg_call 길: 텔레그램 응답 date 가 «텔레그램 HH:MM:SS»(KST) 로 붙는다★",
+       json.loads(bytes(r8.body)).get("message_id") == 7 and len(raw) == 1
+       and raw[0].endswith("· 텔레그램 %s)" % hhmmss) and "발생→수신 1." in raw[0], str(raw))
+    ok("A-8b date 는 부른 과제에만 — 과제 밖(다른 알람)엔 안 남는다", main._TG_RES.get() is None, str(main._TG_RES.get()))
+    # 사진도 같은 꼬리
+    _en, _ch, _sp = main.tg_enabled, main.tenant_chat_id, main.tg_send_photo
+
+    async def _send_photo(*a, **k):
+        return 88
+
+    class _FormT(_FormReq):
+        async def form(self):
+            return {"caption": self._cap, "expect_reply": "0", "t0": str(time.time() - 3.0)}
+    main.tg_enabled, main.tenant_chat_id, main.tg_send_photo = (lambda: True), (lambda t: "1"), _send_photo
+    try:
+        await main.telegram_photo("PC-A9", _FormT("캡차 화면"), _UF(b"\x89PNG" + b"\0" * 10))
+    finally:
+        main.tg_enabled, main.tenant_chat_id, main.tg_send_photo = _en, _ch, _sp
+    raw = await _alarms_raw("PC-A9")
+    ok("A-9 사진 알람도 t0 → «(사진) (⏱ 발생→수신 3.xx초 · …)»",
+       len(raw) == 1 and raw[0].startswith("[알람] PC-A9 | 캡차 화면 (사진) (⏱ 발생→수신 3.") , str(raw))
+    # ★팜뷰 목소리는 그대로★ — 실물 alarmvoice 로 꼬리 있는 줄 = 꼬리 없는 줄
+    av = _farmview_alarmvoice()
+    ev_t = {"type": "log", "pc": "PC-A7", "ts": "2026-09-24T00:00:00", "level": "info",
+            "message": "[알람] PC-A7 | 🚨 캡차 아직 안 풀림(60초) — 코드를 답장해 주세요 (⏱ 발생→수신 1.20초 · 수신→전송 0.40초 · 텔레그램 05:41:02)"}
+    ev_n = dict(ev_t, message="[알람] PC-A7 | 🚨 캡차 아직 안 풀림(60초) — 코드를 답장해 주세요")
+    pt, pn = av.pick(ev_t), av.pick(ev_n)
+    ok("A-9b ★팜뷰 alarmvoice 실물: 꼬리가 있어도 같은 말(summarize)·같은 무름 판정★",
+       pt is not None and pn is not None and av.summarize(*pt) == av.summarize(*pn)
+       and "⏱" not in av.summarize(*pt), "%s | %s" % (pt and av.summarize(*pt), pn and av.summarize(*pn)))
+    main.TELEGRAM_BOT_TOKEN = ""
+
+
 def test_all():
-    run_all([t_text_alarm, t_photo_alarm])
+    run_all([t_text_alarm, t_photo_alarm, t_alarm_timing])
     finish("test_alarm_event", MIN_CHECKS)
 
 

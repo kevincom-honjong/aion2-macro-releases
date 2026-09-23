@@ -937,6 +937,13 @@ def tg_enabled() -> bool:
     return bool(TELEGRAM_BOT_TOKEN)
 
 
+# ★#124 알람 지연 실측 (2026-09-24 아이온2 결정)★ — 텔레그램 응답의 `date`(텔레그램 서버가 받은 시각, 초 단위)를
+#   ★부른 과제에만★ 돌려준다. tg_send_text/photo 의 모양(반환 = message_id)과 시험 가짜들은 그대로 둔다 —
+#   부르는 쪽이 `_TG_RES.set({})` 해 두면 _tg_call 이 성공 때 그 dict 에 date 를 적는다(다른 알람 과제와 안 섞인다).
+import contextvars as _ctxv
+_TG_RES: "_ctxv.ContextVar[dict | None]" = _ctxv.ContextVar("_TG_RES", default=None)
+
+
 async def _tg_call(method: str, data: dict | None = None,
                    files: dict | None = None, timeout: float = 20.0) -> dict | None:
     """Bot API 호출. 실패는 None (알림 실패로 본 기능이 막히면 안 된다)."""
@@ -974,6 +981,9 @@ async def _tg_call(method: str, data: dict | None = None,
         if not js.get("ok"):
             print(f"[TG] {method} not ok: {str(js)[:200]}")
             return None
+        _m = _TG_RES.get()
+        if isinstance(_m, dict) and isinstance(js.get("result"), dict):
+            _m["date"] = js["result"].get("date")      # #124 — 부른 과제에만
         return js.get("result")
     except Exception as e:
         print(f"[TG] {method} 예외: {e.__class__.__name__}: {e}")
@@ -10057,23 +10067,53 @@ function handleCharInfoMsg(msg) {
 HTML_DASHBOARD = _tw_inline(HTML_DASHBOARD)   # Tailwind 인라인 — _tw_inline 머리 주석
 
 
+import gzip as _html_gzip
+_HTML_GZ: dict = {"src": None, "gz": b""}
+
+
+def _server_timing(t0: float) -> str:
+    """★#114 (2026-09-24 아이온2 결정)★ `Server-Timing: app;dur=<ms>` — 서버 안에서 쓴 시간. 브라우저 개발자도구
+    Network → Timing 에 그대로 보여 운영에서 전후를 잴 수 있다(네트워크·화면 그리기와 가른다)."""
+    return "app;dur=%.1f" % ((time.perf_counter() - t0) * 1000.0)
+
+
+def _html_gz(html: str) -> bytes:
+    """대시보드 HTML gzip — HTML 은 부팅 뒤 안 바뀌니 한 번만 압축(같은 문자열 객체면 재사용)."""
+    if _HTML_GZ["src"] is not html:
+        _HTML_GZ["gz"] = _html_gzip.compress(html.encode("utf-8"), 6)
+        _HTML_GZ["src"] = html
+    return _HTML_GZ["gz"]
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    _t = time.perf_counter()
     if not check_session(request):
         return RedirectResponse("/login")
     # ★no-store: 대시보드 HTML을 브라우저가 캐시해 옛 버전(옛 컬럼/JS)을 보여주던 문제 방지.
     #   배포 때마다 새 대시보드가 바로 뜨게 함(컬럼 어긋남 등 stale 렌더 방지).
-    return HTMLResponse(HTML_DASHBOARD, headers={
+    hdr = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache", "Expires": "0",
-    })
+        "Pragma": "no-cache", "Expires": "0", "Vary": "Accept-Encoding",
+    }
+    # ★#114 gzip (2026-09-24 아이온2 결정)★ — 544KB(tw.css 인라인 뒤) → 약 170KB. FV 경로(_fv_json)와 같은 규칙:
+    #   요청이 gzip 을 받는다고 할 때만.
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        gz = _html_gz(HTML_DASHBOARD)
+        hdr["Content-Encoding"] = "gzip"
+        hdr["Server-Timing"] = _server_timing(_t)
+        return Response(gz, media_type="text/html; charset=utf-8", headers=hdr)
+    hdr["Server-Timing"] = _server_timing(_t)
+    return HTMLResponse(HTML_DASHBOARD, headers=hdr)
 
 
 @app.get("/status")
 async def all_statuses(request: Request):
+    _t = time.perf_counter()
     tenant = _require_session(request)
     pcs = await _build_full_state(tenant)
-    return JSONResponse({"pcs": pcs, "retired": _retired_list(tenant)})
+    return JSONResponse({"pcs": pcs, "retired": _retired_list(tenant)},
+                        headers={"Server-Timing": _server_timing(_t)})    # #114
 
 
 @app.get("/summary")
@@ -10081,9 +10121,10 @@ async def dashboard_summary(request: Request):
     """전광판 숫자 — /api/fv/snapshot 과 ★같은 함수★(_fv_build_snapshot) 로 만든다(2026-09-23,
     §A12). 「팜뷰 전광판이 대시보드랑 다르다」 는 오늘 보정(은퇴·계정없음 제외·각성전 리셋)이
     대시보드 화면 JS 에만 있었기 때문 — 서버 한 곳으로 모으고 화면은 이 값을 그대로 쓴다."""
+    _t = time.perf_counter()
     tenant = _require_session(request)
     snap = await _fv_build_snapshot(tenant)
-    return JSONResponse(snap["global"]["totals"])
+    return JSONResponse(snap["global"]["totals"], headers={"Server-Timing": _server_timing(_t)})    # #114
 
 
 def _public_args(a):
@@ -11083,7 +11124,26 @@ async def telegram_mute_list(request: Request):
 ALARM_EVENT_PREFIX = "[알람]"     # 팜뷰 alarmvoice.py 가 이 머리로 알람을 알아본다(FV_API «[알람] 이벤트», #128)
 
 
-async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = False) -> None:
+def _alarm_timing(t0, recv: float, sent: float, tg_date) -> str:
+    """★#124 알람 지연 실측 (2026-09-24 아이온2 결정)★ — [알람] 줄 끝에 붙는 « (⏱ …)».
+    발생→수신 = 서버가 요청을 받은 시각 − 매크로가 본문 `t0`(epoch 초, ★매크로 시계★)로 알려 준 발생 시각 — t0 가 없거나
+    숫자가 아니거나 하루 넘게 어긋나면 뺀다(음수면 매크로 시계가 빠른 것 — 그대로 적는다, 시계 차도 측정값이다).
+    수신→전송 = 텔레그램 호출이 끝난 시각 − 받은 시각(실패·재시도 대기 포함). 텔레그램 = 응답 `date`(텔레그램 서버 시각, KST 초).
+    «(» 로 시작해 팜뷰 alarmvoice.summarize 가 말에서 잘라낸다(목소리 그대로 — 시험 A-8)."""
+    parts = []
+    try:
+        t0f = None if (t0 is None or isinstance(t0, bool)) else float(str(t0).strip())
+    except Exception:
+        t0f = None
+    if t0f is not None and t0f == t0f and abs(recv - t0f) < 86400:
+        parts.append("발생→수신 %.2f초" % (recv - t0f))
+    parts.append("수신→전송 %.2f초" % max(0.0, sent - recv))
+    if isinstance(tg_date, (int, float)) and not isinstance(tg_date, bool) and 0 < tg_date < 10 ** 11:
+        parts.append("텔레그램 %s" % datetime.fromtimestamp(tg_date, _KST_TZ).strftime("%H:%M:%S"))
+    return " (⏱ " + " · ".join(parts) + ")"
+
+
+async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = False, timing: str = "") -> None:
     """★텔레그램으로 내보낸 알람을 그 PC 로그에 즉시 한 줄 (주인님 #128, 팜뷰 알람 목소리)★
     — 예전엔 매크로가 보낸 ★뒤★ 남기는 «[텔레그램] 중계 전송» info 줄이 하트비트(30초)에 실려 와 팜뷰 목소리가 ~35초
     늦었다(텔레그램보다 늦게). 서버가 보내는 순간 DB 에 쓰면 팜뷰 /api/fv/events(5초 폴링)가 5초 안에 줍는다.
@@ -11094,6 +11154,7 @@ async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = Fals
     body = re.sub(r"[\r\n]+", " ", str(text)).strip()[:300]
     if tg_failed:
         body += " (텔레그램 실패)"
+    body += timing or ""
     try:
         await insert_log(ns(tenant, name), "info", f"{ALARM_EVENT_PREFIX} {name} | {body}")
     except Exception as e:
@@ -11103,6 +11164,7 @@ async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = Fals
 @app.post("/telegram/send/{pc_id}")
 async def telegram_send(pc_id: str, request: Request):
     """매크로 → 텔레그램 텍스트 중계. 매크로에 봇 토큰이 없어도 알림이 간다."""
+    _recv = time.time()                       # #124 수신 시각
     tenant = check_api_key(request)
     if not tenant:
         # ★차단 테넌트의 '정지 안내' 예외(2026-08-06 리뷰): 킬/만료된 테넌트가 check_api_key에서
@@ -11177,8 +11239,14 @@ async def telegram_send(pc_id: str, request: Request):
         return JSONResponse({"ok": False, "muted": True,
                              "reason": "muted",
                              "minutes_left": round(_left / 60.0, 1)})
-    mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
-    await _alarm_event(tenant, name, text, tg_failed=mid is None)
+    _res: dict = {}
+    _tok = _TG_RES.set(_res)
+    try:
+        mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
+    finally:
+        _TG_RES.reset(_tok)               # 이 과제 밖으로 안 샌다(시험 A-8b)
+    await _alarm_event(tenant, name, text, tg_failed=mid is None,
+                       timing=_alarm_timing(data.get("t0"), _recv, time.time(), _res.get("date")))
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if bool(data.get("expect_reply")):
@@ -11189,6 +11257,7 @@ async def telegram_send(pc_id: str, request: Request):
 @app.post("/telegram/photo/{pc_id}")
 async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(...)):
     """매크로 → 텔레그램 사진 중계(캡차 스샷). expect_reply면 답장 라우팅 대상으로 등록."""
+    _recv = time.time()                       # #124 수신 시각(사진은 업로드를 다 받은 뒤 — FastAPI 가 먼저 읽는다)
     tenant = _require_api_key(request)
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
@@ -11201,8 +11270,14 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
         raise HTTPException(status_code=400, detail="이미지 크기 오류")
     name = clean_pc_id(pc_id)
     # 캡션 뒤에 «(사진)» — 팜뷰 alarmvoice.summarize 가 «(» 에서 자르므로 앞에 두면 캡션이 통째로 사라진다
-    mid = await tg_send_photo(chat, f"{name} | {caption}" if name else caption, raw)
-    await _alarm_event(tenant, name, f"{caption} (사진)" if caption else "(사진)", tg_failed=mid is None)
+    _res: dict = {}
+    _tok = _TG_RES.set(_res)
+    try:
+        mid = await tg_send_photo(chat, f"{name} | {caption}" if name else caption, raw)
+    finally:
+        _TG_RES.reset(_tok)
+    await _alarm_event(tenant, name, f"{caption} (사진)" if caption else "(사진)", tg_failed=mid is None,
+                       timing=_alarm_timing(form.get("t0"), _recv, time.time(), _res.get("date")))
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if expect_reply:
@@ -16739,6 +16814,10 @@ async def fv_updcmd_list(request: Request, since: str = "0"):
                 continue
             v["claimed"] = True
         _out = {f: v[f] for f in _FV_UPDCMD_OUT}
+        if not _was and not v.get("t1_logged"):
+            v["t1_logged"] = True
+            await _updq_log(k, "[업데이트큐] 팜뷰가 가져감 id=%s act=%s (누른 뒤 %s)"
+                            % (v.get("id"), v.get("act"), _updq_age(v.get("at"))))
         if _was:
             # ★다시 주는 것 (반증 v2 #2, 더하기만)★ — 팜뷰가 이 id 를 기억(UPD_DONE)하면 결과로 ack 만, ★기억이 없으면
             #   실행하지 말 것★(재시작한 팜뷰가 이미 돈 명령을 또 돌린다) — ack {ok:false, reached:true} 로 «모름» 을 닫는다.
@@ -16817,7 +16896,29 @@ async def fv_updcmd_ack(request: Request):
             print(f"[FV] updcmd 결과 기록 실패 ucmd={_u}: {e}")
     print(f"[FV] updcmd ack pc={pc} id={cid} ok={body.get('ok')} why={body.get('why', '')}"
           f"{'' if removed else ' (이미 없음·id 불일치)'}")
+    await _updq_log(nspc, "[업데이트큐] 팜뷰 ack id=%s ok=%s why=%s (누른 뒤 %s)%s"
+                    % (cid, bool(body.get("ok")), str(body.get("why") or "")[:80],
+                       _updq_age((cur or {}).get("at")), "" if removed else " (이미 없음·id 불일치)"))
     return _fv_json(request, {"ok": True, "removed": removed})
+
+
+def _updq_age(at) -> str:
+    """큐 칸 `at`(UTC «%Y-%m-%dT%H:%M:%S», 누른 시각) → «12초». 모르면 «?»."""
+    try:
+        t = datetime.strptime(str(at), _FV_TS_FMT).replace(tzinfo=timezone.utc)
+        return "%d초" % max(0, int((datetime.now(timezone.utc) - t).total_seconds()))
+    except Exception:
+        return "?"
+
+
+async def _updq_log(nspc: str, msg: str) -> None:
+    """★#64 팜뷰 큐 왕복 실측 (2026-09-24 아이온2 결정)★ — T1(팜뷰가 가져감)·T2(팜뷰 ack) 시각은 예전엔 Railway 콘솔에만
+    있었고(T2 는 행 updated_at 이 덮어 T1 이 사라짐) 사후에 못 쟀다. 그 PC 로그에 한 줄씩 — 로그 실패가 큐를 막지 않는다.
+    T0 = updater_commands.created_at · T3 = 카드 updater.version 변화 · T4 = 매크로 보고 재개 는 이미 남는다."""
+    try:
+        await insert_log(nspc, "info", msg)
+    except Exception as e:
+        print(f"[FV] updcmd 로그 실패(무시) {nspc}: {e}", flush=True)
 
 
 # ★OCR 라벨링 (2026-09-23 장부 #108)★ — 라우터·표·화면은 전부 ocr_label.py(머리 주석). 여기는 연결만.
