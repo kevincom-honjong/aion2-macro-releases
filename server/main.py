@@ -4427,6 +4427,15 @@ function resetAwareTicket(collected_at, raw, full){
   if (!collected_at || !isBeforeReset(collected_at)) return raw;
   return full;
 }
+// ★성역(2026-09-23, 주인님 게임 규칙 확정) — 수요일 05:00 초기화★
+//   각성전·일일던전과 달리 「몇으로 돌아가는지」가 아니라 ★비었다는 사실★ 만 안다
+//   (게임이 다시 채워주는 목표치를 우리가 모른다) — 그래서 값을 지어내지 않고
+//   "초기화됨"(미완) 으로만 표시한다. sanctuary 는 "N/M" 문자열이라 숫자 보정과 다르다.
+function resetAwareSanctuary(collected_at, raw){
+  if (!raw) return raw;
+  if (!collected_at || !isBeforeReset(collected_at)) return raw;
+  return '초기화됨';
+}
 // ★2026-09-23 주인님 — 「수요일 새벽 5시 초기화인데 적용된 거지? 아직 빨강 남아있다」★★
 //   원인: abyss_time 「00:00:00」 만 보고 ★언제 읽힌 값인지★ 안 봤다 — 리셋 전에 수집한
 //   0 이 다음 정보수집 전까지 계속 빨갛다. lc/surface_zero.py 의 리셋 규칙(수요일 05시,
@@ -8095,6 +8104,7 @@ async function loadCharTable() {
       ...r,
       daily_ticket: resetAwareTicket(r.collected_at, r.daily_ticket, 14),
       awakening_ticket: resetAwareTicket(r.collected_at, r.awakening_ticket, 3),
+      sanctuary: resetAwareSanctuary(r.collected_at, r.sanctuary),
     }));
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
     renderCharTable();
@@ -8157,6 +8167,7 @@ async function loadVietnam(){
       ...x,
       daily_ticket: resetAwareTicket(x.collected_at, x.daily_ticket, 14),
       awakening_ticket: resetAwareTicket(x.collected_at, x.awakening_ticket, 3),
+      sanctuary: resetAwareSanctuary(x.collected_at, x.sanctuary),
     }));
   }catch(e){ console.error('vietnam load', e); }
   renderVietnam();
