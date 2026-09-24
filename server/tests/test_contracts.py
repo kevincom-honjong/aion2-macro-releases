@@ -16,7 +16,7 @@ import json
 
 from _harness import main, db, ok, FakeWS, Req, run_all, finish, TG_SENT   # noqa: E402
 
-MIN_CHECKS = 61
+MIN_CHECKS = 62
 
 
 def _has(d, keys):
@@ -130,6 +130,10 @@ async def t_fv_kina_adjust():
     age7 = body["pcs"]["PC-C7"]["progress"].get("kina_age_s")
     ok("S→FV progress.kina_age_s 는 정수(수집 방금 → 60초 미만)", isinstance(age1, int) and not isinstance(age1, bool) and 0 <= age1 < 60, str(age1))
     ok("S→FV char_info 없는 카드는 kina_age_s = 10^9(모름)", age7 == 10 ** 9, str(age7))
+    # ①-b kina_read_age_s (2026-09-24 팜뷰 #201 r3d) — 모든 카드에 정수, 판독 표식이 없으면 10^9
+    ra = [body["pcs"][p]["progress"].get("kina_read_age_s") for p in ("PC-C1", "PC-C7")]
+    ok("S→FV progress.kina_read_age_s 는 모든 카드에 정수(판독 표식 없음 → 10^9)",
+       all(isinstance(x, int) and not isinstance(x, bool) for x in ra) and ra == [10 ** 9, 10 ** 9], str(ra))
     ok("S→FV _fv_age_int: 못 읽는 시각도 10^9", main._fv_age_int("garbage") == 10 ** 9 and main._fv_age_int(None) == 10 ** 9)
     # ② 차감 — 명세 원문 그대로
     why = {"tid": "2026090603221474", "server": "챈가룽", "man": 21000, "won": 84000, "src": "itemmania"}

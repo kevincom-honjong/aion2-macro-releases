@@ -31,7 +31,7 @@ from database import (
     release_updater_command_from_fv, updater_command_status,
     recent_updater_commands,
     pc_clock_get, pc_clock_put, mark_updater_handed,
-    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, char_info_gen, kina_adjust_row, log_has, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
+    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, char_info_gen, kina_adjust_row, log_has, fv_notify_get, fv_notify_record, fv_notify_recent, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
     tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
@@ -1583,6 +1583,8 @@ def _attach_char_info(card: dict, ci: dict | None) -> None:
         card["_total_kina"] = _tk
     if ci.get("collected_at"):           # 카드 "수집 X분 전" 표시용 (2026-07-25)
         card["_char_collected_at"] = ci["collected_at"]
+    if ci.get("kina_read_at"):           # 마지막으로 받아들인 창고 판독(서버 시계) — FV progress.kina_read_age_s (팜뷰 #201 r3d)
+        card["_kina_read_at"] = ci["kina_read_at"]
 
 
 async def _build_full_state(tenant: str = "main") -> list[dict]:
@@ -16335,6 +16337,11 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
             "total_kina":    row.get("_total_kina"),
             # 창고 키나를 잰 지 몇 초인가(정수, 모름 10^9) — 팜뷰가 낡은 계정을 안 고르게(2026-09-13)
             "kina_age_s":    _fv_age_int(row.get("_char_collected_at")),
+            # ★창고를 실제로 읽은 지 몇 초 (2026-09-24 팜뷰 #201 r3d)★ — 정수, 모르면 10^9. 기준은 서버가 ★새 판독으로 받아들인★
+            #   마지막 kina_read_at(서버 시계로 옮긴 값, database kina_read.read_srv). kina_age_s(전체수집 시각)와 달리 merge 판독
+            #   (사냥 끝 창고 읽기, 사고 569 — collected_at 을 안 바꾼다)에도 바뀐다. 재전송·옛 판독(버려진 것)·판독 시각 없는 옛 매크로
+            #   보고는 안 바꾼다 — 재전송된 옛 값을 «방금 읽음» 으로 보이면 팜뷰가 반영 안 된 판매를 건너뛴다.
+            "kina_read_age_s": _fv_age_int(row.get("_kina_read_at")),
             "uptime_hours":  row.get("uptime_hours"),
             "deaths_30m":    row.get("deaths_30m"),
             "abyss_kina":    row.get("abyss_kina"),
@@ -16823,6 +16830,130 @@ async def fv_kina_adjust(request: Request):
         except Exception as e:
             print(f"[fv] kina_adjust dup 로그줄 되살리기 실패 {pc_id} tid {tid}: {e}", flush=True)
     return JSONResponse({"ok": True, **res})
+
+
+# ── 팜뷰 → 텔레그램 알림 (2026-09-24 팜뷰 #201 r3d) ─────────────────────────────────────────────────────────
+#   팜뷰에는 주인님께 텔레그램 한 통을 보낼 길이 없었다(/telegram/send 는 매크로 API 키 전용). 드문 알림(차감 24시간 실패
+#   sold_fail 등)만 이 길로 — 같은 key 는 ★한 번★ 만 보내고(fv_notify 표, 재배포에도), 분·시간 상한을 넘으면 429 retry.
+#   감사: fv_notify 표(요청 수·마지막 결과·보낸 시각, GET /api/fv/notify) + pc_id 를 주면 그 카드 로그 한 줄.
+FV_NOTIFY_PER_MIN = 3                  # 텔레그램까지 간 시도 — 1분에 이만큼
+FV_NOTIFY_PER_HOUR = 20                # …1시간에 이만큼
+FV_NOTIFY_KEY_MAX = 200
+FV_NOTIFY_TEXT_MAX = 1000
+_FV_NOTIFY_TRIES: list = []            # 텔레그램까지 간 시도의 time.time() (한 시간치)
+_FV_NOTIFY_INFLIGHT: set = set()       # 지금 보내는 중인 key — 같은 key 동시 요청은 409 busy
+_FV_NOTIFY_SENT: set = set()           # 보냈는데 장부 쓰기가 죽은 key — 이 프로세스 안에서라도 두 번 안 보낸다
+
+
+def _fv_notify_clean(v) -> str:
+    """문자열로 · 짝 없는 대리 문자는 ? 로(텔레그램·sqlite 가 못 받는다)."""
+    return str(v if isinstance(v, str) else "").encode("utf-8", "replace").decode("utf-8").strip()
+
+
+def _fv_notify_limit(now: float) -> float:
+    """상한에 걸리면 기다릴 초(>0), 아니면 0. 한 시간 넘은 시도는 버린다."""
+    _FV_NOTIFY_TRIES[:] = [t for t in _FV_NOTIFY_TRIES if now - t < 3600]
+    last_min = [t for t in _FV_NOTIFY_TRIES if now - t < 60]
+    if len(last_min) >= FV_NOTIFY_PER_MIN:
+        return round(60 - (now - last_min[0]), 1) or 0.1
+    if len(_FV_NOTIFY_TRIES) >= FV_NOTIFY_PER_HOUR:
+        return round(3600 - (now - _FV_NOTIFY_TRIES[0]), 1) or 0.1
+    return 0.0
+
+
+async def _fv_notify_audit(key: str, pc_id, text: str, status: str, mid=None) -> None:
+    """장부 한 줄 — 실패해도 답을 막지 않는다(서버 출력에 남긴다)."""
+    try:
+        await fv_notify_record(key, pc_id, text, status, mid)
+    except Exception as e:
+        print(f"[fv] notify 장부 실패 key {key} status {status}: {type(e).__name__}: {e}", flush=True)
+
+
+@app.post("/api/fv/notify")
+async def fv_notify(request: Request):
+    """팜뷰 → 주인님 텔레그램 한 통. 본문 {key, text, pc_id?}. 같은 key 는 한 번만(dup:true). FV_API «notify»."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    try:
+        body = await request.json()
+    except Exception:
+        return _fv_err(400, "JSON 본문이 필요합니다")
+    if not isinstance(body, dict):
+        return _fv_err(400, "본문은 객체여야 합니다")
+    key = _fv_notify_clean(body.get("key"))
+    text = _fv_notify_clean(body.get("text"))
+    if not key or len(key) > FV_NOTIFY_KEY_MAX:
+        return _fv_err(400, f"key 가 필요합니다(1~{FV_NOTIFY_KEY_MAX}자 — 같은 key 는 한 번만 보냅니다)")
+    if not text:
+        return _fv_err(400, "text 가 필요합니다")
+    text = text[:FV_NOTIFY_TEXT_MAX]
+    pc_id = clean_pc_id(_fv_notify_clean(body.get("pc_id"))) or None
+    if pc_id in _BROADCAST_IDS:
+        return _fv_err(400, "pc_id 는 카드 하나여야 합니다(없어도 됩니다)")
+    try:
+        _row = await fv_notify_get(key)
+    except (sqlite3.Error, OSError) as e:
+        if key in _FV_NOTIFY_SENT:        # 이 프로세스가 보낸 key — 장부를 못 읽어도 두 번 안 보낸다
+            return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": None})
+        _m = f"일시 오류({type(e).__name__}) — 보내지 않았습니다. 같은 key 로 다시 보내십시오"
+        return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 503, "retry": True}, status_code=503)
+    if (_row and _row.get("status") == "sent") or key in _FV_NOTIFY_SENT:
+        # ★장부 먼저★ — sent_at 을 싣고 dup 도 감사에 센다. 장부에 sent 가 없는데 이 프로세스가 보낸 key(보낸 뒤 장부 쓰기가
+        #   죽은 것)도 dup — 두 번 안 보낸다.
+        # 장부에 sent 가 없는데 이 프로세스가 보낸 key 면 ★sent 로★ 고쳐 적는다(반증 #3) — dup 로 적으면 재시작 뒤 다시 보냈다.
+        _sent_row = bool(_row and _row.get("status") == "sent")
+        await _fv_notify_audit(key, pc_id, text, "dup" if _sent_row else "sent")
+        return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": (_row or {}).get("sent_at")})
+    if key in _FV_NOTIFY_INFLIGHT:
+        _m = "같은 key 를 지금 보내는 중입니다 — 잠시 뒤 같은 key 로 다시(두 번 안 갑니다)"
+        return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 409, "busy": True, "retry": True}, status_code=409)
+    chat = tenant_chat_id(FV_TENANT)
+    if not (tg_enabled() and chat):
+        await _fv_notify_audit(key, pc_id, text, "disabled")
+        _m = "서버에 텔레그램이 설정돼 있지 않습니다 — 보내지 않았습니다"
+        return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 503, "reason": "disabled", "retry": False},
+                            status_code=503)
+    _now_t = time.time()
+    _wait = _fv_notify_limit(_now_t)
+    if _wait > 0:
+        await _fv_notify_audit(key, pc_id, text, "limited")
+        _m = f"알림 상한(1분 {FV_NOTIFY_PER_MIN}·1시간 {FV_NOTIFY_PER_HOUR}) — {_wait:.0f}초 뒤 같은 key 로 다시"
+        return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 429, "limited": True, "retry": True,
+                             "retry_after_s": _wait}, status_code=429)
+    _FV_NOTIFY_INFLIGHT.add(key)          # ★검사와 붙여서(사이에 await 없음)★ — 같은 key 동시 요청은 위 409 로
+    try:
+        _FV_NOTIFY_TRIES.append(_now_t)
+        mid = await tg_send_text(chat, f"[팜뷰] {pc_id} | {text}" if pc_id else f"[팜뷰] {text}")
+        if mid is None:
+            await _fv_notify_audit(key, pc_id, text, "send_failed")
+            _m = "텔레그램 전송 실패 — 같은 key 로 다시 보내십시오"
+            return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 502, "reason": "send_failed", "retry": True},
+                                status_code=502)
+        _FV_NOTIFY_SENT.add(key)
+        await _fv_notify_audit(key, pc_id, text, "sent", mid)
+        if pc_id:
+            try:
+                _one = re.sub(r"[\r\n]+", " ", text)[:300]
+                await insert_log(ns(FV_TENANT, pc_id), "info", f"[팜뷰 알림] {_one} (key {key}, 텔레그램 {mid})")
+            except Exception as e:
+                print(f"[fv] notify 로그줄 실패(보냈다) {pc_id} key {key}: {e}", flush=True)
+        return JSONResponse({"ok": True, "key": key, "sent": True, "message_id": mid})
+    finally:
+        _FV_NOTIFY_INFLIGHT.discard(key)
+
+
+@app.get("/api/fv/notify")
+async def fv_notify_list(request: Request):
+    """감사 장부 — 최근 key 들({key, pc_id, text, status, n, first_at, last_at, sent_at, message_id}), 새것부터."""
+    bad = _fv_guard(request)
+    if bad:
+        return bad
+    try:
+        limit = max(1, min(200, int(request.query_params.get("limit") or 50)))
+    except (TypeError, ValueError):
+        return _fv_err(400, "limit 는 1~200 정수입니다")
+    return JSONResponse({"ok": True, "items": await fv_notify_recent(limit)})
 
 
 @app.post("/api/fv/command")

@@ -149,6 +149,21 @@ async def init_db() -> None:
                 samples TEXT DEFAULT '[]'
             )
         """)
+        # ★팜뷰 → 텔레그램 알림 (2026-09-24 팜뷰 #201 r3d, POST /api/fv/notify)★ — key 하나 = 행 하나 = 주인님께 ★한 번★.
+        #   중복 막기(sent 면 다시 안 보냄)와 감사 장부(요청 수·마지막 결과·보낸 시각) 겸용. 재배포에도 남게 표로.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS fv_notify (
+                key        TEXT PRIMARY KEY,
+                pc_id      TEXT,
+                text       TEXT NOT NULL,
+                status     TEXT NOT NULL,
+                n          INTEGER NOT NULL DEFAULT 1,
+                first_at   TEXT NOT NULL,
+                last_at    TEXT NOT NULL,
+                sent_at    TEXT,
+                message_id INTEGER
+            )
+        """)
         # ★업데이터에 내준 시각 (v2 반증 1부 B)★ — 폴링이 행을 내주고 ack 가 사라진 사이 같은 종류를 또 누르면 그 행이
         #   superseded 로 적혔다(실제로는 돌았다 — 재시작 두 번인데 내역은 «안 돎»). 내준 행은 덮지 않는다.
         try:
@@ -1626,9 +1641,11 @@ async def get_all_char_info() -> list[dict]:
             #   장부 행이 없으면 «한 번도 못 읽음» 의 기본값 0 이다.
             #   ★before > 0 인 행만 (f868aa6 반증 FV8 가장자리)★ — 한 번도 못 읽은 카드(저장 0)에 판매를 적으면
             #   before=0·after=0 행이 생겨 그 0 이 «앎» 으로 읽혔다. 아는 값에서 뺀 행이어야 0 도 앎이다.
-            "SELECT c.pc_id, c.total_kina, c.chars, c.collected_at, "
+            # ★kina_read_srv (2026-09-24 팜뷰 #201 r3d)★ — 마지막으로 ★받아들인★ 창고 판독의 서버 시계 시각(kina_read.read_srv).
+            #   merge 판독(사냥 끝 창고, 사고 569)은 collected_at 을 안 바꾸므로 팜뷰가 «거래 뒤에 읽었나» 를 이걸로 본다.
+            "SELECT c.pc_id, c.total_kina, c.chars, c.collected_at, r.read_srv AS kina_read_srv, "
             "EXISTS(SELECT 1 FROM kina_adjust k WHERE k.pc_id = c.pc_id AND k.before > 0) AS kina_ledger "
-            "FROM char_info c ORDER BY c.pc_id"
+            "FROM char_info c LEFT JOIN kina_read r ON r.pc_id = c.pc_id ORDER BY c.pc_id"
         ) as cur:
             rows = await cur.fetchall()
     result = []
@@ -1643,6 +1660,7 @@ async def get_all_char_info() -> list[dict]:
             "chars": chars,
             "collected_at": row["collected_at"],
             "kina_ledger": bool(row["kina_ledger"]),
+            "kina_read_at": row["kina_read_srv"],
         })
     return result
 
@@ -1729,6 +1747,45 @@ async def log_has(pc_id: str, needle: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT 1 FROM logs WHERE pc_id=? AND instr(message, ?) > 0 LIMIT 1", (pc_id, needle)) as cur:
             return (await cur.fetchone()) is not None
+
+
+FV_NOTIFY_KEEP_DAYS = 30        # fv_notify 행 보관 — 이보다 오래된 key 는 지운다(같은 key 가 다시 오면 새 알림)
+
+
+async def fv_notify_get(key: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM fv_notify WHERE key=?", (key,)) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def fv_notify_record(key: str, pc_id: str | None, text: str, status: str,
+                           message_id: int | None = None) -> None:
+    """요청 하나를 장부에 적는다. status: sent | dup | limited | send_failed | disabled.
+    ★sent 는 끈적하다★ — 한 번 sent 가 된 key 는 뒤의 dup·limited 가 status·sent_at·message_id 를 안 덮는다(n·last_at 만)."""
+    now = _now()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO fv_notify(key, pc_id, text, status, n, first_at, last_at, sent_at, message_id) "
+            "VALUES(?,?,?,?,1,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET n = n + 1, last_at = excluded.last_at, "
+            "status = CASE WHEN fv_notify.status = 'sent' THEN 'sent' ELSE excluded.status END, "
+            "sent_at = CASE WHEN fv_notify.status = 'sent' THEN fv_notify.sent_at ELSE excluded.sent_at END, "
+            "message_id = CASE WHEN fv_notify.status = 'sent' THEN fv_notify.message_id ELSE excluded.message_id END, "
+            "text = CASE WHEN fv_notify.status = 'sent' THEN fv_notify.text ELSE excluded.text END, "
+            "pc_id = CASE WHEN fv_notify.status = 'sent' THEN fv_notify.pc_id ELSE excluded.pc_id END",
+            (key, pc_id, text, status, now, now, now if status == "sent" else None, message_id))
+        _cut = (datetime.now(timezone.utc) - timedelta(days=FV_NOTIFY_KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+        await db.execute("DELETE FROM fv_notify WHERE last_at < ?", (_cut,))
+        await db.commit()
+
+
+async def fv_notify_recent(limit: int = 50) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM fv_notify ORDER BY last_at DESC, key LIMIT ?", (int(limit),)) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 # ── 악몽 진행 상태 ──────────────────────────────────────────────────────────

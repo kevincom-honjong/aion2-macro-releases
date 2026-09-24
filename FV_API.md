@@ -77,6 +77,7 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
         "kina_rate": 145000,
         "total_kina": 130801794,
         "kina_age_s": 5210,
+        "kina_read_age_s": 312,
         "uptime_hours": 3.4,
         "deaths_30m": 0,
         "abyss_kina": null,
@@ -776,3 +777,39 @@ asyncio.run(main())
   - `red` = `rate_avg < red_rate`(기본 1,000,000, 설정 `abyss_red_rate`). 카드 빨강은 그 PC `abyss_kina_rate < red_rate` 이고
     `abyss_kina_mins >= min_mins`(기본 5, 설정 `abyss_min_mins`) 일 때만 — `since` 가 바뀌면 새 구간은 `waiting` 으로 시작해 빨강이 풀린다.
 - 시험: 서버 `tests/test_abyss_kina.py`(A8-e·A8-e2 = 이 칸들, S2-a·S2-a2 = 오늘 누적 안 줄어듦, S2-b·S2-b2 = since 바뀌면 빨강 해제).
+
+## 2026-09-24 추가 — 팜뷰 #201 r3d: `progress.kina_read_age_s` · `POST /api/fv/notify` (대시보드 세션 · 더하기만)
+> 코드에 넣었다(미배포). 시험: 서버 `tests/test_fv_r3d.py`(KR-*·N-*) · `tests/test_contracts.py`(모든 카드에 정수).
+
+### `progress.kina_read_age_s` — 창고를 ★실제로 읽은★ 지 몇 초
+- 정수(초). **모르면 `1000000000`(10^9)** — `kina_age_s` 와 같은 규칙. 모든 카드에 온다.
+- 기준 = 서버가 ★새 판독으로 받아들인★ 마지막 `kina_read_at`(매크로가 창고를 읽은 순간, 서버 시계로 옮긴 값 — 서버 표 `kina_read.read_srv`).
+- `kina_age_s`(전체수집 시각 `collected_at`)와 다른 점: ★merge 판독에도 바뀐다★ — 사냥 끝 창고 읽기(매크로 `info_collector.refresh_total_kina_after_deposit`, 사고 569)는 `merge:true` 라 `collected_at` 을 안 바꾼다. 거래 끝 뒤에 창고를 다시 읽었는지는 ★이 칸★ 으로 본다(`body_ts − kina_read_age_s` 가 거래 끝보다 뒤면 그 판독이 판매를 이미 반영했다).
+- **안 바뀌는 것**: 같은 판독의 재전송(부팅·WS 재연결 — 판독 시각이 같다) · 서버가 버린 옛 판독 · `kina_read_at` 이 없는 보고(KF1-c 전 매크로·로컬 json) · `kina_adjust`(판매 차감). ★재전송된 옛 값을 «방금 읽음» 으로 보이면 팜뷰가 반영 안 된 판매를 건너뛴다★ — 그래서 판독 시각이 있는 새 판독만 센다.
+- 판독 표식을 한 번도 안 보낸 카드(옛 매크로)는 10^9 로 남는다 — 그땐 `kina_age_s` 와 팜뷰 자체 관찰로 판단.
+- ★«마지막으로 잰 때» = `kina_age_s` 와 `kina_read_age_s` 중 ★작은 쪽(늦은 쪽)★★ — 판독 시각 없는 옛 매크로의 전체수집은 창고키나를 바꾸고 `kina_age_s` 만 새로 한다(`kina_read_age_s` 는 그대로). 한 칸만 보면 그 판을 못 보고 두 번 뺀다(반증 #1). 판독 시각 없는 옛 매크로의 ★merge★ 보고는 어느 칸도 안 바꾼다(서버가 읽은 때를 모른다).
+- 두 나이 모두 ★본문을 만든 때★ 기준이다 — 3초 캐시·120초 폴백 본문이면 `cache_age_s` 만큼 더한다(받은 때 − `cache_age_s` = 본문 시각).
+- 판독이 들어오면 스냅샷 3초 캐시는 건너뛴다(창고키나 세대 — 캐시·폴백 절 참고). 카드를 지우면 판독 시각도 지워진다.
+
+### `POST /api/fv/notify` — 팜뷰 → 주인님 텔레그램 한 통 (드문 알림 전용)
+```json
+{"key": "sold_fail:2026090603221474", "text": "차감 24시간 실패 — 챈가룽 2100만, 주인님 확인 필요", "pc_id": "PC-04b"}
+```
+- `key` 필수(1~200자) — ★같은 key 는 한 번만 보낸다★. `text` 필수(1000자에서 자름). `pc_id` 는 선택(카드 하나, `all` 은 400) — 주면 메시지 앞에 붙고 그 카드 로그에 `[팜뷰 알림] … (key …, 텔레그램 <id>)` 한 줄(`/api/fv/events` 의 `log`). 텔레그램 글은 `[팜뷰] PC-04b | <text>`.
+- 음소거(`/telegram/mute`)는 안 본다 — 팜뷰 알림은 카드 알림이 아니다. 대신 상한이 있다.
+- ★적어도 한 번★ 이다(정확히 한 번이 아니다) — 텔레그램이 받았는데 답이 늦어(10초) 서버가 502 로 답하면 재전송이 한 번 더 보낼 수 있다. 200 뒤로는 절대 다시 안 간다.
+
+| 답 | 뜻 | 팜뷰가 할 일 |
+|---|---|---|
+| 200 `{ok:true, key, sent:true, message_id}` | 보냈다 | 끝 |
+| 200 `{ok:true, key, dup:true, sent_at}` | 이 key 는 이미 보냈다(`sent_at` 은 서버가 장부를 못 쓴 드문 판에 `null`) | 끝 — 재시도가 안전하다 |
+| 429 `{ok:false, limited:true, retry:true, retry_after_s}` | 상한(텔레그램까지 간 시도 1분 3·1시간 20) | `retry_after_s` 뒤 ★같은 key★ 로 |
+| 409 `{ok:false, busy:true, retry:true}` | 같은 key 를 지금 보내는 중 | 잠시 뒤 같은 key 로(두 번 안 간다) |
+| 502 `{ok:false, reason:"send_failed", retry:true}` | 텔레그램 전송 실패 — key 는 안 쓰였다 | 같은 key 로 다시 |
+| 503 `{ok:false, retry:true}` | 서버 장부(DB) 일시 오류 — 안 보냈다 | 같은 key 로 다시 |
+| 503 `{ok:false, reason:"disabled", retry:false}` | 서버에 텔레그램 설정 없음 | 다시 보내도 소용없다 — 화면에만 |
+| 400 / 401 | 본문(key·text 없음, 짝 없는 대리 문자는 `?` 로 바꿔 받는다) / 토큰 | 고친다 |
+
+- 중복 막기·감사 장부는 서버 표 `fv_notify(key PK, pc_id, text, status, n, first_at, last_at, sent_at, message_id)` — 재배포에도 남는다(볼륨). `status` = `sent`|`dup`|`limited`|`send_failed`|`disabled`(마지막 결과, 단 `sent` 는 뒤 결과가 안 덮는다), `n` = 받은 요청 수. 30일 지난 key 는 지운다(그 뒤 같은 key 는 새 알림).
+- `GET /api/fv/notify?limit=50`(1~200) → `{ok:true, items:[행…]}` 새것부터 — 감사용 읽기.
+- 상한·«지금 보내는 중» 은 서버 프로세스 안 기억이다(재배포 때 비워진다, 워커 하나 전제 — 여러 워커면 서버가 시작할 때 크게 경고한다).
