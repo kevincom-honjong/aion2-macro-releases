@@ -14670,7 +14670,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # ★B-ROT1-b (2026-09-24 #114 재반증)★ collect_pc 가 있으면 증거는 ★그 카드의 것(_ev)만★ — 초판은 살아있는 카드(active)의
         #   값을 봤다. 수집 중 PC-20 이 other_account 로 가고 PC-20b(4일 전 수집값)가 active 가 되면 그 옛 값을 «수집됨» 으로
         #   읽고 switch_launcher 를 쏴 계정1 수집이 영영 빠졌다. collect_pc 없는 옛 저장본만 예전대로.
-        got = _ev if (_cpc or not active) else str(active.get("_char_collected_at") or "")
+        #   (여기선 active 가 늘 있다 — 바로 위 `if not active: … return`)
+        got = _ev if _cpc else str(active.get("_char_collected_at") or "")
         if st.pop("skip_collect", False):
             pass                                     # 수집을 보낸 적이 없다(위 S-F 경로)
         elif (got and got != str(st.get("char_before") or "")

@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 40
+MIN_CHECKS = 41
 TOK = "fvsecret-kl"
 H = {"X-FV-Token": TOK}
 OLD_CA = "2026-09-22T20:00:00"      # 매크로 전체수집 시각(UTC) — 판매보다 앞
@@ -339,6 +339,14 @@ async def t_zero_is_known():
     c1 = {}
     main._attach_char_info(c1, rows.get(main.ns("main", "PC-LZ1")))
     ok("L-40 판 뒤 매크로가 0(못 읽음)을 다시 보내도 여전히 0 = 앎(장부는 남는다)", c1.get("_total_kina") == 0, str(c1))
+    # ★f868aa6 반증 FV8 가장자리★ 한 번도 못 읽은 카드(저장 0)에 판매가 적혀도(before=0 행) 그 0 은 여전히 모름
+    a = await _sell("PC-LZ2", -100_000_000, "tid-LZ2")
+    rows = {r["pc_id"]: r for r in await db.get_all_char_info()}
+    c2 = {}
+    main._attach_char_info(c2, rows.get(main.ns("main", "PC-LZ2")))
+    ok("L-41 못 읽은 카드(0)에 적힌 판매 행(before 0)은 0 을 «앎» 으로 만들지 않는다",
+       a.get("before") == 0 and a.get("after") == 0 and "_total_kina" not in c2
+       and rows.get(main.ns("main", "PC-LZ2"), {}).get("kina_ledger") is False, "%s %s" % (a, c2))
 
 
 def test_all():

@@ -1606,8 +1606,10 @@ async def get_all_char_info() -> list[dict]:
             # ★kina_ledger (2026-09-24 #114 FV8)★ — 창고키나 0 이 «진짜 0» 인지 가르는 증거. 매크로가 보낸 0 은 기존값을
             #   안 덮으므로(upsert_char_info «total_kina=0이면 기존값 유지») 저장된 0 은 ★장부 차감으로만★ 생긴다 —
             #   장부 행이 없으면 «한 번도 못 읽음» 의 기본값 0 이다.
+            #   ★before > 0 인 행만 (f868aa6 반증 FV8 가장자리)★ — 한 번도 못 읽은 카드(저장 0)에 판매를 적으면
+            #   before=0·after=0 행이 생겨 그 0 이 «앎» 으로 읽혔다. 아는 값에서 뺀 행이어야 0 도 앎이다.
             "SELECT c.pc_id, c.total_kina, c.chars, c.collected_at, "
-            "EXISTS(SELECT 1 FROM kina_adjust k WHERE k.pc_id = c.pc_id) AS kina_ledger "
+            "EXISTS(SELECT 1 FROM kina_adjust k WHERE k.pc_id = c.pc_id AND k.before > 0) AS kina_ledger "
             "FROM char_info c ORDER BY c.pc_id"
         ) as cur:
             rows = await cur.fetchall()
