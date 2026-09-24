@@ -11078,10 +11078,10 @@ async def telegram_status(request: Request):
         # ★차단 테넌트도 '중계 가능'만은 알려준다(2026-08-06 리뷰 major)★ — 여기서 403을 주면
         #   클라가 중계를 5분간 꺼버려(report_module.telegram_relay_enabled) 정작 '이용 중지'
         #   안내가 영영 못 나간다. 읽기 전용이라 정보 노출도 없다(자기 테넌트의 on/off뿐).
-        supplied = request.headers.get("X-Api-Key", "")
-        for _k, _tn in KEY_TO_TENANT.items():
-            if supplied and _ct_eq(supplied, _k) and tenant_blocked(_tn):
-                tenant = _tn
+        # ★probe 잠금을 거친다 (2026-09-24 아이온2 반증)★ — 예전엔 키를 따로 훑으며 잠금을 안 봐서, 잠긴 IP 가
+        #   200/403 으로 ★차단 테넌트 키를 끝없이 맞혀 볼 수 있었다★(check_api_key 는 잠긴 IP 에 None 을 주고 세지 않는다).
+        #   판정은 /telegram/send·photo 와 같은 _tg_blocked_tenant 한 곳. 틀린 키는 위 check_api_key 가 이미 센다.
+        tenant = _tg_blocked_tenant(request)
         if not tenant:
             raise HTTPException(status_code=403)
     return JSONResponse({"enabled": bool(tg_enabled() and tenant_chat_id(tenant))})
