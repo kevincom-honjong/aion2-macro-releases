@@ -68,6 +68,30 @@ def _pick(text, tag, min_lines):
     return best if n >= min_lines else None
 
 
+_LOOKBEHIND = re.compile(r"\(\?<[=!]")
+
+
+def _lookbehind_hits(texts=None) -> list:
+    """브라우저로 나가는 JS 의 정규식 뒤보기 자리 목록(«파일:블록 n: 줄»). texts = {이름: 원문} 을 주면 그것만(시험용)."""
+    if texts is None:
+        texts = {}
+        for f in ("main.py", "ocr_label.py"):
+            p = os.path.join(HERE, f)
+            if os.path.isfile(p):
+                texts[f] = open(p, encoding="utf-8").read()
+        if os.path.isdir(STATIC):
+            for f in sorted(os.listdir(STATIC)):
+                if f.endswith(".js"):
+                    texts["static/" + f] = "<script>" + open(os.path.join(STATIC, f), encoding="utf-8").read() + "</script>"
+    out = []
+    for name, text in texts.items():
+        for i, b in enumerate(_blocks(text, "script")):
+            for ln in b.splitlines():
+                if _LOOKBEHIND.search(ln):
+                    out.append("%s:<script>%d: %s" % (name, i, ln.strip()[:120]))
+    return out
+
+
 def _norm(s):
     return s.replace("\r\n", "\n").strip("\n")
 
@@ -101,6 +125,13 @@ def main_(quick=False):
             step("3-c node --check (node 없음 — 건너뜀)", True)
         else:
             step("3-c 정본 JS 문법 (node --check)", rc == 0, out.strip()[-300:])
+    # 3-e ★정규식 뒤보기 금지 (2026-09-24 아이온2 반증)★ — Safari 16.4 미만은 뒤보기 한 줄 때문에 ★스크립트 전체★ 를 문법
+    #   오류로 버린다(대시보드가 통째로 빈다). 크롬·WebView2 는 멀쩡해서 node --check 로는 못 잡는다. 브라우저로 나가는
+    #   <script> 전부(main.py 대시보드·로그인 · ocr_label.py 판별 화면) + static/*.js 를 본다.
+    _probe = _lookbehind_hits({"t": "x = 1\n<script>var a=/(?<=[0-9])b/;var c=/(?<!x)y/;</script>\n(?<=z)"})
+    step("3-e0 뒤보기 탐지기 자가시험(script 안 한 줄→1건, 밖은 안 셈)", len(_probe) == 1, str(_probe))
+    hits = _lookbehind_hits()
+    step("3-e 브라우저 JS 에 정규식 뒤보기 없음 (Safari <16.4)", not hits, "\n   ".join(hits[:8]))
     step("3-d 정본 CSS 최소 줄수 (%s ≥ %d)" % (css.count("\n") if css else "-", MAIN_CSS_MIN_LINES),
          css is not None and css.count("\n") >= MAIN_CSS_MIN_LINES)
 
