@@ -16716,7 +16716,17 @@ async def fv_kina_adjust(request: Request):
     if pc_id is None:
         return _fv_err(400, delta)
     nspc = ns(FV_TENANT, pc_id)
-    res = await adjust_char_kina(nspc, tid, delta, why)
+    try:
+        res = await adjust_char_kina(nspc, tid, delta, why)
+    except Exception as e:
+        # ★#201 부류 (2026-09-24 아이온2 — 일시 실패를 확정 실패로 만들지 않는다)★ DB 가 잠깐 잠기거나(바쁨 5초 초과)
+        #   네트워크 디스크가 흔들리면 예전엔 맨 500(«Internal Server Error» 글자)이었고, 팜뷰는 그 답을 «차감 대기 · 기록만
+        #   남김» 빨간 칩 + 오류음으로 주인님께 올렸다(자동 재시도 없음). 커밋 뒤 연결 닫기에서 나는 예외도 있을 수 있어
+        #   «안 뺐다» 고 단정하지 않는다 — ★같은 tid 로 다시 보내면 두 번 빼지 않는다(dup)★ 는 것만 확실하다.
+        print(f"[fv] kina_adjust 일시 실패 {pc_id} tid {tid}: {type(e).__name__}: {e}", flush=True)
+        _m = (f"일시 오류({type(e).__name__}) — 뺐는지 확인 못 했습니다. 같은 tid 로 다시 보내면 "
+              f"두 번 빼지 않습니다")
+        return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 503, "retry": True}, status_code=503)
     if res is None:
         return _fv_err(404, f"카드 '{pc_id}' 의 창고 키나 기록(char_info)이 없습니다")
     if res.get("conflict"):
@@ -16726,17 +16736,26 @@ async def fv_kina_adjust(request: Request):
         return _fv_err(400, f"창고 키나가 상한({KINA_MAX:,})을 넘습니다 — 빼지 않았습니다")
     res["pc_id"] = pc_id
     _healed = res.pop("healed", None)
+    # ★여기부터는 이미 커밋된 뒤다 (2026-09-24 #201 부류)★ — 로그줄 쓰기가 DB 바쁨으로 죽으면 예전엔 ★뺀 판매를 500 으로★
+    #   답해 팜뷰가 «차감 대기» 로 주인님을 불렀다. 로그는 증거일 뿐이라 실패해도 답은 성공이다(서버 출력에 남긴다).
     if _healed:
         # ★되돌려진 채였던 카드 — 이 판매 전에 장부를 먼저 다시 적용했다(P0 v3 반증 ①)★
-        await insert_log(nspc, "info",
-                         f"[팜뷰] 창고 키나 되돌림 복구 {_healed['stored']:,} → {res['before']:,} "
-                         f"(tid {', '.join(_healed['tids'])}) — 새 판매 전에")
+        try:
+            await insert_log(nspc, "info",
+                             f"[팜뷰] 창고 키나 되돌림 복구 {_healed['stored']:,} → {res['before']:,} "
+                             f"(tid {', '.join(_healed['tids'])}) — 새 판매 전에")
+        except Exception as e:
+            print(f"[fv] kina_adjust 복구 로그줄 실패(차감은 됐다) {pc_id} tid {tid}: {e}", flush=True)
     if not res["dup"]:
+        _fv_snap["body"] = None          # 스냅샷 캐시(3초)를 비워 다음 폴링이 새 값을 본다 — 로그줄보다 먼저(실패해도 비운다)
         # 증거는 그 PC 로그줄(A2) — 대시보드·팜뷰 events 양쪽에 보인다
-        await insert_log(nspc, "info",
-                         f"[팜뷰] 창고 키나 {delta:+,} ({why.get('server') or '?'} {why.get('man') or '?'}만 → "
-                         f"{why.get('won') or '?'}원, tid {tid}) {res['before']:,} → {res['after']:,}")
-        _fv_snap["body"] = None          # 스냅샷 캐시(3초)를 비워 다음 폴링이 새 값을 본다
+        try:
+            await insert_log(nspc, "info",
+                             f"[팜뷰] 창고 키나 {delta:+,} ({why.get('server') or '?'} {why.get('man') or '?'}만 → "
+                             f"{why.get('won') or '?'}원, tid {tid}) {res['before']:,} → {res['after']:,}")
+        except Exception as e:
+            print(f"[fv] kina_adjust 로그줄 실패(차감은 됐다) {pc_id} tid {tid} {res['before']:,} → {res['after']:,}: {e}",
+                  flush=True)
         try:
             # char_info 프레임은 안 쏜다 — handleCharInfoMsg 가 chars 를 덮고 「정보수집 완료」 토스트를 띄운다.
             await push_state(FV_TENANT)   # 카드 재조립(보는 사람 없으면 안 만든다)

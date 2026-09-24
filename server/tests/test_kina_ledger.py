@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 41
+MIN_CHECKS = 45
 TOK = "fvsecret-kl"
 H = {"X-FV-Token": TOK}
 OLD_CA = "2026-09-22T20:00:00"      # 매크로 전체수집 시각(UTC) — 판매보다 앞
@@ -349,11 +349,53 @@ async def t_zero_is_known():
        and rows.get(main.ns("main", "PC-LZ2"), {}).get("kina_ledger") is False, "%s %s" % (a, c2))
 
 
+async def t_transient_201():
+    """★#201 부류 (2026-09-24 아이온2)★ 일시 실패를 확정 실패·사람 호출로 만들지 않는다 — 팜뷰는 kina_adjust 가 200 ok 가
+    아니면 «차감 대기 · 기록만 남김» 빨간 칩 + 오류음(자동 재시도 없음)."""
+    import sqlite3
+    main.FV_TOKEN = TOK
+
+    async def _raw(pc, delta, tid):
+        r = await main.fv_kina_adjust(Req({"pc_id": pc, "delta_kina": delta, "why": {"tid": tid}}, api_key=None, headers=H))
+        return r.status_code, json.loads(bytes(r.body))
+
+    pc = "PC-LT1"
+    await _collect(pc, 900_000_000)
+    real_adj, real_log = main.adjust_char_kina, main.insert_log
+
+    async def _locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    main.adjust_char_kina = _locked
+    try:
+        code, b = await _raw(pc, -100_000_000, "tid-LT1")
+    finally:
+        main.adjust_char_kina = real_adj
+    ok("K201-a DB 가 잠깐 잠기면 맨 500 이 아니라 503 {ok:false, err, retry:true} — 같은 tid 재전송이 안전하다고 적는다",
+       code == 503 and b.get("ok") is False and b.get("retry") is True and "같은 tid" in str(b.get("err")), f"{code} {b}")
+
+    async def _log_dies(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    main._fv_snap["body"] = {"stale": True}
+    main.insert_log = _log_dies
+    try:
+        code, b = await _raw(pc, -100_000_000, "tid-LT2")
+    finally:
+        main.insert_log = real_log
+    v = (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
+    ok("K201-b ★커밋 뒤 로그줄이 죽어도 뺀 판매는 200 ok★(예전: 500 → 팜뷰 «차감 대기» 로 주인님 호출)",
+       code == 200 and b.get("ok") is True and b.get("after") == 800_000_000 and v == 800_000_000, f"{code} {b} stored={v}")
+    ok("K201-c 로그줄이 죽어도 스냅샷 캐시는 비운다(다음 폴링이 새 값)", main._fv_snap.get("body") is None, str(main._fv_snap.get("body")))
+    code, b = await _raw(pc, -100_000_000, "tid-LT2")
+    v = (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
+    ok("K201-d 같은 tid 재전송은 dup — 두 번 빼지 않는다(503 안내가 참)", code == 200 and b.get("dup") is True and v == 800_000_000,
+       f"{code} {b} stored={v}")
+
+
 def test_all():
     run_all([t_resend_keeps_deduction, t_fresh_read_not_double, t_chain, t_already_reverted_heals,
              t_clock_independent_and_isolation, t_refuter_2026_09_23, t_reverted_then_new_sale, t_boot_heal,
              t_read_at_contract, t_kst_naive_is_not_sent, t_ws_frame_kina0, t_concurrent, t_forced_interleave,
-             t_zero_is_known])
+             t_zero_is_known, t_transient_201])
     finish("test_kina_ledger", MIN_CHECKS)
 
 
