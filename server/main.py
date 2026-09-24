@@ -8863,7 +8863,7 @@ function ttsSino(n){ n=Math.floor(+n)||0; if(n<=0) return '영';
   const D=['','일','이','삼','사','오','육','칠','팔','구'], U=['천','백','십','']; const s=String(n).padStart(4,'0'); let o='';
   for(let k=0;k<4;k++){ const v=+s[k]; if(v) o+=((v===1&&U[k])?'':D[v])+U[k]; } return o; }
 //   곁가지: 한글 바로 뒤면 띄움 · 쉼표 든 수·번 뒤 조사 아닌 한글(«2번호»·«3 번개»)은 그대로 · PC_09 도.
-function ttsText(t){ t=(t==null)?'':String(t); const SFX={a:'에이',b:'비',c:'씨',d:'디'}; const gap=p=>/[가-힣]/.test(p)?p+' ':p;
+function ttsText(t){ t=((t==null)?'':String(t)).replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)); const SFX={a:'에이',b:'비',c:'씨',d:'디'}; const gap=p=>/[가-힣]/.test(p)?p+' ':p;
   t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])(?:\s*번(?![호째개역거갈쩍]))?/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
   return t.replace(/(^|[^\d.,]|,(?!\d{3}(?!\d)))(\d{1,4})\s*번(?![호째개역거갈쩍])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
 

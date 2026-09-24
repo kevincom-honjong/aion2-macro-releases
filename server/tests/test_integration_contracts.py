@@ -170,9 +170,9 @@ _TTS_KEYS = ["2번", "9번", "PC-22c", "PC-22c가 캡차", "계정2번", "43,000
              "DESKTOP-O5SSEIK", "PC-MANIA", "2번,3번 멈춤", "1,2번", "PC 2번도", "0번", "1234번", "pc-7 과 PC-10b", "PC__09", "",
              # 전각 숫자 짝(2026-09-24 아이온2 반증 — 파이썬 \d 는 전각도 먹고 JS \d 는 ASCII 만) · 번거/번쩍(«번» 뒤 글자 갈래 미시험)
              "２번", "PC-０９ 멈춤", "１２번째", "3２번", "번거롭게 2번", "2번거롭다", "번쩍 3번", "3번쩍", "5번개", "2번 번거"]
-# ★보이는 미해결★ — 파이썬 speak_text 는 전각을 읽고(이 번) 팜뷰 JS ttsText 는 그대로 둔다. 고칠 곳은 팜뷰 원본(대시보드는 글자 그대로
-#   옮기는 쪽). 팜뷰가 맞추면 이 집합을 비운다 — 짝이 맞으면 I8 이 «비워 묶어라» 를 찍는다. 그 밖의 키는 전부 묶여 있다.
-_TTS_FW_PENDING = {"２번", "PC-０９ 멈춤", "3２번"}
+# ★전각 숫자 짝 — 묶었다 (2026-09-25)★ 팜뷰 70e3dbd 가 ttsText 맨 앞에서 전각 ０-９ 를 ASCII 로 바꾸고, 대시보드가 그 줄을 글자 그대로
+#   옮겼다. 예전엔 여기 «미해결» 로 빼 두었다(두 JS 가 '１２번째' 를 그대로, 팜뷰 파이썬은 '12번째'). 이제 전부 묶는다 — 다시 채우지 마라.
+_TTS_FW_PENDING: set = set()
 _TTS_FIXED = {"2번": "이 번", "9번": "구 번", "PC-22c": "이십이 번 씨", "계정2번": "계정 이 번", "43,000번": "43,000번", "2번호": "2번호"}
 
 
@@ -192,9 +192,11 @@ def t_tts_same_answer():
     #   git 이 없거나 추적 안 되면 작업본 파일 그대로.
     def _fv_src(rel):
         try:
-            r = subprocess.run(["git", "-C", fvdir, "show", "HEAD:" + rel], capture_output=True, timeout=20)
+            # FV_I8_REF=<커밋> 이면 그 팜뷰 커밋과 묶는다(개발컴 팜뷰 main 이 낡았을 때 — 아이온2 합동 반증은 팜뷰 끝 커밋으로 돌린다)
+            r = subprocess.run(["git", "-C", fvdir, "show", os.environ.get("FV_I8_REF", "HEAD") + ":" + rel],
+                               capture_output=True, timeout=20)
             if r.returncode == 0 and r.stdout:
-                return r.stdout.decode("utf-8"), "git HEAD"
+                return r.stdout.decode("utf-8"), "git " + os.environ.get("FV_I8_REF", "HEAD")
         except Exception:
             pass
         return open(os.path.join(fvdir, *rel.split("/")), encoding="utf-8").read(), "작업본"

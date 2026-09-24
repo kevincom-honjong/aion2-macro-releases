@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 54
+MIN_CHECKS = 56
 TOK = "fvsecret-r3d"
 H = {"X-FV-Token": TOK}
 C1 = [{"slot": 1, "name": "러닝"}]
@@ -219,6 +219,25 @@ def _reset():
     main._FV_NOTIFY_UNRECORDED.clear()
 
 
+async def t_limit_math():
+    """아이온2 합동 반증 D11 — 시간 상한 대기 초는 ★상한을 넘게 만든 그 보냄★(len−cap 번째)이 1시간에서 빠질 때까지다.
+    [0](가장 옛 것)으로 재면 sold_fail 아닌 key 는 5칸 몫만큼 짧게 말해 팜뷰가 너무 일찍 다시 두드린다."""
+    now = 1_000_000.0
+    keep_t, keep_s = list(main._FV_NOTIFY_TRIES), list(main._FV_NOTIFY_SENT_TS)
+    try:
+        main._FV_NOTIFY_TRIES[:] = []
+        main._FV_NOTIFY_SENT_TS[:] = [now - 3500 + 100 * i for i in range(main.FV_NOTIFY_PER_HOUR)]   # 3500초 전 … 1600초 전
+        k = main.FV_NOTIFY_RESERVED                  # len − cap(15) = 5
+        w_other = main._fv_notify_limit(now, "x:1")
+        w_sold = main._fv_notify_limit(now, main.FV_NOTIFY_RESERVED_PREFIX + "t:1")
+        ok("N-21 ★D11 시간 상한 대기 = 1시간 − (지금 − len−cap 번째 보냄) — sold_fail 아닌 key 는 [5] 기준 600초, [0] 이면 100초★",
+           w_other == round(3600 - (now - main._FV_NOTIFY_SENT_TS[k]), 1) == 600.0, f"{w_other}")
+        ok("N-21b sold_fail: key 는 20칸 다 차면 [0] 기준 100초", w_sold == 100.0, f"{w_sold}")
+    finally:
+        main._FV_NOTIFY_TRIES[:] = keep_t
+        main._FV_NOTIFY_SENT_TS[:] = keep_s
+
+
 async def t_notify():
     real = (main.tg_send_text, main.tg_enabled, main.tenant_chat_id, main.fv_notify_get, main.fv_notify_record)
     main.tg_enabled, main.tenant_chat_id = (lambda: True), (lambda t: "1")
@@ -409,7 +428,7 @@ def t_routes():
 
 
 def test_all():
-    run_all([t_kina_read_age, t_p6, t_notify, t_routes])
+    run_all([t_kina_read_age, t_p6, t_limit_math, t_notify, t_routes])
 
 
 if __name__ == "__main__":
