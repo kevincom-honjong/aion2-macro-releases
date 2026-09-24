@@ -569,7 +569,7 @@ def check_api_key(request: Request) -> Optional[str]:
     ip = _client_ip(request)
     now = time.time()
     rec = _KEY_FAILS.get(ip)
-    if rec and now - rec["since"] <= KEY_WINDOW and rec["n"] >= KEY_MAX_FAILS:
+    if _key_probe_blocked(ip):   # ★잠금 판정 한 곳 (2026-09-24)★ — 키를 훑는 함수는 전부 이 호출을 먼저(test_key_probe K-4, AST)
         return None            # 실패 폭주 IP는 정답 키여도 창이 끝날 때까지 거부
     tenant = None
     for k, tn in KEY_TO_TENANT.items():

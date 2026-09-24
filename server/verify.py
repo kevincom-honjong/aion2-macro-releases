@@ -83,6 +83,8 @@ def _lookbehind_hits(texts=None) -> list:
             for f in sorted(os.listdir(STATIC)):
                 if f.endswith(".js"):
                     texts["static/" + f] = "<script>" + open(os.path.join(STATIC, f), encoding="utf-8").read() + "</script>"
+                elif f.lower().endswith((".html", ".htm")):   # ★static HTML 의 인라인 <script> 도 (2026-09-24 아이온2 반증)★
+                    texts["static/" + f] = open(os.path.join(STATIC, f), encoding="utf-8").read()
     out = []
     for name, text in texts.items():
         for i, b in enumerate(_blocks(text, "script")):
