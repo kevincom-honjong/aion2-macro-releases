@@ -120,6 +120,9 @@ async def init_db() -> None:
                 at      TEXT NOT NULL
             )
         """)
+        # ★카드별 장부 인덱스 (2026-09-24 #114 FV8)★ — get_all_char_info 가 카드마다 «장부 행이 있나» 를 묻는다(매 상태 빌드).
+        #   장부는 지우지 않으므로(kina_adjust = 원장) 인덱스 없이는 갈수록 느려진다. 1350·1371 의 카드별 조회도 같이 탄다.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_kina_adjust_pc ON kina_adjust(pc_id, at)")
         # ★창고키나 판독 시각·순번 (2026-09-23 P0 v3, SHARED_ISSUES_대시보드 KF1)★ — 매크로가 kina_read_at·kina_seq 를
         #   보내면 카드마다 마지막으로 받아들인 판독을 적는다. 이보다 옛 판독(재전송·보내기 실패 뒤 늦게 온 값)은
         #   창고키나를 안 덮는다. char_info 에 칸을 더하지 않고 표를 따로 둔다(ALTER 없이 옛 볼륨 DB 그대로).
@@ -694,7 +697,10 @@ async def insert_log(pc_id: str, level: str, message: str,
     #   즉 최대 3000+LOG_PRUNE_EVERY-1 줄까지 잠깐 넘칠 수 있다 — 보존은 늘고
     #   줄어들지 않으므로 「몇 시간~며칠치」라는 원래 약속은 유지된다.
     # ══════════════════════════════════════════════════════════════════════
-    _n = _LOG_SINCE_PRUNE.get(pc_id, 0) + 1
+    # ★B-DB8 (2026-09-24 #114)★ 처음 보는 pc_id(재시작·칸 버림 뒤)는 ★첫 줄에 정리★ 한다. 초판은 0 부터 셌다 —
+    #   카운터는 메모리라 재배포마다 0 이 되고, 재배포 사이에 200줄을 못 채우는 PC(업데이터만 도는 PC·은퇴 직전 PC)는
+    #   ★영영 한 번도 정리되지 않아★ 3000줄 상한이 뜻을 잃었다. 첫 줄 정리 = 재시작마다 PC 당 DELETE 한 번(idx_logs_pc).
+    _n = _LOG_SINCE_PRUNE.get(pc_id, LOG_PRUNE_EVERY - 1) + 1
     _prune = _n >= LOG_PRUNE_EVERY
     # ★카운터 칸 상한 (2026-09-23 B2)★ — pc_id 마다 한 칸씩 늘기만 했다. 넘치면 먼저 들어온 칸부터
     #   버린다(카운터일 뿐 — 버린 PC 는 다음 정리가 최대 LOG_PRUNE_EVERY 줄 늦어질 뿐이다).
@@ -1597,7 +1603,12 @@ async def get_all_char_info() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT pc_id, total_kina, chars, collected_at FROM char_info ORDER BY pc_id"
+            # ★kina_ledger (2026-09-24 #114 FV8)★ — 창고키나 0 이 «진짜 0» 인지 가르는 증거. 매크로가 보낸 0 은 기존값을
+            #   안 덮으므로(upsert_char_info «total_kina=0이면 기존값 유지») 저장된 0 은 ★장부 차감으로만★ 생긴다 —
+            #   장부 행이 없으면 «한 번도 못 읽음» 의 기본값 0 이다.
+            "SELECT c.pc_id, c.total_kina, c.chars, c.collected_at, "
+            "EXISTS(SELECT 1 FROM kina_adjust k WHERE k.pc_id = c.pc_id) AS kina_ledger "
+            "FROM char_info c ORDER BY c.pc_id"
         ) as cur:
             rows = await cur.fetchall()
     result = []
@@ -1611,6 +1622,7 @@ async def get_all_char_info() -> list[dict]:
             "total_kina": row["total_kina"],
             "chars": chars,
             "collected_at": row["collected_at"],
+            "kina_ledger": bool(row["kina_ledger"]),
         })
     return result
 

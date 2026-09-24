@@ -25,7 +25,7 @@ import tempfile
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 83     # 2026-09-23 실측값 — node 가 없으면 JS 가 빠지므로 일부러 빨간불
+MIN_CHECKS = 88     # 2026-09-24 실측값(+B-CQ9 5) — node 가 없으면 JS 가 빠지므로 일부러 빨간불
 
 TZS = ("Asia/Seoul", "Asia/Ho_Chi_Minh")
 
@@ -638,9 +638,51 @@ setTimeout(async () => {
     ok("JS9-e WS state 가 먼저 오면 /status 재시도가 그것을 덮지 않는다(B2-5)", o.get("stateFeed") == ["PC-77"], str(o.get("stateFeed")))
 
 
+def t_cq9_pending():
+    """★B-CQ9 (2026-09-24 #114)★ 대기 명령 칩·막대의 경과 초가 카드 비교(_rkNorm)를 매초 깨 reconcileGrid 가 대기 중인 카드를
+    렌더마다 통째로 갈아 끼웠다. 초만 빼고, 아이콘·명령·단계·사유가 바뀌면 여전히 다른 카드로 본다."""
+    if not _need_node("CQ9"):
+        return
+    src = main.HTML_DASHBOARD
+    try:
+        fns = _grab(src, ("esc", "escAttr", "isAcctSuf", "baseId", "pendSecs", "pendBarText", "pendChipText",
+                          "pendChip", "pendBar"), ("pendKey",))
+        consts = "\n".join(_line(src, p) for p in ("const MAX_ACCT", "const ACCT_LABELS", "const ACCT_SUFFIX", "const _rkNorm"))
+    except Exception as e:
+        ok("CQ9 함수를 잘라낸다", False, str(e))
+        return
+    js = _DOM + consts + "\n" + fns + r"""
+let pendingCmds = {};
+const e = {base:'PC-05', pcId:'PC-05', icon:'⏳', label:'시작', phase:'send', note:'', at: Date.now() - 3000};
+pendingCmds['PC-05'] = e;
+const card = () => '<div class="card">' + pendChip({pc_id:'PC-05b'}) + pendBar({pc_id:'PC-05b'}) + '</div>';
+const o = {};
+const h1 = card(); e.at -= 61000; const h2 = card();
+o.rawDiff = h1 !== h2; o.sameNorm = _rkNorm(h1) === _rkNorm(h2);
+e.phase = 'ack'; e.icon = '📨'; o.phaseDiff = _rkNorm(card()) !== _rkNorm(h2);
+const h3 = card(); e.label = '정지'; o.labelDiff = _rkNorm(card()) !== _rkNorm(h3);
+const h4 = card(); e.phase = 'warn'; e.icon = '⛔'; e.note = '명령이 만료됐습니다'; const h5 = card();
+e.note = '명령이 취소됐습니다'; o.noteDiff = _rkNorm(card()) !== _rkNorm(h5);
+o.rt = _rkNorm('<i data-rt="a">3초 전</i>') === _rkNorm('<i data-rt="b">4초 전</i>');
+o.txt = h2.includes('초째');
+console.log(JSON.stringify(o));
+"""
+    try:
+        o = _run_node(js)
+    except Exception as ex:
+        ok("CQ9 node 실행", False, str(ex)[:600])
+        return
+    ok("B-CQ9-a 경과 초만 바뀐 대기 카드는 _rkNorm 이 같다(카드를 안 갈아 끼운다)",
+       o.get("rawDiff") and o.get("sameNorm") and o.get("txt"), str(o))
+    ok("B-CQ9-b 단계(보냄→받음)·아이콘이 바뀌면 다른 카드", o.get("phaseDiff") is True, str(o))
+    ok("B-CQ9-c 명령 이름이 바뀌면 다른 카드(막대 title 은 단계 문구뿐이라 키가 가른다)", o.get("labelDiff") is True, str(o))
+    ok("B-CQ9-d 경고 사유(만료↔취소)가 바뀌면 다른 카드", o.get("noteDiff") is True, str(o))
+    ok("B-CQ9-e 「N초 전」(data-rt) 정규화는 그대로", o.get("rt") is True, str(o))
+
+
 def test_all():
     run_all([t_js1_server, t_time, t_js6_lists, t_js3_inject, t_js3_js10_table, t_js7_sort, t_js4_js5_js8,
-             t_js9_init])
+             t_js9_init, t_cq9_pending])
     finish("test_js_b", MIN_CHECKS)
 
 

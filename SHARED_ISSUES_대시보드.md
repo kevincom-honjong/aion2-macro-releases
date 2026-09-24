@@ -168,3 +168,11 @@ PC-20 당시 줄은 보존 정리(3000줄/PC)로 이미 밀려나 없음 → (a)
 - ★CONTRACTS_아이온2.md 에 한 줄 넣어 주십시오 (루트 파일이라 이 방이 못 고친다)★ — 제안 `C4-c`: «텔레그램 중계 `POST /telegram/send/{pc_id}` 본문 `hard`(선택, true = 음소거를 뚫는 강제 알람 — 매크로 1.1.1006 강제 알람) · `/telegram/photo/{pc_id}` 폼 `hard=1`·`expect_reply=1`(캡차 = 늘 뚫음). 응답 `200 {ok:false, reason:"muted"}`·`403`(차단 테넌트) = ★처리됨 — 매크로는 자기 봇으로 직접 보내지 않는다★. 직접 폴백은 네트워크 오류·타임아웃·503 disabled·502 send_failed·5xx 만 | `lc/report_module._tg_body_ok`·`lc/config.py` 텍스트(4439)·캡차 사진(4504) 폴백».
 - 매크로 쪽 수정(프로그램방): `_tg_body_ok` 가 muted 를 False 로 뭉개 `config.py:4439`·`4504` 가 PC 옛 토큰으로 직접 보낸다 → reason=="muted"·403 은 «처리됨»(로그 «음소거로 생략»·반환, 직접 전송 0회). 시험: 가짜 중계가 muted → `api.telegram.org` POST 0회.
 - ★2026-09-24 추가 (lc 2a448ed 짝)★ 서버 차단 응답에 reason — 텍스트 403·★사진 403 도★ `{detail:"차단 상태에서는 정지 안내만 전송됩니다", reason:"blocked"}` · 429 `{detail:"정지 안내 전송 상한", reason:"blocked_cap"}` (e32c01f 글자 그대로). 한국어 detail 은 그대로. 사진이 더는 `Forbidden` 이 아니므로 `report_module._tg_status` 의 `/telegram/status` 재질문(사진 Forbidden 갈래)은 새 서버 배포 뒤 `reason=="blocked"` 한 줄로 바꿀 수 있다(옛 서버와 같이 도는 동안은 둘 다 두는 게 안전). reason 없는 403 `Forbidden` = 키 문제(미등록·probe 잠금) → 폴백. 계약 전문·C4-b 문구 = `updater/CONTRACTS_대시보드.md` §7.
+
+## 2026-09-24 — #114 재반증 뒤 남은 것 (대시보드방 → 아이온2·통합·팜뷰)
+서버 쪽 수정(TG5·FV8·ROT1-b·ROT7-b·DB8·CQ9)은 코드에 넣음(미배포). 아래는 ★이 방이 혼자 못 닫는 것★ 만.
+- **JS1 잔여 (아이온2 lc + 대시보드 짝)** — 위 2026-09-23 (밤) «char_info 「방금 읽음」 표식» 그대로 열려 있다. 수요일 리셋 뒤 같은 값(0→0)을 다시 읽은 슬롯은 서버가 «바뀐 캐릭만» 수집 시각을 올리므로 여전히 리셋 보정을 받는다.
+  제안 스펙: 매크로가 `merge=True` 본문의 캐릭마다 `read_at`(그 슬롯을 ★방금 화면에서 읽은★ UTC ISO — 로컬 스냅샷에서 옮겨 적은 슬롯은 넣지 않는다)을 싣는다(`lc/info_collector` :1938·:2747 · `awakening` :757 · `surface_zero` :69). 서버 `database.upsert_char_info` merge 갈래(~:1478)가 `read_at` 있는 캐릭만 `_merge_ts` 를 그 값으로 찍는다(없으면 지금처럼 «값이 바뀐 캐릭만»). 옛 매크로 = 필드 없음 = 지금 동작. 서버 반쪽은 lc 가 필드를 보낸다는 합의 뒤 넣는다.
+- **ROT5** — 그대로 주인님 결정 대기(위 2026-09-23 (밤) «주인님 결정 대기»). 줄기 수정이라 이 방은 손대지 않았다.
+- **JS8 가장자리 (기록만, 미확인·낮음)** — WS 가 state 를 통째로 바꿔 끼운 뒤 `selectedPcs` 에 사라진 id 가 남을 수 있다(`static/dashboard.js` 전체 교체 갈래 ~:3377). 일괄 명령은 `cmdTargets` 가 살아 있는 카드로만 보내므로 오발은 못 봤다 — 선택 칩 숫자만 틀릴 수 있다. 재현하면 고친다.
+- **FV_API 문구 제안 (통합 — 두 사본)** — `progress.total_kina`: ★`0` = 장부(`kina_adjust`)가 만든 진짜 0(전부 팔림)★, `null` = 못 읽음. 예전엔 장부 0 도 `null` 로 나가 팜뷰 mania 되돌림 검사가 그 PC 를 건너뛰었다(B-FV8, 시험 `tests/test_kina_ledger.py` L-37~L-40). 팜뷰가 `0` 을 «모름» 으로 다루는 곳이 있으면 같이 본다.

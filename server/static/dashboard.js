@@ -331,6 +331,11 @@ function pendBarText(e){
   return e.icon + ' ' + e.label + ' — ' + t + ' · ' + tail;
 }
 function pendChipText(e){ return e.icon + ' ' + pendSecs(e) + '초'; }
+// ★B-CQ9 (2026-09-24 #114)★ 칩·막대 글자에는 ★매초 바뀌는 경과 초★ 가 들어 있어 대기 중인 카드는 렌더마다
+//   HTML 이 달라 reconcileGrid 가 통째로 갈아 끼웠다(열린 메뉴·호버·선택이 매번 날아감). 글자는 data-pt 칸으로
+//   표시하고 _rkNorm 이 그 글자를 비교에서 뺀다 — 초는 pendTick 이 제자리 textContent 로 갈아 끼운다.
+//   초를 뺀 나머지(아이콘·명령·단계·사유)는 이 키로 속성에 남겨 ★바뀌면 여전히 새로 그린다★.
+function pendKey(e){ return [e.icon, e.label, e.phase, e.note || ''].join('|'); }
 // ★상태 글자 바로 옆★ 칩 (rotChip 과 같은 슬롯) — 「대기」 옆에 붙어 눈이 같이 본다
 function pendChip(pc){
   const e = pendingCmds[baseId(pc.pc_id||'')];
@@ -339,7 +344,7 @@ function pendChip(pc){
           : (e.phase === 'ack' ? 'bg-sky-800/85 text-sky-100 border-sky-400 pulse'
                                : 'bg-amber-600/90 text-amber-50 border-amber-300 pulse');
   return `<span id="pcmd-chip-${escAttr(e.base)}" class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${c}"
-                title="${escAttr(e.label)}">${esc(pendChipText(e))}</span>`;
+                title="${escAttr(e.label)}" data-pt="${escAttr(pendKey(e))}">${esc(pendChipText(e))}</span>`;
 }
 // ★상태 줄 바로 밑 가로 막대★ — 칩은 좁아서 명령 이름이 안 들어간다.
 //   주인님 요구("명령 이름 + 보낸 지 몇 초")를 실제로 채우는 건 이쪽이다.
@@ -354,7 +359,7 @@ function pendBar(pc){
     : '이 표시는 ①매크로 상태가 실제로 바뀌거나 ②명령이 만료·취소되거나 ③시간이 지나면 자동으로 사라집니다';
   return `<div id="pcmd-bar-${escAttr(e.base)}" data-base="${escAttr(e.base)}"
       onclick="event.stopPropagation();pendDismiss(this.dataset.base)" title="${escAttr(tip)}"
-      class="mb-2 px-2 py-1 rounded border text-xs font-bold leading-tight truncate ${c}">${esc(pendBarText(e))}</div>`;
+      class="mb-2 px-2 py-1 rounded border text-xs font-bold leading-tight truncate ${c}" data-pt="${escAttr(pendKey(e))}">${esc(pendBarText(e))}</div>`;
 }
 // ⑤ 사람이 치운다 — ★진행 중인 것은 안 지운다★(그건 ①~④ 가 할 일이다)
 function pendDismiss(base){
@@ -1821,7 +1826,8 @@ function buildStack(s){
 let RENDER_STATS = {calls: 0, replaced: 0, kept: 0, full: 0};
 // 「N초 전」 칸(relSpan)은 시각 값·글자를 비교에서 뺀다 — 하트비트마다 last_active 가 바뀌어도 카드는 남긴다.
 //   남긴 카드는 새 HTML 의 시각 값을 ★같은 순서로★ 옮겨 적고 글자를 다시 쓴다(정규화가 같으면 칸 수·순서도 같다).
-const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">');
+// ★B-CQ9★ 대기 명령 칩·막대(data-pt)의 글자(경과 초)도 뺀다 — 키(data-pt 값)는 남긴다(pendKey 설명).
+const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">').replace(/(data-pt="[^"]*">)[^<]*/g, '$1');
 const _rkUnesc = v => v.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 function _rkTick(el, html){
   const vals = [...String(html).matchAll(/data-rt="([^"]*)"/g)].map(m => _rkUnesc(m[1]));

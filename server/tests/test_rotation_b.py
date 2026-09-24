@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 21     # 실측 22검사
+MIN_CHECKS = 27     # 실측 28검사
 
 M = main
 SENT, SAID, LOGS = [], [], {"lines": [], "hook": None}
@@ -155,6 +155,17 @@ async def t_rot1():
     ok("B-ROT1-e 수집 명령과 함께 collect_pc 를 기록한다",
        not err and st.get("stage") == "collecting" and st.get("collect_pc") == "PC-20", str(st.get("collect_pc")))
 
+    # ★B-ROT1-b (2026-09-24 #114 재반증)★ 수집 중 PC-20 이 other_account 로 가고 형제 PC-20b 가 살아있는 카드가 되면
+    #   그 카드의 옛 수집값은 «수집됨» 이 아니다 — collect_pc 카드의 값만 증거
+    reset()
+    st = _collecting(since=now - 60, char_before="x", collect_pc="PC-20")
+    pcs = [card("PC-20", "other_account", 5, _char_collected_at="x", daily_progress=DP_TODAY),
+           card("PC-20b", "idle", 5, _char_collected_at="2026-09-20 08:00:00", daily_progress=[])]
+    err = await step(st, pcs)
+    ok("B-ROT1-f 형제 active 카드의 옛 수집값으로 전환하지 않는다(무장 유지)",
+       not err and not any(c == "switch_launcher" for _, c, _a in SENT) and M._ROT.get(KEY) is st,
+       "%s sent=%s" % (err, SENT))
+
 
 # ─────────────────────────────────────────────────────────────── B-ROT2
 async def t_rot2():
@@ -281,6 +292,44 @@ async def t_rot7():
     err = await step(st, pcs)
     ok("B-ROT7 로그를 읽는 사이 정지되면 collect_info 를 다시 보내지 않는다",
        not err and not SENT and KEY not in M._ROT, "%s sent=%s" % (err, SENT))
+
+    # ★B-ROT7-b (2026-09-24 #114 재반증)★ 파섹 주소록 await 사이 정지 → switch_launcher 를 안 쏜다.
+    #   수집 끝(collecting)·작업 끝(tasking) 두 전환 자리 × 주소록 정상 반환/예외 두 갈래.
+    def _ready_collect():
+        return (_collecting(since=now - 60, char_before="x", collect_pc="PC-20"),
+                [card("PC-20", "idle", 5, _char_collected_at="new", daily_progress=DP_TODAY),
+                 card("PC-20b", "other_account", 5000, daily_progress=DP_TODAY)])
+
+    def _ready_task():
+        return ({"stage": "tasking", "task": "corridor", "since": now - 999, "sent_at": now - 999,
+                 "armed_at": now - 9999, "busy": True, "other": "", "retask": False, "day": M._kst_today_key(),
+                 "tvisit": ["1"], "queue": [], "plan": ["corridor"], "hops": 0, "visits": {}},
+                [card("PC-20", "idle", 5, daily_progress=DP_TODAY)])
+
+    reset()
+    st, pcs = _ready_collect()
+    err = await step(st, pcs)
+    ok("B-ROT7-b0 대조 — 방해가 없으면 수집 끝에 switch_launcher 를 쏜다",
+       not err and any(c == "switch_launcher" for _, c, _a in SENT), "%s sent=%s" % (err, SENT))
+    real_pm = M._get_parsec_map
+    for site, mk in (("collect", _ready_collect), ("task", _ready_task)):
+        for how in ("ret", "raise"):
+            reset()
+
+            async def _pm_stops(t, _how=how):
+                M._rot_disarm("main", "PC-20", "수동 해제")
+                if _how == "raise":
+                    raise RuntimeError("addrbook down")
+                return {"20": "peer"}
+            M._get_parsec_map = _pm_stops
+            try:
+                st, pcs = mk()
+                err = await step(st, pcs)
+            finally:
+                M._get_parsec_map = real_pm
+            ok("B-ROT7-b %s/%s 주소록 await 사이 정지되면 switch_launcher 를 안 쏜다" % (site, how),
+               not err and not any(c == "switch_launcher" for _, c, _a in SENT) and KEY not in M._ROT,
+               "%s sent=%s" % (err, SENT))
 
 
 # ─────────────────────────────────────────────────────────────── B-ROT8

@@ -528,10 +528,12 @@ KEY_MAX_FAILS = 30             # 창 안 API키 실패 상한 (매크로는 정�
 KEY_WINDOW = 300.0
 
 
-def _key_probe_blocked(ip: str) -> bool:
-    """API키 추측 시도 차단 여부 — 헤더/바디/WS 어디로 오든 같은 카운터를 공유한다."""
+def _key_probe_blocked(ip: str, now: Optional[float] = None) -> bool:
+    """API키 추측 시도 차단 여부 — 헤더/바디/WS 어디로 오든 같은 카운터를 공유한다.
+    `now` 를 주면 그 순간으로 판정한다(check_api_key 가 창 판정과 창 초기화를 ★같은 순간★ 으로 하게 — 2026-09-24 반증)."""
     rec = _KEY_FAILS.get(ip)
-    return bool(rec and time.time() - rec["since"] <= KEY_WINDOW and rec["n"] >= KEY_MAX_FAILS)
+    t = time.time() if now is None else now
+    return bool(rec and t - rec["since"] <= KEY_WINDOW and rec["n"] >= KEY_MAX_FAILS)
 
 
 def _key_probe_failed(ip: str):
@@ -569,7 +571,7 @@ def check_api_key(request: Request) -> Optional[str]:
     ip = _client_ip(request)
     now = time.time()
     rec = _KEY_FAILS.get(ip)
-    if _key_probe_blocked(ip):   # ★잠금 판정 한 곳 (2026-09-24)★ — 키를 훑는 함수는 전부 이 호출을 먼저(test_key_probe K-4, AST)
+    if _key_probe_blocked(ip, now):   # ★잠금 판정 한 곳 (2026-09-24)★ · 아래 창 초기화와 같은 now — 키를 훑는 함수는 전부 이 호출을 먼저(test_key_probe K-4, AST)
         return None            # 실패 폭주 IP는 정답 키여도 창이 끝날 때까지 거부
     tenant = None
     for k, tn in KEY_TO_TENANT.items():
@@ -1541,8 +1543,12 @@ def _attach_char_info(card: dict, ci: dict | None) -> None:
         return
     if ci.get("chars"):
         card["chars"] = [c.get("name") or c.get("char_name") or "" for c in ci["chars"]]
-    if ci.get("total_kina"):
-        card["_total_kina"] = ci["total_kina"]
+    # ★0 도 «앎» 일 수 있다 (2026-09-24 #114 FV8)★ — 예전엔 `if ci.get("total_kina")` 라 전부 판 뒤의 진짜 0 이 None(=모름)으로
+    #   나가 팜뷰 mania 의 되돌림 검사가 그 PC 를 건너뛰었다(FV_API: null = 모름). 0 은 ★장부 행이 있을 때만★ 앎이다 —
+    #   장부가 없으면 «한 번도 못 읽음» 의 기본값 0(database.get_all_char_info kina_ledger 설명).
+    _tk = ci.get("total_kina")
+    if _tk or (_tk == 0 and ci.get("kina_ledger")):
+        card["_total_kina"] = _tk
     if ci.get("collected_at"):           # 카드 "수집 X분 전" 표시용 (2026-07-25)
         card["_char_collected_at"] = ci["collected_at"]
 
@@ -4601,6 +4607,11 @@ function pendBarText(e){
   return e.icon + ' ' + e.label + ' — ' + t + ' · ' + tail;
 }
 function pendChipText(e){ return e.icon + ' ' + pendSecs(e) + '초'; }
+// ★B-CQ9 (2026-09-24 #114)★ 칩·막대 글자에는 ★매초 바뀌는 경과 초★ 가 들어 있어 대기 중인 카드는 렌더마다
+//   HTML 이 달라 reconcileGrid 가 통째로 갈아 끼웠다(열린 메뉴·호버·선택이 매번 날아감). 글자는 data-pt 칸으로
+//   표시하고 _rkNorm 이 그 글자를 비교에서 뺀다 — 초는 pendTick 이 제자리 textContent 로 갈아 끼운다.
+//   초를 뺀 나머지(아이콘·명령·단계·사유)는 이 키로 속성에 남겨 ★바뀌면 여전히 새로 그린다★.
+function pendKey(e){ return [e.icon, e.label, e.phase, e.note || ''].join('|'); }
 // ★상태 글자 바로 옆★ 칩 (rotChip 과 같은 슬롯) — 「대기」 옆에 붙어 눈이 같이 본다
 function pendChip(pc){
   const e = pendingCmds[baseId(pc.pc_id||'')];
@@ -4609,7 +4620,7 @@ function pendChip(pc){
           : (e.phase === 'ack' ? 'bg-sky-800/85 text-sky-100 border-sky-400 pulse'
                                : 'bg-amber-600/90 text-amber-50 border-amber-300 pulse');
   return `<span id="pcmd-chip-${escAttr(e.base)}" class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${c}"
-                title="${escAttr(e.label)}">${esc(pendChipText(e))}</span>`;
+                title="${escAttr(e.label)}" data-pt="${escAttr(pendKey(e))}">${esc(pendChipText(e))}</span>`;
 }
 // ★상태 줄 바로 밑 가로 막대★ — 칩은 좁아서 명령 이름이 안 들어간다.
 //   주인님 요구("명령 이름 + 보낸 지 몇 초")를 실제로 채우는 건 이쪽이다.
@@ -4624,7 +4635,7 @@ function pendBar(pc){
     : '이 표시는 ①매크로 상태가 실제로 바뀌거나 ②명령이 만료·취소되거나 ③시간이 지나면 자동으로 사라집니다';
   return `<div id="pcmd-bar-${escAttr(e.base)}" data-base="${escAttr(e.base)}"
       onclick="event.stopPropagation();pendDismiss(this.dataset.base)" title="${escAttr(tip)}"
-      class="mb-2 px-2 py-1 rounded border text-xs font-bold leading-tight truncate ${c}">${esc(pendBarText(e))}</div>`;
+      class="mb-2 px-2 py-1 rounded border text-xs font-bold leading-tight truncate ${c}" data-pt="${escAttr(pendKey(e))}">${esc(pendBarText(e))}</div>`;
 }
 // ⑤ 사람이 치운다 — ★진행 중인 것은 안 지운다★(그건 ①~④ 가 할 일이다)
 function pendDismiss(base){
@@ -6091,7 +6102,8 @@ function buildStack(s){
 let RENDER_STATS = {calls: 0, replaced: 0, kept: 0, full: 0};
 // 「N초 전」 칸(relSpan)은 시각 값·글자를 비교에서 뺀다 — 하트비트마다 last_active 가 바뀌어도 카드는 남긴다.
 //   남긴 카드는 새 HTML 의 시각 값을 ★같은 순서로★ 옮겨 적고 글자를 다시 쓴다(정규화가 같으면 칸 수·순서도 같다).
-const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">');
+// ★B-CQ9★ 대기 명령 칩·막대(data-pt)의 글자(경과 초)도 뺀다 — 키(data-pt 값)는 남긴다(pendKey 설명).
+const _rkNorm = h => String(h).replace(/data-rt="[^"]*">[^<]*/g, 'data-rt="">').replace(/(data-pt="[^"]*">)[^<]*/g, '$1');
 const _rkUnesc = v => v.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 function _rkTick(el, html){
   const vals = [...String(html).matchAll(/data-rt="([^"]*)"/g)].map(m => _rkUnesc(m[1]));
@@ -11172,6 +11184,15 @@ async def _tg_mute_skip(tenant: str, pc_id: str, name: str, text: str, left: flo
                          "minutes_left": round(left / 60.0, 1)})
 
 
+def _tg_retired_skip(nspc: str, text: str) -> JSONResponse:
+    """★은퇴 id 의 보통 알림 (2026-09-24 #114 B-TG5)★ — /alert 와 같이 카드·이벤트 행을 안 만든다. 응답은 ★음소거와 같은 모양★
+    {ok:false, muted:true, reason:"muted"} + retired:true — 매크로(lc TG7)가 «처리됨» 으로 읽어 자기 봇으로 폴백하지 않는다
+    (새 reason 글자를 만들면 옛·새 매크로 모두 «그 밖의 ok:false» 로 읽고 직접 보낸다 — 은퇴가 뚫린다)."""
+    _mark_retired_seen(nspc)
+    print(f"[tg-retired] {nspc} 은퇴 id — 전송 생략: {text[:60]}", flush=True)
+    return JSONResponse({"ok": False, "muted": True, "reason": _TG_REASON_MUTED, "retired": True, "minutes_left": 0})
+
+
 @app.post("/telegram/mute/{pc_id}")
 async def telegram_mute(pc_id: str, request: Request):
     """PC 텔레그램 음소거. body: {"hours": 5}  / hours<=0 이면 해제.
@@ -11310,6 +11331,13 @@ async def telegram_send(pc_id: str, request: Request):
     #   전부 이 경로다. ★사람을 세워놓는 알람이 음소거에 같이 죽으면 안 된다.★
     #   ★hard:true 도 (2026-09-24 주인님 «음소거라도 올리기»)★ — 규칙은 _tg_hard 한 곳.
     _hard = _tg_hard(text, data.get("hard"))
+    # ★은퇴 id (2026-09-24 #114 B-TG5)★ — 보통 알림은 생략(처리됨), 강제 알람(⛔·🚨·hard)은 텔레그램으로는 보낸다(그 기계가
+    #   실제로 돌며 사람을 부르는 중이다 — 버리면 멈춘 채 아무도 모른다). 어느 쪽이든 카드·이벤트 행(_alarm_event)은 안 만든다.
+    _retired = ns(tenant, pc_id) in RETIRED_PCS
+    if _retired and not _hard:
+        return _tg_retired_skip(ns(tenant, pc_id), text)
+    if _retired:
+        _mark_retired_seen(ns(tenant, pc_id))
     _left = 0 if _hard else _tg_muted(tenant, pc_id)
     if _left > 0:
         return await _tg_mute_skip(tenant, pc_id, name, text, _left)
@@ -11319,8 +11347,9 @@ async def telegram_send(pc_id: str, request: Request):
         mid = await tg_send_text(chat, f"{name} | {text}" if name else text)
     finally:
         _TG_RES.reset(_tok)               # 이 과제 밖으로 안 샌다(시험 A-8b)
-    await _alarm_event(tenant, name, text, tg_failed=mid is None,
-                       timing=_alarm_timing(data.get("t0"), _recv, time.time(), _res.get("date")))
+    if not _retired:                      # 은퇴 id 는 카드·이벤트 행을 안 만든다(B-TG5)
+        await _alarm_event(tenant, name, text, tg_failed=mid is None,
+                           timing=_alarm_timing(data.get("t0"), _recv, time.time(), _res.get("date")))
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if bool(data.get("expect_reply")):
@@ -11352,7 +11381,13 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
     # ★사진도 음소거 규칙을 탄다 — 명시적으로 (2026-09-24 주인님 «캡차는 항상 올리기»)★ 예전엔 사진 창구에 음소거 확인이
     #   아예 없어서 캡차가 ★우연히★ 나갔다. 이제 _tg_hard 한 곳: expect_reply(캡차)·⛔/🚨 캡션·hard 는 늘 나가고, 나머지 사진은
     #   음소거면 텍스트와 같은 200 muted(매크로 호출부는 캡차 expect_reply=1 하나뿐 — 2026-09-24 lc/config.py:4504).
-    _left = 0 if _tg_hard(caption, form.get("hard"), expect_reply) else _tg_muted(tenant, pc_id)
+    _phard = _tg_hard(caption, form.get("hard"), expect_reply)
+    _retired = ns(tenant, pc_id) in RETIRED_PCS          # B-TG5 — 텍스트와 같은 규칙(캡차·강제는 보낸다, 행은 안 만든다)
+    if _retired and not _phard:
+        return _tg_retired_skip(ns(tenant, pc_id), f"{caption} (사진)" if caption else "(사진)")
+    if _retired:
+        _mark_retired_seen(ns(tenant, pc_id))
+    _left = 0 if _phard else _tg_muted(tenant, pc_id)
     if _left > 0:
         return await _tg_mute_skip(tenant, pc_id, name, f"{caption} (사진)" if caption else "(사진)", _left)
     # 캡션 뒤에 «(사진)» — 팜뷰 alarmvoice.summarize 가 «(» 에서 자르므로 앞에 두면 캡션이 통째로 사라진다
@@ -11362,8 +11397,9 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
         mid = await tg_send_photo(chat, f"{name} | {caption}" if name else caption, raw)
     finally:
         _TG_RES.reset(_tok)
-    await _alarm_event(tenant, name, f"{caption} (사진)" if caption else "(사진)", tg_failed=mid is None,
-                       timing=_alarm_timing(form.get("t0"), _recv, time.time(), _res.get("date")))
+    if not _retired:                      # B-TG5
+        await _alarm_event(tenant, name, f"{caption} (사진)" if caption else "(사진)", tg_failed=mid is None,
+                           timing=_alarm_timing(form.get("t0"), _recv, time.time(), _res.get("date")))
     if mid is None:
         return JSONResponse({"ok": False, "reason": "send_failed"}, status_code=502)
     if expect_reply:
@@ -14475,6 +14511,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         # ★peer_id 없으면 반쪽 전환이 된다 — 완주 순환과 같은 방어 (2026-08-20 PC-22 실사고)★
         try:
             _pm = await _get_parsec_map(tenant)
+            if not _alive():
+                return                               # ★B-ROT7-b (2026-09-24)★ 주소록 await 사이 정지/재무장
             _num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
             if not (_pm.get(_num) or _pm.get(base)):
                 await _rot_stop(tenant, base,
@@ -14485,6 +14523,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         except Exception as _pe:
             print(f"[순환] {base} 주소록 확인 실패(계속 진행): {_pe}")
         # acct_index 는 1 고정 [S11] — 완주 순환과 같은 이유(런처 드롭다운의 '다른 계정' 줄 번호)
+        if not _alive():
+            return                                   # ★B-ROT7-b★ 주소록 확인이 예외로 끝나도 보내기 직전 한 번 더
         ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
             "acct_index": 1, "acct_no": nxt,
             "acct_label": f"계정{nxt}", "chrome_label": ACCT_LABELS[nxt - 1], "launch": True,
@@ -14627,7 +14667,10 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
                                 f"⛔ 순환 정지 — 정보수집은 끝났는데(char_info 갱신) 매크로가 "
                                 f"{int(age/60)}분째 idle 보고를 안 합니다. 화면 확인 필요", st)
             return
-        got = str(active.get("_char_collected_at") or "") if active else _ev
+        # ★B-ROT1-b (2026-09-24 #114 재반증)★ collect_pc 가 있으면 증거는 ★그 카드의 것(_ev)만★ — 초판은 살아있는 카드(active)의
+        #   값을 봤다. 수집 중 PC-20 이 other_account 로 가고 PC-20b(4일 전 수집값)가 active 가 되면 그 옛 값을 «수집됨» 으로
+        #   읽고 switch_launcher 를 쏴 계정1 수집이 영영 빠졌다. collect_pc 없는 옛 저장본만 예전대로.
+        got = _ev if (_cpc or not active) else str(active.get("_char_collected_at") or "")
         if st.pop("skip_collect", False):
             pass                                     # 수집을 보낸 적이 없다(위 S-F 경로)
         elif (got and got != str(st.get("char_before") or "")
@@ -14754,6 +14797,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   → 순환은 반쪽 전환을 만들지 않는다. 세우고 알린다.
         try:
             _pm = await _get_parsec_map(tenant)
+            if not _alive():
+                return                               # ★B-ROT7-b (2026-09-24)★ 주소록 await 사이 정지/재무장
             _num = "".join(ch for ch in base if ch.isdigit()).lstrip("0") or base
             if not (_pm.get(_num) or _pm.get(base)):
                 await _rot_stop(tenant, base,
@@ -14767,6 +14812,8 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         #   '다른 계정' 몇 번째 줄인가다. 목록은 ★현재 계정을 뺀 것★ 이라 nxt 로
         #   유추하면 틀린다(계정3→계정2 역주행에서 계정1 을 가리킨다). 대시보드의 다른
         #   두 호출부도 전부 1 고정이고, 정확한 판정은 acct_no(이메일 줄 템플릿)가 한다.
+        if not _alive():
+            return                                   # ★B-ROT7-b★ 주소록 확인이 예외로 끝나도 보내기 직전 한 번 더
         ok = await _rot_send(tenant, str(active.get("pc_id")), "switch_launcher", {
             "acct_index": 1, "acct_no": nxt,
             "acct_label": f"계정{nxt}", "chrome_label": ACCT_LABELS[nxt - 1], "launch": True,

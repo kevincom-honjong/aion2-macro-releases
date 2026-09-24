@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 36
+MIN_CHECKS = 40
 TOK = "fvsecret-kl"
 H = {"X-FV-Token": TOK}
 OLD_CA = "2026-09-22T20:00:00"      # 매크로 전체수집 시각(UTC) — 판매보다 앞
@@ -309,10 +309,43 @@ async def t_forced_interleave():
     ok("L-36 ★재전송 판정 도중 끼어든 판매도 안 사라진다(한 트랜잭션) → 650M★", v == 650_000_000, str(v))
 
 
+async def t_zero_is_known():
+    """★B-FV8 (2026-09-24 #114)★ 전부 팔아 장부가 0 을 만든 PC 는 창고키나 0 = «앎» — 예전엔 `if ci.get("total_kina")` 라
+    None(모름)으로 나가 팜뷰 mania 되돌림 검사가 그 PC 를 건너뛰었다. 장부가 없는 0 은 여전히 «못 읽음»(None)."""
+    await db.upsert_status("PC-LZ1", {"pc_id": "PC-LZ1", "status": "idle"})
+    await db.upsert_status("PC-LZ2", {"pc_id": "PC-LZ2", "status": "idle"})
+    await _collect("PC-LZ1", 500_000_000)
+    a = await _sell("PC-LZ1", -500_000_000, "tid-LZ1")
+    await db.upsert_char_info(main.ns("main", "PC-LZ2"), 0, [{"slot": 1, "name": "러닝"}], "2026-09-22T20:00:00")
+    rows = {r["pc_id"]: r for r in await db.get_all_char_info()}
+    r1, r2 = rows.get(main.ns("main", "PC-LZ1")) or {}, rows.get(main.ns("main", "PC-LZ2")) or {}
+    ok("L-37 get_all_char_info 가 장부 유무(kina_ledger)를 싣는다 — 판 PC True, 안 판 PC False",
+       r1.get("total_kina") == 0 and r1.get("kina_ledger") is True and r2.get("kina_ledger") is False,
+       "%s %s / %s" % (a, {k: r1.get(k) for k in ("total_kina", "kina_ledger")}, {k: r2.get(k) for k in ("total_kina", "kina_ledger")}))
+    c1, c2 = {}, {}
+    main._attach_char_info(c1, r1)
+    main._attach_char_info(c2, r2)
+    ok("L-38 ★장부가 만든 0 → 카드 _total_kina 0(앎)★, 장부 없는 0 → 칸 없음(모름)",
+       c1.get("_total_kina") == 0 and "_total_kina" not in c2, "%s / %s" % (c1.get("_total_kina", "∅"), c2.get("_total_kina", "∅")))
+    snap = await main._fv_build_snapshot("main")
+    pcs = snap.get("pcs") or {}
+    p1 = ((pcs.get("PC-LZ1") or {}).get("progress") or {})
+    p2 = ((pcs.get("PC-LZ2") or {}).get("progress") or {})
+    ok("L-39 ★FV snapshot total_kina — 판 PC 0, 못 읽은 PC null★(FV_API: null = 모름)",
+       "total_kina" in p1 and p1.get("total_kina") == 0 and "total_kina" in p2 and p2.get("total_kina") is None,
+       "%s / %s keys=%s" % (p1.get("total_kina", "∅"), p2.get("total_kina", "∅"), list(pcs)[:6]))
+    await _collect("PC-LZ1", 0, merge=True)
+    rows = {r["pc_id"]: r for r in await db.get_all_char_info()}
+    c1 = {}
+    main._attach_char_info(c1, rows.get(main.ns("main", "PC-LZ1")))
+    ok("L-40 판 뒤 매크로가 0(못 읽음)을 다시 보내도 여전히 0 = 앎(장부는 남는다)", c1.get("_total_kina") == 0, str(c1))
+
+
 def test_all():
     run_all([t_resend_keeps_deduction, t_fresh_read_not_double, t_chain, t_already_reverted_heals,
              t_clock_independent_and_isolation, t_refuter_2026_09_23, t_reverted_then_new_sale, t_boot_heal,
-             t_read_at_contract, t_kst_naive_is_not_sent, t_ws_frame_kina0, t_concurrent, t_forced_interleave])
+             t_read_at_contract, t_kst_naive_is_not_sent, t_ws_frame_kina0, t_concurrent, t_forced_interleave,
+             t_zero_is_known])
     finish("test_kina_ledger", MIN_CHECKS)
 
 

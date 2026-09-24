@@ -69,6 +69,11 @@ def _pick(text, tag, min_lines):
 
 
 _LOOKBEHIND = re.compile(r"\(\?<[=!]")
+# ★브라우저가 JS 로 읽는 자리 셋 (2026-09-24 반증 2차)★ — ① <script …>…</script> (닫는 태그 대소문자·공백 «</SCRIPT >» 도)
+#   ② on*= 이벤트 속성 값 ③ href/src="javascript:…". _blocks 는 모양 뽑기용이라 따로 둔다.
+_SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</\s*script\s*>", re.S | re.I)
+_ONATTR_RE = re.compile(r"""\bon[a-z]+\s*=\s*("[^"]*"|'[^']*')""", re.I)
+_JSURL_RE = re.compile(r"""\b(?:href|src|action)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')""", re.I)
 
 
 def _lookbehind_hits(texts=None) -> list:
@@ -87,10 +92,14 @@ def _lookbehind_hits(texts=None) -> list:
                     texts["static/" + f] = open(os.path.join(STATIC, f), encoding="utf-8").read()
     out = []
     for name, text in texts.items():
-        for i, b in enumerate(_blocks(text, "script")):
+        for i, b in enumerate(_SCRIPT_RE.findall(text)):
             for ln in b.splitlines():
                 if _LOOKBEHIND.search(ln):
                     out.append("%s:<script>%d: %s" % (name, i, ln.strip()[:120]))
+        for kind, rx in (("on*=", _ONATTR_RE), ("javascript:", _JSURL_RE)):
+            for m in rx.finditer(text):
+                if _LOOKBEHIND.search(m.group(1)):
+                    out.append("%s:%s:%d: %s" % (name, kind, text.count("\n", 0, m.start()) + 1, m.group(0)[:120]))
     return out
 
 
@@ -129,9 +138,14 @@ def main_(quick=False):
             step("3-c 정본 JS 문법 (node --check)", rc == 0, out.strip()[-300:])
     # 3-e ★정규식 뒤보기 금지 (2026-09-24 아이온2 반증)★ — Safari 16.4 미만은 뒤보기 한 줄 때문에 ★스크립트 전체★ 를 문법
     #   오류로 버린다(대시보드가 통째로 빈다). 크롬·WebView2 는 멀쩡해서 node --check 로는 못 잡는다. 브라우저로 나가는
-    #   <script> 전부(main.py 대시보드·로그인 · ocr_label.py 판별 화면) + static/*.js 를 본다.
-    _probe = _lookbehind_hits({"t": "x = 1\n<script>var a=/(?<=[0-9])b/;var c=/(?<!x)y/;</script>\n(?<=z)"})
-    step("3-e0 뒤보기 탐지기 자가시험(script 안 한 줄→1건, 밖은 안 셈)", len(_probe) == 1, str(_probe))
+    #   <script> 전부(main.py 대시보드·로그인 · ocr_label.py 판별 화면 · static/*.html, 닫는 태그 «</SCRIPT >» 도) + static/*.js +
+    #   on*= 이벤트 속성 · javascript: 주소를 본다(2026-09-24 반증 2차).
+    _probe = _lookbehind_hits({"t": "x = 1\n<script>var a=/(?<=[0-9])b/;var c=/(?<!x)y/;</script>\n(?<=z)\n"
+                                     "<SCRIPT type=module>\nvar d=/(?<=q)r/;\n</SCRIPT >\n"
+                                     "<b onclick=\"/(?<=a)b/.test(x)\" title='(?<=t)'>\n"
+                                     "<a HREF='javascript:/(?<!a)b/.test(1)'>\n<i onmouseover=\"f()\" data-x=\"(?<=d)\">"})
+    step("3-e0 뒤보기 탐지기 자가시험(script 2·</SCRIPT >·on*=·javascript: → 4건, 밖·다른 속성은 안 셈)", len(_probe) == 4,
+         str(_probe))
     hits = _lookbehind_hits()
     step("3-e 브라우저 JS 에 정규식 뒤보기 없음 (Safari <16.4)", not hits, "\n   ".join(hits[:8]))
     step("3-d 정본 CSS 최소 줄수 (%s ≥ %d)" % (css.count("\n") if css else "-", MAIN_CSS_MIN_LINES),

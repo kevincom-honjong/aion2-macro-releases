@@ -9,6 +9,7 @@
   K-4  ★같은 부류 전수 (AST)★ — 서버 .py 어디서든 KEY_TO_TENANT 를 ★읽는★ 함수(.items()·.get()·for·in·[]·main.KEY_TO_TENANT)는
        그 읽기 ★앞에서★ _key_probe_blocked(...) 를 ★실제로 부른다★(글자·주석 일치가 아니라 호출 노드). 예외는 _init_tenants(설정으로 표를
        만든다 — 요청 키를 안 본다) 하나. 모듈 맨바닥 읽기·다른 곳 재바인딩도 빨간불.
+  K-5  잠금 판정과 창 초기화가 같은 순간(check_api_key 가 now 를 넘긴다)
   K-4s 스캐너 자가시험 — 아이온2 반증이 든 우회 다섯(.get·for·주석 KEY_MAX_FAILS·잠금을 뒤에서·main.KEY_TO_TENANT)을 잡고 정상형은 통과
     cd updater/server && python -X utf8 tests/test_key_probe.py
 """
@@ -20,7 +21,7 @@ from fastapi import HTTPException
 
 from _harness import main, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 6
+MIN_CHECKS = 7
 IP = "203.0.113.77"
 
 
@@ -131,8 +132,27 @@ def t_all_key_scans_check_probe():
        all(caught.values()) and not _scan(good), "%s good=%s" % (caught, _scan(good)))
 
 
+def t_same_instant():
+    """K-5 ★잠금 판정과 창 초기화가 같은 순간 (2026-09-24 반증)★ — check_api_key 가 자기 now 를 _key_probe_blocked 에 넘긴다.
+    예전엔 잠금 판정이 time.time() 을 다시 불러, 창 경계에서 «잠김»(판정)·«창 지남»(초기화)이 갈릴 수 있었다."""
+    ip = "203.0.113.78"
+    t0 = 1_000_000.0
+    main._KEY_FAILS[ip] = {"n": main.KEY_MAX_FAILS, "since": t0}
+    try:
+        inside = main._key_probe_blocked(ip, t0 + main.KEY_WINDOW)
+        after = main._key_probe_blocked(ip, t0 + main.KEY_WINDOW + 0.001)
+    finally:
+        main._KEY_FAILS.pop(ip, None)
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py"), encoding="utf-8").read()
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "check_api_key")
+    calls = [c for c in ast.walk(fn) if _is_lock_call(c)]
+    passes_now = bool(calls) and all(len(c.args) >= 2 and isinstance(c.args[1], ast.Name) and c.args[1].id == "now" for c in calls)
+    ok("K-5 _key_probe_blocked(ip, now) 가 준 순간으로 판정(창 끝 포함·지나면 풀림) + check_api_key 가 자기 now 를 넘긴다",
+       inside is True and after is False and passes_now, "inside=%s after=%s passes_now=%s" % (inside, after, passes_now))
+
+
 def test_all():
-    run_all([t_status_probe, t_all_key_scans_check_probe])
+    run_all([t_status_probe, t_all_key_scans_check_probe, t_same_instant])
     finish("test_key_probe", MIN_CHECKS)
 
 

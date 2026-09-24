@@ -4,6 +4,8 @@
   ① /telegram/send 본문 `hard:true` 는 음소거를 뚫는다(«음소거라도 올리기» — 매크로 1.1.1006 강제 알람). ⛔·🚨 접두사도 그대로.
   ② /telegram/photo expect_reply=1(캡차)은 ★늘★ 나간다(«항상 올리기») — 예전엔 사진 창구에 음소거 확인이 없어 우연히 나갔다.
      나머지 사진은 음소거면 텍스트와 같은 200 {ok:false, reason:"muted"}.
+  ④ ★은퇴 id (2026-09-24 #114 B-TG5)★ — 보통 알림은 생략(음소거와 같은 응답 + retired:true), 강제·캡차는 중계.
+     어느 쪽이든 카드·이벤트 행(_alarm_event)은 안 만든다(/alert 와 같은 규칙).
   ③ 테넌트 차단은 hard 보다 먼저다 — 차단이면 ⛔ 정지 안내만(403 = 처리됨, 클라이언트는 직접 보내지 않는다).
   계약: updater/CONTRACTS_대시보드.md §7 · updater/SHARED_ISSUES_대시보드.md (CONTRACTS_아이온2 반영 요청)
     cd updater/server && python -X utf8 tests/test_tg_hard.py
@@ -15,7 +17,7 @@ from fastapi import HTTPException
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 20
+MIN_CHECKS = 25
 SENT: list = []
 
 
@@ -158,7 +160,7 @@ async def t_blocked():
                (ct, bt, cp, bp) == (403, {"detail": "Forbidden"}, 403, {"detail": "Forbidden"}) and len(SENT) == n1,
                f"{ct} {bt} / {cp} {bp}")
             _pb = main._key_probe_blocked
-            main._key_probe_blocked = lambda ip: True
+            main._key_probe_blocked = lambda ip, now=None: True
             try:
                 ct, bt = await _call(main.telegram_send("PC-01", Req({"text": "⛔ x"}, api_key="blk-key")))
                 cp, bp = await _call(_rawpic({"caption": "캡차"}, pc="PC-01", api_key="blk-key"))
@@ -177,6 +179,42 @@ async def t_blocked():
         main._KILL_TG.pop("blk", None)
 
 
+async def t_retired():
+    """④ B-TG5 — 은퇴 id 의 텔레그램 중계."""
+    ev = []
+    real_ev = main._alarm_event
+
+    async def _ev(tenant, name, text, **kw):
+        ev.append((name, text))
+    main._alarm_event = _ev
+    rid = main.ns("main", "PC-33")
+    main.RETIRED_PCS.add(rid)
+    main.RETIRED_SEEN.pop(rid, None)
+    try:
+        with _Env():
+            b, n = await _send({"text": "보통 알림"}, pc="PC-33")
+            ok("R-1 ★은퇴 id 보통 알림 → 200 {ok:false, muted:true, reason:muted, retired:true}, 안 보냄, 행 없음★",
+               b.get("ok") is False and b.get("muted") is True and b.get("reason") == "muted" and b.get("retired") is True
+               and n == 0 and not ev and rid in main.RETIRED_SEEN, f"{b} n={n} ev={ev}")
+            b, n = await _send({"text": "지역 차단", "hard": True}, pc="PC-33")
+            ok("R-2 은퇴 id + hard:true → 중계는 한다(살아 도는 기계가 사람을 부른다), 행은 없음",
+               b.get("ok") is True and n == 1 and not ev, f"{b} n={n} ev={ev}")
+            b, n = await _pic({"caption": "캡차", "expect_reply": "1"}, pc="PC-33")
+            ok("R-3 은퇴 id 캡차 사진 → 중계, 행 없음", b.get("ok") is True and n == 1 and not ev, f"{b} n={n} ev={ev}")
+            b, n = await _pic({"caption": "그냥 사진", "expect_reply": "0"}, pc="PC-33")
+            ok("R-3b 은퇴 id 보통 사진 → 음소거 모양 + retired:true, 안 보냄, 행 없음",
+               b.get("reason") == "muted" and b.get("retired") is True and n == 0 and not ev, f"{b} n={n} ev={ev}")
+            b, n = await _send({"text": "보통 알림"}, pc="PC-32")
+            b2, n2 = await _pic({"caption": "그냥 사진", "expect_reply": "0"}, pc="PC-32")
+            ok("R-4 대조 — 은퇴 아닌 PC 는 보내고 행도 만든다(텍스트·사진)",
+               b.get("ok") is True and n == 1 and b2.get("ok") is True and n2 == 1 and len(ev) == 2
+               and "retired" not in b and "retired" not in b2, f"{b} {b2} ev={ev}")
+    finally:
+        main._alarm_event = real_ev
+        main.RETIRED_PCS.discard(rid)
+        main.RETIRED_SEEN.pop(rid, None)
+
+
 def t_rule_one_place():
     import inspect
     srcs = {f.__name__: inspect.getsource(f) for f in (main.telegram_send, main.telegram_photo)}
@@ -190,7 +228,7 @@ def t_rule_one_place():
 
 
 def test_all():
-    run_all([t_text, t_photo, t_blocked, t_rule_one_place])
+    run_all([t_text, t_photo, t_blocked, t_retired, t_rule_one_place])
     finish("test_tg_hard", MIN_CHECKS)
 
 

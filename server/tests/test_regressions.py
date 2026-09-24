@@ -12,7 +12,7 @@ import time
 from _harness import (main, db, aiosqlite, ok, FakeWS, Req, run_all, finish,   # noqa: E402
                       HTTPException, ConnCounter)
 
-MIN_CHECKS = 34     # 실측 35검사 — 하나만 빠져도 잡힌다 (검사를 더하면 같이 올린다)
+MIN_CHECKS = 36     # 실측 37검사 — 하나만 빠져도 잡힌다 (검사를 더하면 같이 올린다)
 
 
 async def t_db_layer():
@@ -65,6 +65,22 @@ async def t_db_layer():
         async with c.execute("SELECT COUNT(*) FROM logs WHERE pc_id='PC-T3'") as cur:
             cnt = (await cur.fetchone())[0]
     ok("②-b 3000줄 상한이 지켜진다", cnt == 3000, "%d줄" % cnt)
+    # ★B-DB8 (2026-09-24 #114)★ 재시작(카운터 비움) 뒤 ★첫 줄★ 에 정리된다 — 초판은 0 부터 세어 재배포 사이 200줄 미만 PC 는 영영 안 잘렸다
+    async with aiosqlite.connect(db.DB_PATH) as c:
+        await c.executemany("INSERT INTO logs(pc_id, level, message, created_at) VALUES('PC-T4','info',?,?)",
+                            [("m%d" % i, "2026-09-11T00:00:00") for i in range(3050)])
+        await c.commit()
+    db._LOG_SINCE_PRUNE.clear()                       # = 서버 재시작
+    with ConnCounter() as cc:
+        await db.insert_log("PC-T4", "info", "재시작 뒤 첫 줄")
+    async with aiosqlite.connect(db.DB_PATH) as c:
+        async with c.execute("SELECT COUNT(*) FROM logs WHERE pc_id='PC-T4'") as cur:
+            cnt = (await cur.fetchone())[0]
+    ok("②-c 재시작 뒤 첫 줄에 3000줄 상한이 지켜진다(연결은 그대로 1개)", cnt == 3000 and cc.n == 1,
+       "%d줄 연결 %d" % (cnt, cc.n))
+    await db.insert_log("PC-T4", "info", "둘째 줄")
+    ok("②-d 첫 정리 뒤엔 다시 LOG_PRUNE_EVERY 줄마다(카운터 1)", db._LOG_SINCE_PRUNE.get("PC-T4") == 1,
+       str(db._LOG_SINCE_PRUNE.get("PC-T4")))
 
     await db.insert_command("t::PC-01", "start", {})
     async with aiosqlite.connect(db.DB_PATH) as c:
