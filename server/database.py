@@ -3,6 +3,7 @@ import aiosqlite
 import asyncio
 import os
 import json
+import math
 from datetime import datetime, timezone, timedelta
 
 DB_PATH = os.getenv("DB_PATH", "/data/macro_control.db")
@@ -1318,6 +1319,7 @@ KINA_REPLAY_MAX_AGE_H = 72     # 이보다 오래된 판매는 재전송 판정�
 #   2099 년 판독 시각·10^18 순번 하나가 저장되면 그 뒤 진짜 판독이 전부 «옛것» 이 돼 창고키나가 조용히 멈췄다.
 KINA_MAX = 10 ** 15            # 창고키나 상한(1000조) — 넘으면 받는 자리에서 400
 KINA_SEQ_MAX = 2 ** 53         # kina_seq 상한 — 넘으면 400
+KINA_HAND_MIN = 1_600_000_000  # why.hand_at(epoch 초) 하한 — 이보다 작으면 단위 사고(밀리초 아님·0)로 보고 400
 
 # ★char_info 세대 (2026-09-24 아이온2 — FV 스냅샷 폴백·#201 부류)★ char_info·kina_adjust 를 쓰는 곳 넷(upsert_char_info ·
 #   adjust_char_kina · heal_reverted_kina · delete_pc_all_data)이 ★커밋 직후★ 올린다. main.fv_snapshot 은 조립 ★전★ 세대를 적어 두고
@@ -1402,12 +1404,44 @@ async def _kina_ledger_replay(db, pc_id: str, received: int) -> tuple[int, list]
     return val, used
 
 
+# ★모르는 인계 시각 (2026-09-24 팜뷰 #201 r3e p6)★ — 차감에 why.hand_at(게임 안 인계 시각)이 없으면 예전대로 «판독 뒤에 기록된
+#   차감 = 판독이 모르는 판매» 로 친다(P0 v3 반증 ③: 판매 전 판독이 늦게 도착하면 판매를 되살렸다). 뒤집으려면(모르면 안 뺌) False.
+KINA_UNKNOWN_HAND_DEDUCT = True
+
+
+def _hand_srv(why_json) -> "str | None":
+    """차감 why 의 hand_at(epoch 초, 팜뷰가 아는 인계 시각) → 서버 시각 문자열(_TSF). 모르면 None.
+    (기록 시각으로 자르지 않는다 — 부르는 쪽이 at > read_at 인 행만 보므로 min(hand, at) > read_at ⇔ hand > read_at, 자르기는 효과가 없다.
+     팜뷰 시계가 빨라 인계가 미래로 오면 «판독 뒤 인계» = 뺀다 — 덜 빼는 쪽으로 틀리지 않는다. 하루 넘는 미래는 받는 곳에서 400.)"""
+    try:
+        h = (json.loads(why_json or "{}") or {}).get("hand_at")
+    except Exception:
+        return None
+    if isinstance(h, bool) or not isinstance(h, (int, float)) or not math.isfinite(h) or h < KINA_HAND_MIN:
+        return None
+    try:
+        hs = datetime.fromtimestamp(float(h), timezone.utc).strftime(_TSF)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return hs
+
+
 async def _kina_after_read(db, pc_id: str, read_at: str) -> tuple[int, list]:
-    """판독 시각 read_at(UTC) ★뒤에★ 기록된 차감의 합과 tid — 그 판독은 이 판매들을 모른다."""
+    """판독 시각 read_at(UTC) ★뒤에★ 기록된 차감의 합과 tid — 그 판독은 이 판매들을 모른다.
+    ★단 인계 시각(why.hand_at)이 판독 이전·같은 초면 이 합에서 제외한다 (2026-09-24 팜뷰 #201 r3e p6)★ — 기록 시각(at)은 팜뷰가
+    차감을 적은 때지 게임 안 인계 때가 아니다. 인계 → 창고 판독(판매 반영) → 팜뷰 차감 기록 → 판독 POST 도착(수집 중이던 것)
+    순서면 예전엔 그 판매를 «판독이 모르는 판매» 로 또 뺐다(두 번 빼기, 다음 판독까지). 인계 시각을 모르면 KINA_UNKNOWN_HAND_DEDUCT."""
     async with db.execute(
-        "SELECT tid, delta FROM kina_adjust WHERE pc_id=? AND at > ? ORDER BY at, rowid", (pc_id, read_at)
+        "SELECT tid, delta, why FROM kina_adjust WHERE pc_id=? AND at > ? ORDER BY at, rowid", (pc_id, read_at)
     ) as cur:
-        rows = [(r[0], int(r[1])) for r in await cur.fetchall()]
+        rows = []
+        for r in await cur.fetchall():
+            hs = _hand_srv(r[2])
+            if hs is not None and hs <= read_at:
+                continue                       # 판독 전에 인계 — 판독 값이 이미 반영했다
+            if hs is None and not KINA_UNKNOWN_HAND_DEDUCT:
+                continue
+            rows.append((r[0], int(r[1])))
     return sum(d for _t, d in rows), [t for t, _d in rows]
 
 

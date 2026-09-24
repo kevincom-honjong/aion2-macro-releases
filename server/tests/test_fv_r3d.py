@@ -3,6 +3,7 @@
 
   KR  FV 스냅샷 `progress.kina_read_age_s` — 마지막으로 ★받아들인★ 창고 판독(kina_read.read_srv) 뒤 몇 초. 정수, 모르면 10^9.
       merge 판독(사냥 끝 창고 읽기, 사고 569 — collected_at 을 안 바꾼다)에도 바뀐다. 재전송·판독 시각 없는 보고는 안 바꾼다.
+  P6  kina_adjust why.hand_at(인계 시각) — 인계가 판독 이전이면 늦게 도착한 판독 값에서 그 판매를 다시 안 뺀다(r3e p6)
   N   POST /api/fv/notify {key, text, pc_id?} — 팜뷰 → 주인님 텔레그램. 같은 key 한 번만 · 분/시간 상한 429 · 감사 장부
       (fv_notify 표, GET /api/fv/notify) · 카드 로그 한 줄.
 
@@ -15,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 45
+MIN_CHECKS = 54
 TOK = "fvsecret-r3d"
 H = {"X-FV-Token": TOK}
 C1 = [{"slot": 1, "name": "러닝"}]
@@ -39,7 +40,12 @@ async def _prog(pc):
     main.FV_TOKEN = TOK
     r = await main.fv_snapshot(Req({}, api_key=None, headers=H))
     assert r.status_code == 200, r.body
-    return ((_body(r).get("pcs") or {}).get(pc) or {}).get("progress") or {}
+    b = _body(r)
+    p = ((b.get("pcs") or {}).get(pc) or {}).get("progress") or {}
+    # _read_ts = 판독 시각(epoch) — 본문 만든 때(지금 − cache_age_s) − 나이. 느린 기계에서도 두 스냅샷 사이 흔들리지 않는다.
+    if isinstance(p.get("kina_read_age_s"), int):
+        p["_read_ts"] = main.time.time() - float(b.get("cache_age_s") or 0) - p["kina_read_age_s"]
+    return p
 
 
 async def t_kina_read_age():
@@ -64,12 +70,12 @@ async def t_kina_read_age():
                      "collected_at": U(-7200)})
     p2 = await _prog(pc)
     ok("KR-3 ★옛 판독 재전송은 kina_read_age_s 를 안 바꾼다(젊어지지도 늙지도)★",
-       p2.get("total_kina") == 700_000_000 and abs(int(p2.get("kina_read_age_s") or 0) - int(p["kina_read_age_s"])) <= 3,
+       p2.get("total_kina") == 700_000_000 and abs(p2["_read_ts"] - p["_read_ts"]) <= 2,
        f"{p2.get('total_kina')} {p['kina_read_age_s']}→{p2.get('kina_read_age_s')}")
     # 판독 시각이 없는 옛 매크로 보고 — 판독 표식 카드에선 안 바꾼다
     await _post(pc, {"total_kina": 650_000_000, "merge": True})
     p3 = await _prog(pc)
-    ok("KR-4 판독 시각 없는 보고는 kina_read_age_s 를 안 바꾼다", abs(int(p3.get("kina_read_age_s") or 0) - int(p["kina_read_age_s"])) <= 3,
+    ok("KR-4 판독 시각 없는 보고는 kina_read_age_s 를 안 바꾼다", abs(p3["_read_ts"] - p["_read_ts"]) <= 2,
        f"{p['kina_read_age_s']}→{p3.get('kina_read_age_s')}")
     # ★PC 시계 어긋남 (아이온2 M9)★ — 나이는 PC 시계 판독 시각(raw)이 아니라 서버 시계로 옮긴 read_srv 기준이다
     pcs = "PC-KR4"
@@ -103,6 +109,85 @@ async def t_kina_read_age():
     await _post(pc, {"total_kina": 100_000_000, "collected_at": U(-30)})
     p = await _prog(pc)
     ok("KR-7 카드 삭제 뒤엔 옛 판독 시각이 안 남는다(10^9)", p.get("kina_read_age_s") == UNK, str(p.get("kina_read_age_s")))
+
+
+# ── p6: 수집 중이던 판독이 판매 기록 뒤에 도착 ──
+def E(ds):
+    return (datetime.now(timezone.utc) + timedelta(seconds=ds)).timestamp()
+
+
+async def _sell(pc, delta, tid, **why):
+    main.FV_TOKEN = TOK
+    r = await main.fv_kina_adjust(Req({"pc_id": pc, "delta_kina": delta, "why": dict({"tid": tid}, **why)},
+                                      api_key=None, headers=H))
+    return r.status_code, _body(r)
+
+
+async def _stored(pc):
+    return (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
+
+
+async def t_p6():
+    # 판독 1 (한 시간 전) 1000 → 인계(200초 전) → 창고 판독 2(100초 전, 판매 반영 700) 가 수집 중 → 팜뷰가 지금 차감 기록 → 판독 2 도착
+    pc = "PC-P6A"
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-3600), "kina_seq": 1, "sent_at": U(0),
+                     "collected_at": U(-3600)})
+    code, b = await _sell(pc, -300_000_000, "tid-P6A", hand_at=E(-200))
+    ok("P6-0 대조 — 차감 200 (1000→700)", code == 200 and b.get("after") == 700_000_000, f"{code} {b}")
+    await _post(pc, {"total_kina": 700_000_000, "kina_read_at": U(-100), "kina_seq": 2, "sent_at": U(0), "collected_at": U(0)})
+    v = await _stored(pc)
+    ok("P6-a ★인계가 판독 전이면 늦게 온 판독(판매 반영 700)에서 또 빼지 않는다 — 옛 코드는 400(두 번 빼기)★", v == 700_000_000, str(v))
+
+    # 인계가 판독 ★뒤★ — 판독(1000, 판매 모름)이 늦게 와도 그 판매는 뺀다(P0 v3 반증 ③ 그대로)
+    pc = "PC-P6B"
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-3600), "kina_seq": 1, "sent_at": U(0),
+                     "collected_at": U(-3600)})
+    await _sell(pc, -300_000_000, "tid-P6B", hand_at=E(-50))
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-100), "kina_seq": 2, "sent_at": U(0), "collected_at": U(0)})
+    v = await _stored(pc)
+    ok("P6-b ★인계가 판독 뒤면 판독이 모르는 판매 — 뺀다(1000→700)★", v == 700_000_000, str(v))
+
+    # 인계 시각 모름(옛 팜뷰) — 예전대로 뺀다(KINA_UNKNOWN_HAND_DEDUCT)
+    pc = "PC-P6C"
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-3600), "kina_seq": 1, "sent_at": U(0),
+                     "collected_at": U(-3600)})
+    await _sell(pc, -300_000_000, "tid-P6C")
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-100), "kina_seq": 2, "sent_at": U(0), "collected_at": U(0)})
+    v = await _stored(pc)
+    ok("P6-c 인계 시각이 없으면 예전대로 판독 뒤 기록된 차감을 뺀다(1000→700)", v == 700_000_000 and db.KINA_UNKNOWN_HAND_DEDUCT is True, str(v))
+
+    # 팜뷰 시계가 빨라 인계가 «미래»(하루 안)로 와도 받는다 — 판독(100초 전)보다 뒤이므로 뺀다
+    pc = "PC-P6D"
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-3600), "kina_seq": 1, "sent_at": U(0),
+                     "collected_at": U(-3600)})
+    await _sell(pc, -300_000_000, "tid-P6D", hand_at=E(+3000))
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-100), "kina_seq": 2, "sent_at": U(0), "collected_at": U(0)})
+    ok("P6-d 미래 인계(팜뷰 시계 빠름, 하루 안)는 받고 «판독 뒤 인계» 로 뺀다(700)", await _stored(pc) == 700_000_000,
+       str(await _stored(pc)))
+
+    # 같은 초 — 인계와 판독이 같은 초면 «판독 전» 으로 친다(모르면 덜 빼는 쪽)
+    pc = "PC-P6E"
+    await _post(pc, {"total_kina": 1000_000_000, "kina_read_at": U(-3600), "kina_seq": 1, "sent_at": U(0),
+                     "collected_at": U(-3600)})
+    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=100)
+    await _sell(pc, -300_000_000, "tid-P6E", hand_at=base.timestamp() + 0.4)
+    await _post(pc, {"total_kina": 700_000_000, "kina_read_at": base.strftime("%Y-%m-%dT%H:%M:%S"), "kina_seq": 2,
+                     "sent_at": U(0), "collected_at": U(0)})
+    ok("P6-h 인계와 판독이 같은 초면 판독 전으로 친다 — 또 안 뺀다(700)", await _stored(pc) == 700_000_000, str(await _stored(pc)))
+
+    # 모양 검사 — 글자·bool·밀리초·음수·하루 넘는 미래는 400(조용히 버리면 두 번 빼기가 조용히 돌아온다), None 은 «모름»
+    got = []
+    for h in ("2026-09-24 10:00:00", True, E(0) * 1000, -5, E(2 * 86400)):
+        c, e = await _sell("PC-P6A", -1, f"tid-P6X-{len(got)}", hand_at=h)
+        got.append(c)
+    ok("P6-e why.hand_at 모양이 틀리면 400(글자·bool·밀리초·음수·하루 넘는 미래)", got == [400] * 5, str(got))
+    c, e = await _sell("PC-P6A", -1, "tid-P6N", hand_at=None)
+    ok("P6-f hand_at:null 은 «모름» 으로 받는다(200)", c == 200, f"{c} {e}")
+    import aiosqlite
+    async with aiosqlite.connect(db.DB_PATH) as cn:
+        async with cn.execute("SELECT why FROM kina_adjust WHERE tid='tid-P6A'") as cur:
+            w = json.loads((await cur.fetchone())[0])
+    ok("P6-g 장부 why 에 hand_at 이 그대로 남는다(감사)", abs(float(w.get("hand_at") or 0) - E(-200)) < 30, str(w))
 
 
 # ── notify ──
@@ -324,7 +409,7 @@ def t_routes():
 
 
 def test_all():
-    run_all([t_kina_read_age, t_notify, t_routes])
+    run_all([t_kina_read_age, t_p6, t_notify, t_routes])
 
 
 if __name__ == "__main__":

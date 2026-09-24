@@ -9,7 +9,7 @@ Railway 배포용
   DB_PATH             SQLite 파일 경로 (기본: /tmp/macro_control.db)
   PORT                uvicorn 포트 (Railway 자동 설정)
 """
-import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio, sqlite3, sys
+import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio, sqlite3, sys, math
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -31,7 +31,7 @@ from database import (
     release_updater_command_from_fv, updater_command_status,
     recent_updater_commands,
     pc_clock_get, pc_clock_put, mark_updater_handed,
-    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, char_info_gen, kina_adjust_row, log_has, fv_notify_get, fv_notify_record, fv_notify_recent, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
+    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, char_info_gen, kina_adjust_row, log_has, KINA_HAND_MIN, fv_notify_get, fv_notify_record, fv_notify_recent, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
     tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
@@ -16748,6 +16748,14 @@ def _fv_kina_body(body) -> tuple:
     tid = str(why.get("tid") or "").strip()
     if not tid:
         return None, "why.tid 가 필요합니다(거래 id — 같은 tid 는 두 번 빼지 않습니다)", None, None
+    # ★why.hand_at (2026-09-24 팜뷰 #201 r3e p6)★ — 게임 안 인계 시각(epoch 초, 선택). 판독이 인계 뒤면 그 판독 값에서 이 판매를
+    #   다시 안 뺀다(database._kina_after_read). 모르면 안 보낸다. 모양이 틀리면(글자·bool·밀리초·음수) 400 — 조용히 버리면 두 번 빼기가
+    #   조용히 돌아온다.
+    if "hand_at" in why and why["hand_at"] is not None:
+        _h = why["hand_at"]
+        if isinstance(_h, bool) or not isinstance(_h, (int, float)) or not math.isfinite(_h) \
+                or not KINA_HAND_MIN <= _h <= time.time() + 86400:
+            return None, "why.hand_at 은 인계 시각(epoch 초, 숫자)이어야 합니다 — 모르면 빼고 보내십시오", None, None
     return pc_id, delta, why, tid
 
 
