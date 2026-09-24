@@ -7,6 +7,7 @@
   · 서버 → 브라우저 대시보드(main.py 인라인 JS)   : cmd_history 항목 · state 카드 필드
   · 서버 → 팜뷰(farmview/fvdash.py)              : /api/fv/snapshot 의 pcs[].progress/today · global.totals
   · 서버 → 팜뷰(farmview/ocr.py, 2026-09-24 #125) : /api/fv/ocr/queue·stats·seed_bugs 봉투 · 항목 키
+  · 서버 → 매크로 텔레그램 중계(lc e32c01f TG7)   : reason 글자 muted·blocked·blocked_cap · 한국어 detail
 
 ★상대가 형식을 바꾸면 내 쪽 시험이 먼저 죽어야 한다★ — 그래서 여기서는 「있어야 하는 키」를
 값이 아니라 ★이름과 타입★ 으로 못 박는다. 키를 빼거나 타입을 바꾸는 변경은 CONTRACTS_대시보드.md 로.
@@ -15,7 +16,7 @@ import json
 
 from _harness import main, db, ok, FakeWS, Req, run_all, finish, TG_SENT   # noqa: E402
 
-MIN_CHECKS = 56
+MIN_CHECKS = 61
 
 
 def _has(d, keys):
@@ -240,8 +241,49 @@ async def t_ws_frames():
     ok("M→S WS log 프레임이 로그가 된다", any("hello" in (x.get("message") or "") for x in lg))
 
 
+async def t_tg_reasons():
+    """매크로(lc/report_module._tg_status, e32c01f) ← 서버 /telegram/send·photo 의 reason 글자 셋 — ★값을 못 박는다★.
+    매크로는 대소문자까지 그대로 맞춰 본다(TG_MUTED/TG_BLOCKED/TG_BLOCKED_CAP). 한국어 detail 도 옛 판이 맞춰 보므로 그대로."""
+    import time
+    from fastapi import HTTPException
+
+    def _j(r):
+        return json.loads(bytes(r.body))
+    saved = (main.tg_enabled, main.tenant_chat_id)
+    main.tg_enabled, main.tenant_chat_id = (lambda: True), (lambda t: "1")
+    main.KEY_TO_TENANT["ctr-blk"] = "ctrblk"
+    main.KILLED_TENANTS.add("ctrblk")
+    main._KILL_TG.pop("ctrblk", None)
+    try:
+        main._TG_MUTE[main.ns("main", "PC-C7")] = time.time() + 600
+        m = _j(await main.telegram_send("PC-C7", Req({"text": "보통 알림"})))
+        ok("M←S 음소거 = 200 reason \"muted\"(글자 그대로)", m.get("reason") == "muted" and m.get("ok") is False, str(m))
+        r = await main.telegram_send("PC-01", Req({"text": "보통 알림"}, api_key="ctr-blk"))
+        ok("M←S 차단 텍스트 = 403 {detail:\"차단 상태에서는 정지 안내만 전송됩니다\", reason:\"blocked\"}",
+           r.status_code == 403 and _j(r) == {"detail": "차단 상태에서는 정지 안내만 전송됩니다", "reason": "blocked"}, str(_j(r)))
+        rp = await main.telegram_photo("PC-01", Req({}, api_key="ctr-blk"), None)
+        ok("M←S 차단 사진 = 403 같은 문구·reason \"blocked\"(Forbidden 아님)",
+           rp.status_code == 403 and _j(rp) == {"detail": "차단 상태에서는 정지 안내만 전송됩니다", "reason": "blocked"}, str(_j(rp)))
+        main._KILL_TG["ctrblk"] = {"n": 3, "since": time.time()}
+        rc = await main.telegram_send("PC-01", Req({"text": "⛔ 정지"}, api_key="ctr-blk"))
+        ok("M←S 정지 안내 상한 = 429 {detail:\"정지 안내 전송 상한\", reason:\"blocked_cap\"}",
+           rc.status_code == 429 and _j(rc) == {"detail": "정지 안내 전송 상한", "reason": "blocked_cap"}, str(_j(rc)))
+        try:
+            await main.telegram_send("PC-01", Req({"text": "x"}, api_key="ctr-none"))
+            nr = "no-exception"
+        except HTTPException as e:
+            nr = (e.status_code, e.detail)
+        ok("M←S 미등록 키 = reason 없는 403(키 문제 → 매크로 폴백)", nr == (403, "Forbidden"), str(nr))
+    finally:
+        main.tg_enabled, main.tenant_chat_id = saved
+        main._TG_MUTE.pop(main.ns("main", "PC-C7"), None)
+        main.KEY_TO_TENANT.pop("ctr-blk", None)
+        main.KILLED_TENANTS.discard("ctrblk")
+        main._KILL_TG.pop("ctrblk", None)
+
+
 def test_all():
-    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_fv_kina_adjust, t_ws_frames, t_fv_ocr])
+    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_fv_kina_adjust, t_ws_frames, t_fv_ocr, t_tg_reasons])
     finish("test_contracts", MIN_CHECKS)
 
 

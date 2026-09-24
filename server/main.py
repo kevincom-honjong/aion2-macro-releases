@@ -11127,14 +11127,18 @@ def _tg_hard(text, hard=None, expect_reply: bool = False) -> bool:
 
 _TG_BLOCKED_DETAIL = "차단 상태에서는 정지 안내만 전송됩니다"   # ★문구 그대로★ — 1.1.1006 매크로(report_module._TG_BLOCKED_DETAIL)가 맞춰 본다
 _TG_BLOCKED_CAP_DETAIL = "정지 안내 전송 상한"
+# ★reason 글자 셋 = 계약 (CONTRACTS_대시보드 §7 · lc e32c01f report_module.TG_MUTED/TG_BLOCKED/TG_BLOCKED_CAP)★
+#   매크로는 대소문자까지 그대로 맞춰 보고, 빈 reason 은 «없음». 바꾸면 tests/test_contracts.py t_tg_reasons 가 빨간불.
+_TG_REASON_MUTED, _TG_REASON_BLOCKED, _TG_REASON_BLOCKED_CAP = "muted", "blocked", "blocked_cap"
 
 
-def _tg_blocked_resp(detail: str = _TG_BLOCKED_DETAIL, status: int = 403) -> JSONResponse:
+def _tg_blocked_resp(detail: str = _TG_BLOCKED_DETAIL, status: int = 403,
+                     reason: str = _TG_REASON_BLOCKED) -> JSONResponse:
     """★차단 테넌트 응답 — 기계가 읽는 reason (2026-09-24 TG7 클라이언트 반, lc 2a448ed)★
     {"detail": <예전 한국어 문구 그대로>, "reason": "blocked"}. 예전엔 FastAPI 기본 {"detail":…} 뿐이었고, 사진은
     detail 없는 403 "Forbidden" 이라 키 오류·probe 잠금과 못 갈라 매크로가 /telegram/status 를 다시 물었다.
     reason:"blocked" = 처리됨(직접 전송 금지). 그냥 403(Forbidden) = 키 문제 → 매크로는 직접 전송으로 폴백."""
-    return JSONResponse({"detail": detail, "reason": "blocked"}, status_code=status)
+    return JSONResponse({"detail": detail, "reason": reason}, status_code=status)
 
 
 def _tg_blocked_tenant(request: Request) -> Optional[str]:
@@ -11164,7 +11168,7 @@ async def _tg_mute_skip(tenant: str, pc_id: str, name: str, text: str, left: flo
     # ★ok:False 로 답한다★ — 매크로는 200 을 성공으로 읽어 「중계 전송」을
     #   ★안 나갔는데★ 로그에 찍었다(§A2: 로그가 증거인데 거짓이면 전부 무너진다).
     return JSONResponse({"ok": False, "muted": True,
-                         "reason": "muted",
+                         "reason": _TG_REASON_MUTED,
                          "minutes_left": round(left / 60.0, 1)})
 
 
@@ -11284,7 +11288,7 @@ async def telegram_send(pc_id: str, request: Request):
             _rec = {"n": 0, "since": _nw}
             _KILL_TG[cand] = _rec
         if _rec["n"] >= 3:
-            return _tg_blocked_resp(_TG_BLOCKED_CAP_DETAIL, 429)   # 상한도 차단 — reason:"blocked"(폴백하면 차단이 뚫린다)
+            return _tg_blocked_resp(_TG_BLOCKED_CAP_DETAIL, 429, _TG_REASON_BLOCKED_CAP)   # 상한도 차단(폴백하면 뚫린다)
         _rec["n"] += 1
         tenant = cand
     chat = tenant_chat_id(tenant)

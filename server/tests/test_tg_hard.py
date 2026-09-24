@@ -149,8 +149,8 @@ async def t_blocked():
             for _ in range(2):                              # 시간당 3 — 1개는 H-4b 가 썼다
                 await main.telegram_send("PC-01", Req({"text": "⛔ 정지"}, api_key="blk-key"))
             code, b = await _call(main.telegram_send("PC-01", Req({"text": "⛔ 정지"}, api_key="blk-key")))
-            ok("H-4d ★정지 안내 상한 429 도 reason: blocked★(detail 예전 그대로) — 폴백하면 차단이 뚫린다",
-               code == 429 and b == {"detail": "정지 안내 전송 상한", "reason": "blocked"} and len(SENT) == n0 + 3, f"{code} {b}")
+            ok("H-4d ★정지 안내 상한 429 는 reason: blocked_cap★(detail 예전 그대로) — 폴백하면 차단이 뚫린다",
+               code == 429 and b == {"detail": "정지 안내 전송 상한", "reason": "blocked_cap"} and len(SENT) == n0 + 3, f"{code} {b}")
             n1 = len(SENT)
             ct, bt = await _call(main.telegram_send("PC-01", Req({"text": "⛔ x"}, api_key="nope-key")))
             cp, bp = await _call(_rawpic({"caption": "캡차", "expect_reply": "1"}, pc="PC-01", api_key="nope-key"))

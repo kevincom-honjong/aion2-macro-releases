@@ -54,11 +54,12 @@
   - `200 {ok:true, message_id}` = 보냈다.
   - `200 {ok:false, muted:true, reason:"muted", minutes_left}` = ★처리됨(보내지 않기로 결정됨)★ — 클라이언트는 ★자기 봇으로 직접 보내지 않는다★. 생략은 그 PC 로그에 «[텔레그램] 중계 생략(음소거 N분 남음)».
   - ★`403 {detail:"차단 상태에서는 정지 안내만 전송됩니다", reason:"blocked"}`★ (차단 테넌트 — 만료·킬스위치) = ★처리됨★, 직접 보내지 않는다. 텍스트·사진 ★같은 문구·같은 reason★(2026-09-24 — 예전 사진은 detail 없는 `Forbidden` 이라 키 오류와 못 갈라 매크로가 `/telegram/status` 를 다시 물었다). 차단 테넌트는 ⛔ 로 시작하는 정지 안내 ★텍스트★만 통과(사진은 늘 이 403).
-  - ★`429 {detail:"정지 안내 전송 상한", reason:"blocked"}`★ = 차단 테넌트의 ⛔ 정지 안내 시간당 3 초과 — 이것도 차단이다(처리됨). 자기 봇으로 폴백하면 상한이 뚫린다.
+  - ★`429 {detail:"정지 안내 전송 상한", reason:"blocked_cap"}`★ = 차단 테넌트의 ⛔ 정지 안내 시간당 3 초과 — 이것도 차단이다(처리됨). 자기 봇으로 폴백하면 상한이 뚫린다.
+  - ★`reason` 글자 셋 = 계약: `"muted"` · `"blocked"` · `"blocked_cap"`★ (lc e32c01f `report_module.TG_MUTED`·`TG_BLOCKED`·`TG_BLOCKED_CAP`) — 매크로는 ★대소문자까지 그대로★ 맞춰 보고, 빈 reason 은 «없음». 서버 정본 `main._TG_REASON_*` · 시험 `tests/test_contracts.py` t_tg_reasons(값을 못 박음, 변이 7/7).
   - ★한국어 `detail` 문구는 그대로 둔다★ — 1.1.1006 이전 판 매크로가 문구로 맞춰 본다(`lc/report_module._TG_BLOCKED_DETAIL`). 새 판은 `reason` 을 먼저 본다.
   - 그냥 `403 {detail:"Forbidden"}`(reason 없음) = ★키 문제★(미등록 키·probe 잠금 IP) — 차단이 아니다 → 직접 전송 폴백. probe 잠금 IP 에는 차단 키라도 reason 을 안 준다(키 추측 오라클 방지, 2026-08-06).
   - 직접 전송 폴백은 ★그 밖★ 만: 네트워크 오류·타임아웃·reason 없는 403·다른 4xx·`503 {reason:"disabled"}`(중계 꺼짐)·`502 {reason:"send_failed"}`·그 밖의 5xx.
-- ★C4-b 문구 (SHARED_ISSUES_아이온2 «TG7 … C4-b 에 넣을 문구» 를 여기 정본으로)★: 매크로는 `send_telegram_text(force=True)` 와 답 기다리는 사진(캡차 `expect_reply=1`)에만 `hard` 를 싣는다(텍스트 본문 `true` / 사진 폼 `"1"`), 그 밖엔 칸 자체가 없다. 매크로가 «처리됨» 으로 보고 폴백하지 않는 응답 = 200 + (`reason:"muted"` 또는 `muted:true`) → «음소거로 생략» · (403·429) + `reason:"blocked"` (옛 판은 텍스트 403 정지 안내 문구) → «차단으로 생략». 그 밖은 직접 전송 폴백. 서버 판정 한 곳: `main._tg_hard`(음소거 뚫기) · `main._tg_blocked_tenant`·`_tg_blocked_resp`(차단 응답).
+- ★C4-b 문구 (SHARED_ISSUES_아이온2 «TG7 … C4-b 에 넣을 문구» 를 여기 정본으로)★: 매크로는 `send_telegram_text(force=True)` 와 답 기다리는 사진(캡차 `expect_reply=1`)에만 `hard` 를 싣는다(텍스트 본문 `true` / 사진 폼 `"1"`), 그 밖엔 칸 자체가 없다. 매크로가 «처리됨» 으로 보고 폴백하지 않는 응답 = 200 + (`reason:"muted"` 또는 `muted:true`) → «음소거로 생략» · 403 + `reason:"blocked"` / 429 + `reason:"blocked_cap"` (옛 판은 텍스트 403 정지 안내 문구) → «차단으로 생략». 그 밖은 직접 전송 폴백. 서버 판정 한 곳: `main._tg_hard`(음소거 뚫기) · `main._tg_blocked_tenant`·`_tg_blocked_resp`(차단 응답).
 - 음소거를 뚫는 것 — 규칙은 서버 `main._tg_hard` 한 곳(두 창구 같이):
   - 본문(사진은 캡션)이 `⛔`·`🚨` 로 시작 (2026-09-11부터).
   - ★`hard:true`★ — 텍스트는 JSON 본문 `"hard": true`(1·"1"·"true"·"yes" 도), 사진은 폼 `hard=1`. 주인님 «음소거라도 올리기» — 매크로 1.1.1006 이 강제 알람(지역차단·재접속 중 캡차·스트리밍 비번 등)에 싣는다. false·0·"0"·"false"·빈 값은 못 뚫는다.
