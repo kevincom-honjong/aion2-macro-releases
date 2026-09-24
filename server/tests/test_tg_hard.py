@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 15
+MIN_CHECKS = 20
 SENT: list = []
 
 
@@ -113,28 +113,64 @@ async def t_photo():
         ok("H-3d 음소거 + ⛔ 캡션 사진 → 중계", b.get("ok") is True and n == 1, str(b))
 
 
+async def _call(coro):
+    """(상태코드, 본문) — JSONResponse 든 HTTPException 이든. 기본 HTTPException 의 detail 은 "Forbidden"."""
+    try:
+        r = await coro
+        return r.status_code, _j(r)
+    except HTTPException as e:
+        return e.status_code, {"detail": e.detail}
+
+
+def _rawpic(form, pc="PC-31", api_key="testkey"):
+    return main.telegram_photo(pc, _Form(form, api_key=api_key), _UF(bytes([0x89]) + b"PNG" + bytes(10)))
+
+
+_BLK = "차단 상태에서는 정지 안내만 전송됩니다"   # ★문구 그대로★ — 1.1.1006 매크로가 맞춰 본다(lc report_module._TG_BLOCKED_DETAIL)
+
+
 async def t_blocked():
-    """③ 차단 테넌트 — hard 로 못 뚫는다. ⛔ 정지 안내만(시간당 3). 사진은 _require_api_key 에서 403."""
+    """③ 차단 테넌트 — hard 로 못 뚫는다. ⛔ 정지 안내만(시간당 3). ★차단 응답엔 reason:"blocked"(2026-09-24 TG7 클라이언트 반)★ —
+    예전 한국어 detail 은 그대로, 사진도 같은 문구로 키 오류(그냥 403 Forbidden)와 갈린다."""
     main.KEY_TO_TENANT["blk-key"] = "blk"
     main.KILLED_TENANTS.add("blk")
     main._KILL_TG.pop("blk", None)
     try:
         with _Env():
             n0 = len(SENT)
-            code = None
-            try:
-                await main.telegram_send("PC-01", Req({"text": "지역 차단", "hard": True}, api_key="blk-key"))
-            except HTTPException as e:
-                code = e.status_code
-            ok("H-4 ★차단 테넌트 + hard:true(⛔ 아님) → 403, 안 보냄★", code == 403 and len(SENT) == n0, str(code))
+            code, b = await _call(main.telegram_send("PC-01", Req({"text": "지역 차단", "hard": True}, api_key="blk-key")))
+            ok("H-4 ★차단 테넌트 + hard:true(⛔ 아님) → 403 {detail: 예전 문구, reason: blocked}, 안 보냄★",
+               code == 403 and b == {"detail": _BLK, "reason": "blocked"} and len(SENT) == n0, f"{code} {b}")
             r = await main.telegram_send("PC-01", Req({"text": "⛔ 이용이 중지되었습니다", "hard": True}, api_key="blk-key"))
             ok("H-4b 차단 테넌트 + ⛔ 정지 안내 → 중계(예전 그대로)", _j(r).get("ok") is True and len(SENT) == n0 + 1, str(_j(r)))
-            code = None
+            code, b = await _call(_rawpic({"caption": "캡차", "expect_reply": "1", "hard": "1"}, pc="PC-01", api_key="blk-key"))
+            ok("H-4c ★차단 테넌트 캡차 사진 → 403 {detail: 텍스트와 같은 문구, reason: blocked}★(Forbidden 아님)",
+               code == 403 and b == {"detail": _BLK, "reason": "blocked"} and len(SENT) == n0 + 1, f"{code} {b}")
+            for _ in range(2):                              # 시간당 3 — 1개는 H-4b 가 썼다
+                await main.telegram_send("PC-01", Req({"text": "⛔ 정지"}, api_key="blk-key"))
+            code, b = await _call(main.telegram_send("PC-01", Req({"text": "⛔ 정지"}, api_key="blk-key")))
+            ok("H-4d ★정지 안내 상한 429 도 reason: blocked★(detail 예전 그대로) — 폴백하면 차단이 뚫린다",
+               code == 429 and b == {"detail": "정지 안내 전송 상한", "reason": "blocked"} and len(SENT) == n0 + 3, f"{code} {b}")
+            n1 = len(SENT)
+            ct, bt = await _call(main.telegram_send("PC-01", Req({"text": "⛔ x"}, api_key="nope-key")))
+            cp, bp = await _call(_rawpic({"caption": "캡차", "expect_reply": "1"}, pc="PC-01", api_key="nope-key"))
+            ok("H-4e 미등록 키 → 그냥 403 Forbidden(reason 없음 = 매크로 폴백) — 텍스트·사진 둘 다",
+               (ct, bt, cp, bp) == (403, {"detail": "Forbidden"}, 403, {"detail": "Forbidden"}) and len(SENT) == n1,
+               f"{ct} {bt} / {cp} {bp}")
+            _pb = main._key_probe_blocked
+            main._key_probe_blocked = lambda ip: True
             try:
-                await _pic({"caption": "캡차", "expect_reply": "1", "hard": "1"}, pc="PC-01", api_key="blk-key")
-            except HTTPException as e:
-                code = e.status_code
-            ok("H-4c 차단 테넌트 캡차 사진(expect_reply·hard) → 403", code == 403 and len(SENT) == n0 + 1, str(code))
+                ct, bt = await _call(main.telegram_send("PC-01", Req({"text": "⛔ x"}, api_key="blk-key")))
+                cp, bp = await _call(_rawpic({"caption": "캡차"}, pc="PC-01", api_key="blk-key"))
+            finally:
+                main._key_probe_blocked = _pb
+            ok("H-4f ★probe 잠금 IP 는 차단 키라도 그냥 403★(reason 을 주면 키 추측 오라클 — 2026-08-06 critical)",
+               (ct, bt, cp, bp) == (403, {"detail": "Forbidden"}, 403, {"detail": "Forbidden"}) and len(SENT) == n1,
+               f"{ct} {bt} / {cp} {bp}")
+            main.KILLED_TENANTS.discard("blk")
+            code, b = await _call(_rawpic({"caption": "캡차", "expect_reply": "1"}, pc="PC-01", api_key="blk-key"))
+            ok("H-4g 차단이 풀리면 같은 키 사진이 그대로 나간다(reason 갈래가 정상 키를 안 먹는다)",
+               code == 200 and b.get("ok") is True and len(SENT) == n1 + 1, f"{code} {b}")
     finally:
         main.KEY_TO_TENANT.pop("blk-key", None)
         main.KILLED_TENANTS.discard("blk")
@@ -148,6 +184,9 @@ def t_rule_one_place():
        all("_tg_hard(" in v and 'startswith(("⛔", "🚨"))' not in v for v in srcs.values())
        and main._tg_hard("x", True) and main._tg_hard("x", None, True) and not main._tg_hard("x") and main._tg_hard(" ⛔x"),
        str({k: "_tg_hard(" in v for k, v in srcs.items()}))
+    ok("H-6b 차단 판정·응답도 한 곳 — 두 창구가 _tg_blocked_tenant·_tg_blocked_resp 를 부르고 문구를 따로 안 쓴다",
+       all("_tg_blocked_tenant(" in v and "_tg_blocked_resp(" in v and "정지 안내만 전송됩니다" not in v for v in srcs.values()),
+       str({k: ("_tg_blocked_tenant(" in v, "_tg_blocked_resp(" in v) for k, v in srcs.items()}))
 
 
 def test_all():

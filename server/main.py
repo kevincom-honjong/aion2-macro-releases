@@ -11125,6 +11125,32 @@ def _tg_hard(text, hard=None, expect_reply: bool = False) -> bool:
     return bool(expect_reply)
 
 
+_TG_BLOCKED_DETAIL = "차단 상태에서는 정지 안내만 전송됩니다"   # ★문구 그대로★ — 1.1.1006 매크로(report_module._TG_BLOCKED_DETAIL)가 맞춰 본다
+_TG_BLOCKED_CAP_DETAIL = "정지 안내 전송 상한"
+
+
+def _tg_blocked_resp(detail: str = _TG_BLOCKED_DETAIL, status: int = 403) -> JSONResponse:
+    """★차단 테넌트 응답 — 기계가 읽는 reason (2026-09-24 TG7 클라이언트 반, lc 2a448ed)★
+    {"detail": <예전 한국어 문구 그대로>, "reason": "blocked"}. 예전엔 FastAPI 기본 {"detail":…} 뿐이었고, 사진은
+    detail 없는 403 "Forbidden" 이라 키 오류·probe 잠금과 못 갈라 매크로가 /telegram/status 를 다시 물었다.
+    reason:"blocked" = 처리됨(직접 전송 금지). 그냥 403(Forbidden) = 키 문제 → 매크로는 직접 전송으로 폴백."""
+    return JSONResponse({"detail": detail, "reason": "blocked"}, status_code=status)
+
+
+def _tg_blocked_tenant(request: Request) -> Optional[str]:
+    """check_api_key 가 None 일 때 — ★등록된 키 + 차단된 테넌트★면 그 테넌트, 아니면 None(=키 문제).
+    probe 잠금 IP 는 None(2026-08-06 2라운드 critical: 이 갈래가 레이트리밋을 우회하면 키 추측 오라클이 다시 열린다).
+    /telegram/send·/telegram/photo 가 같이 쓴다(§A12)."""
+    if _key_probe_blocked(_client_ip(request)):
+        return None
+    supplied = request.headers.get("X-Api-Key", "")
+    cand = None
+    for _k, _tn in KEY_TO_TENANT.items():
+        if _ct_eq(supplied, _k):
+            cand = _tn
+    return cand if (cand and tenant_blocked(cand)) else None
+
+
 async def _tg_mute_skip(tenant: str, pc_id: str, name: str, text: str, left: float) -> JSONResponse:
     """음소거로 생략 — 그 PC 카드에 남기고 200 {ok:false, reason:"muted"}(= 처리됨. 클라이언트는 ★직접 보내지 않는다★)."""
     print(f"[tg-mute] {name} 음소거 중({left/60:.0f}분 남음) — 전송 생략: {text[:60]}", flush=True)
@@ -11236,16 +11262,9 @@ async def telegram_send(pc_id: str, request: Request):
         #   probe 차단 IP는 여기서도 거부하고, '등록된 키 + 차단된 테넌트'만 통과시킨다.
         #   미등록 키는 위 check_api_key가 이미 실패로 계상했으므로 그냥 403.
         #   전송처는 어차피 아래에서 그 테넌트 '자신의' chat_id로만 조회되므로 남용 여지 없음.★
-        ip = _client_ip(request)
-        if _key_probe_blocked(ip):
-            raise HTTPException(status_code=403)
-        supplied = request.headers.get("X-Api-Key", "")
-        cand = None
-        for _k, _tn in KEY_TO_TENANT.items():
-            if _ct_eq(supplied, _k):
-                cand = _tn
-        if not (cand and tenant_blocked(cand)):
-            raise HTTPException(status_code=403)
+        cand = _tg_blocked_tenant(request)
+        if not cand:
+            raise HTTPException(status_code=403)          # 키 문제(미등록·probe 잠금) — reason 없음 = 매크로 폴백
         # ★정지 안내만 통과시킨다(2026-08-07 리뷰)★ — 예산을 다른 알림(회랑 진행·복구 경고 등)이
         #   먼저 써버리면 정작 '이용이 중지되었습니다'가 429로 잘려 이용자는 이유도 모른 채 멈춘다.
         #   _block()의 안내는 "⛔"로 시작한다.
@@ -11256,7 +11275,7 @@ async def telegram_send(pc_id: str, request: Request):
         if not isinstance(_peek, dict):      # 본문이 [] / "x" / 123이면 .get에서 500 (리뷰 minor)
             _peek = {}
         if not str(_peek.get("text") or "").lstrip().startswith("⛔"):
-            raise HTTPException(status_code=403, detail="차단 상태에서는 정지 안내만 전송됩니다")
+            return _tg_blocked_resp()                     # 403 {"detail": 예전 문구, "reason": "blocked"}
         # ★남용 상한(2026-08-06 감사): 이 예외는 '정지 안내 몇 줄'을 위한 것이다.
         #   상한이 없으면 킬된 지인이 소유자 봇을 무제한 중계기로 계속 쓴다.★
         _rec = _KILL_TG.get(cand)
@@ -11265,7 +11284,7 @@ async def telegram_send(pc_id: str, request: Request):
             _rec = {"n": 0, "since": _nw}
             _KILL_TG[cand] = _rec
         if _rec["n"] >= 3:
-            raise HTTPException(status_code=429, detail="정지 안내 전송 상한")
+            return _tg_blocked_resp(_TG_BLOCKED_CAP_DETAIL, 429)   # 상한도 차단 — reason:"blocked"(폴백하면 차단이 뚫린다)
         _rec["n"] += 1
         tenant = cand
     chat = tenant_chat_id(tenant)
@@ -11309,7 +11328,13 @@ async def telegram_send(pc_id: str, request: Request):
 async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(...)):
     """매크로 → 텔레그램 사진 중계(캡차 스샷). expect_reply면 답장 라우팅 대상으로 등록."""
     _recv = time.time()                       # #124 수신 시각(사진은 업로드를 다 받은 뒤 — FastAPI 가 먼저 읽는다)
-    tenant = _require_api_key(request)
+    tenant = check_api_key(request)
+    if not tenant:
+        # ★차단 테넌트 사진은 구별되는 403 (2026-09-24 TG7)★ — 예전 _require_api_key 는 detail 없는 "Forbidden" 이라
+        #   키 오설정 PC 와 못 갈랐다. 차단이면 사진은 안 보낸다(⛔ 정지 안내는 텍스트 창구만) + reason:"blocked".
+        if _tg_blocked_tenant(request):
+            return _tg_blocked_resp()
+        raise HTTPException(status_code=403)
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
         return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
