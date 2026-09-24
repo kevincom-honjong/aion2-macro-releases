@@ -34,7 +34,7 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 268     # 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
+MIN_CHECKS = 272     # 2026-09-24 두 형식 +4(I1-e 400 셋 더 · I1-e2 ts 방식) · 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
 
 KEY = "testkey"
 KEY2 = "ocrkey2"       # 두 번째 테넌트(격리 시험) — 헤더라 ASCII
@@ -443,9 +443,12 @@ def t_cursor():
     ok("I1-c 라벨 하나 → 그 한 장만 · 커서 전진", j2["labels"] == {"cur": {hashlib.sha1(img("c1")).hexdigest(): "하나"}}
        and j2["cursor"] > c0, str(j2))
     ok("I1-d 새 커서로 다시 물으면 비었다", not labels(j2["cursor"]).json()["labels"])
-    for bad in ("abc", "-1", "1.5"):
+    for bad in ("abc", "-1", "-1.5", "nan", "inf", "1e"):
         r = labels(bad)
         ok("I1-e since=%s → 400" % bad, r.status_code == 400, str(r.status_code))
+    r = labels("1.5")        # 2026-09-24 두 형식 — 실수 since 는 매크로 ts 방식(CONTRACT_OCR §3-b)이지 400 이 아니다
+    ok("I1-e2 since=1.5 → ts 방식 200 {labels:[...], mode:ts}", r.status_code == 200 and r.json().get("mode") == "ts"
+       and isinstance(r.json().get("labels"), list), str(r.status_code))
     j3 = labels(j2["cursor"] + 10 ** 6).json()
     ok("I1-f 커서가 서버보다 앞이면 reset=true 로 처음부터(서버 DB 가 새로 생긴 경우)",
        j3["reset"] is True and j3["labels"].get("cur") and j3["cursor"] == j2["cursor"], str(j3)[:120])

@@ -709,7 +709,7 @@ asyncio.run(main())
 회랑 스냅샷이 하나도 없으면 `null`(모름). 옛 팜뷰(fvdash-1.20 이하)는 이걸 `0` 으로 보인다 — 1.21 부터 `null` 을 통과시킨다.
 
 ### D. OCR 라벨 — `/api/fv/ocr/*` (주인님 장부 #125 · 팜뷰 «OCR» 탭)
-> ⚠ **코드에 넣었다(미배포, 2026-09-24 `server/ocr_label.py`) — 배포 전엔 404.** 배포되면 이 줄을 지운다. 에러 모양은 다른 `/api/fv/*` 와 같다(`{ok:false, error, err, code}`).
+> 배포됨(v4 9f27627, 2026-09-24 `server/ocr_label.py`). 에러 모양은 다른 `/api/fv/*` 와 같다(`{ok:false, error, err, code}`). `seed_bugs`·자동 씨앗은 **코드에 넣었다(미배포, 2026-09-24)** — 배포 전엔 `seed_bugs` 가 404.
 대시보드 `/ocr/label` 화면(세션 로그인, 관제컴 브라우저·폰)과 **같은 저장소**를 쓴다 — 어느 쪽에서 라벨을 달아도 같이 세진다.
 인증은 다른 `/api/fv/*` 와 같다(`X-FV-Token`, 테넌트 = `FV_TENANT`). 캡차 이미지는 저장소에 아예 없다(서버가 `site=captcha*` 제출을 거절).
 
@@ -725,6 +725,7 @@ asyncio.run(main())
 | `POST /api/fv/ocr/undo` | `{}` | `{"ok": true, "id", "status", "label"}` — **이 테넌트의** 마지막 저장/나쁨/고치기 하나를 되돌린다(웹 화면에서 한 것도 포함). 되돌려 대기가 되면 대기열 맨 앞. 되돌릴 게 없으면 404 |
 | `GET /api/fv/ocr/history?limit=30` (1~200) | — | `{"items": [Item…]}` — 최근 라벨/나쁨, 새것부터 |
 | `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `*_rate` 는 비교한 게 없으면 `null` |
+| `POST /api/fv/ocr/seed_bugs` (2026-09-24) | `{}` | `{"ok": true, "scanned", "added", "exists", "skipped": {"<까닭>": n}, "full", "more"}` — `/bugs` 의 `ocrdiff_*`·`oddfail_*` 크롭을 큐로(아래 «씨앗»). 몇 번 불러도 같다(`added` 0 · `exists` n). 같은 테넌트 씨앗이 도는 중이면 `{"ok": false, "busy": true, …}` |
 
 `Item`:
 ```json
@@ -738,6 +739,7 @@ asyncio.run(main())
 - `label` 은 앞뒤 공백을 걷고 NFC 로 맞춘 글자(최대 200자). 빈 `text` 는 400.
 - 에러 모양은 다른 `/api/fv/*` 와 같다: `{"ok": false, "error": "...", "err": "...", "code": N}` — 400(본문·id)·404(없는 묶음·이미지)·409(skip 대상 아님).
 - 실시간: 대시보드 화면은 `queue` 를 2초마다 다시 읽는다. 팜뷰도 같은 폴링이면 된다(`pending` 이 줄면 다른 쪽에서 단 것).
+- **씨앗(2026-09-24, 주인님 #125 «탭이 뜨자마자 판별»)** — 매크로가 예전부터 `/bugs` 로 올리던 로컬 OCR 불일치 크롭이 판별 거리다. ① `queue` 를 서버가 켜진 뒤 ★처음★ 읽을 때 씨앗이 저절로 돈다(그 응답에 이미 들어 있다) ② `seed_bugs` 로 다시 돌릴 수 있다 ③ 그 뒤 `/bugs` 로 새로 올라오는 것은 올라오는 순간 큐로 들어간다. site = 파일 이름의 항목(`ocrdiff_<site>_L<로컬>_G<제미나이>` · `oddfail_narrow` → `odd_energy` · `oddfail_wide` → `odd_energy_wide`), `gemini`·`local` 은 파일 이름에서 되읽은 **힌트**(모르는 글자 `?`), `prompt` 는 `seed:/bugs <파일 이름>`, `pc` 는 올린 PC. 캡차 이름·깨진 PNG 는 넣지 않는다. 같은 그림은 두 번 안 들어간다.
 
 ## 2026-09-23 (밤3) 추가 — `[알람]` 이벤트 (주인님 #128 팜뷰 알람 목소리, 대시보드 세션)
 매크로가 `/telegram/send/{pc}`·`/telegram/photo/{pc}` 로 알람을 보내면, 서버가 ★텔레그램으로 실제로 내보내는 순간★ 그 PC 로그에 한 줄을 쓴다 → `/api/fv/events` 에 `type:"log"` 로 나온다(더하기만, 새 엔드포인트 없음).

@@ -6,6 +6,7 @@
   · 서버 → 매크로                                : 명령 봉투 {type:"command", id, command, args(+_by)}
   · 서버 → 브라우저 대시보드(main.py 인라인 JS)   : cmd_history 항목 · state 카드 필드
   · 서버 → 팜뷰(farmview/fvdash.py)              : /api/fv/snapshot 의 pcs[].progress/today · global.totals
+  · 서버 → 팜뷰(farmview/ocr.py, 2026-09-24 #125) : /api/fv/ocr/queue·stats·seed_bugs 봉투 · 항목 키
 
 ★상대가 형식을 바꾸면 내 쪽 시험이 먼저 죽어야 한다★ — 그래서 여기서는 「있어야 하는 키」를
 값이 아니라 ★이름과 타입★ 으로 못 박는다. 키를 빼거나 타입을 바꾸는 변경은 CONTRACTS_대시보드.md 로.
@@ -14,7 +15,7 @@ import json
 
 from _harness import main, db, ok, FakeWS, Req, run_all, finish, TG_SENT   # noqa: E402
 
-MIN_CHECKS = 45
+MIN_CHECKS = 56
 
 
 def _has(d, keys):
@@ -173,6 +174,34 @@ async def t_fv_kina_adjust():
     ok("FV→S 거부된 시도는 값을 안 바꾼다", (await db.get_char_info("PC-C1"))["total_kina"] == 0)
 
 
+async def t_fv_ocr():
+    """팜뷰 OCR 탭(farmview/ocr.py)이 읽는 모양 — FV_API «2026-09-23 (밤) 추가 › D» + 2026-09-24 seed_bugs."""
+    import ocr_label as OL
+    main.FV_TOKEN, main.FV_TENANT = "fvsecret", "main"
+    H = {"X-FV-Token": "fvsecret"}
+
+    def _j(r):
+        return json.loads(bytes(r.body))
+    r = await OL.fv_ocr_queue(Req(api_key=None, headers=H), limit="30")
+    q = _j(r)
+    ok("S→FV ocr/queue 봉투 {pending(int), items(list), suggest(dict), now}",
+       _has(q, ("pending", "items", "suggest", "now")) and isinstance(q["pending"], int) and isinstance(q["items"], list)
+       and isinstance(q["suggest"], dict), str(sorted(q)))
+    await OL.submit_core("main", "PC-C9", "kina", b"\x89PNG\r\n\x1a\n" + b"c" * 40, "0f0f0f0f0f0f0f0f", None, "p", "12", "13")
+    q = _j(await OL.fv_ocr_queue(Req(api_key=None, headers=H), limit="30"))
+    it = next((x for x in q["items"] if x.get("pc") == "PC-C9"), None)
+    ok("S→FV ocr/queue 항목 키(id·img·site·count·gemini·local·pc)",
+       it is not None and _has(it, ("id", "img", "site", "count", "gemini", "local", "pc")), str(it))
+    st = _j(await OL.fv_ocr_stats(Req(api_key=None, headers=H)))
+    ok("S→FV ocr/stats 봉투 {sites, disk_bytes, disk_cap, disk_hard_cap}",
+       _has(st, ("sites", "disk_bytes", "disk_cap", "disk_hard_cap")), str(sorted(st)))
+    sb = _j(await OL.fv_ocr_seed_bugs(Req(api_key=None, headers=H)))
+    ok("S→FV ocr/seed_bugs 봉투 {ok, scanned, added, exists, skipped(dict), full, more}",
+       _has(sb, ("ok", "scanned", "added", "exists", "skipped", "full", "more")) and isinstance(sb["skipped"], dict), str(sb))
+    r0 = await OL.fv_ocr_queue(Req(api_key=None), limit="30")
+    ok("S→FV ocr 토큰 없으면 401", r0.status_code == 401, str(r0.status_code))
+
+
 async def t_ws_frames():
     """매크로 → 서버 WS 프레임 어휘: status / log / ack / pong 을 서버가 받는다."""
     import asyncio
@@ -212,7 +241,7 @@ async def t_ws_frames():
 
 
 def test_all():
-    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_fv_kina_adjust, t_ws_frames])
+    run_all([t_macro_to_server, t_server_to_dashboard, t_server_to_farmview, t_fv_kina_adjust, t_ws_frames, t_fv_ocr])
     finish("test_contracts", MIN_CHECKS)
 
 

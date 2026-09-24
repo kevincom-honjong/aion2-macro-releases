@@ -8,13 +8,14 @@
   I4 FV pc:"all" 은 400 · 8대 이상은 confirm_fleet 필요             (CONTRACTS_대시보드 #3 · 팜뷰 fvdash.send_cmd)
   I5 /parsec/map 쓰기는 세션 로그인으로만(API 키·토큰 401)          (CONTRACTS_대시보드 #2 · 주인님 결정 2026-09-13)
   I6 순환 정보수집 상한이 6캐릭 28.5분(PC-07 실측)을 넘긴다          (SHARED_ISSUES_아이온2 #1)
+  I7 팜뷰 ocr.py 가 부르는 /api/fv/ocr/* 가 서버에 전부 있다(메서드까지) (FV_API «밤 › D» · 2026-09-24 #125)
 """
 import os
 import sys
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 17
+MIN_CHECKS = 24
 
 
 async def t_ack_cancelled():
@@ -110,5 +111,28 @@ def t_collect_cap():
     ok("I6 상한은 절대 최대(2400)를 넘지 않는다", cap6 is not None and cap6 <= main.ROT_COLLECT_HARD_MAX, str(cap6))
 
 
-run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap])
+def t_fv_ocr_paths():
+    """팜뷰 중계(farmview/ocr.py)의 경로 글자를 그대로 읽어 서버 라우트 표와 맞춘다 — 한쪽이 이름을 바꾸면 여기서 빨간불."""
+    import re as _re
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview", "ocr.py"))
+    try:
+        txt = open(src, encoding="utf-8").read()
+    except OSError:
+        txt = ""
+    used = set()
+    for m in _re.finditer(r"(_get|_post|get|post)\([^\n]*?[\"'](/api/fv/ocr/[a-z_]+)[\"']", txt):
+        used.add(("POST" if "post" in m.group(1) else "GET", m.group(2)))
+    for m in _re.finditer(r"[\"'](/api/fv/ocr/img/)", txt):
+        used.add(("GET", "/api/fv/ocr/img/{img_id}"))
+    have = set()
+    for r in main.app.routes:
+        for meth in getattr(r, "methods", None) or ():
+            have.add((meth, getattr(r, "path", "")))
+    miss = sorted(u for u in used if u not in have)
+    ok("I7 팜뷰 ocr.py 에서 /api/fv/ocr 경로를 읽었다(0개면 파일이 없거나 모양이 바뀐 것)", len(used) >= 7, str(sorted(used)))
+    ok("I7 ★그 경로가 서버에 전부 있다(메서드까지)★", not miss, "없음: %s" % miss)
+
+
+run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap, t_fv_ocr_paths])
 finish("test_integration_contracts", MIN_CHECKS)

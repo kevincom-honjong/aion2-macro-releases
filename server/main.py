@@ -11721,6 +11721,8 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
         raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
     with open(dest, 'wb') as f:
         f.write(content)
+    # ★#125 (2026-09-24 아이온2)★ 로컬 OCR 불일치 크롭(ocrdiff_·oddfail_)은 곧바로 OCR 판별 큐에도(복사 — 정리와 무관, 실패 무시)
+    await _ocr_label.seed_upload_hook(tenant, bdir, filename)
     _prune_bugs(bdir, pc_id)
     _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)

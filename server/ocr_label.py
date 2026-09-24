@@ -13,10 +13,11 @@
   인증 도우미(_require_api_key·_require_session·check_session)·ns·clean_pc_id 를 그대로 쓰고,
   시험이 main.X 를 바꿔 끼워도 그대로 따라간다.
 
-엔드포인트 (계약 정본 초안 = CONTRACT_OCR.md → updater/CONTRACTS_대시보드.md)
+엔드포인트 (★계약 정본 = CONTRACT_OCR.md 하나★ — 2026-09-24 두 형식: A 이 파일 처음 모양 · B 매크로 lc/ocr_label.py, 시험 tests/test_ocr_dual.py)
   매크로 (X-Api-Key → 테넌트)
     POST /ocr/submit            이미지 한 장 {pc_id, site, prompt, img_b64, gemini_answer, local_answer, dhash, ts}
     GET  /ocr/labels?since=N&epoch=E   라벨 증분 {labels, near, bad, cleared, cleared_near, cursor, more, reset, epoch}
+    GET  /ocr/labels?since=<실수 ts>   (형식 B) {labels:[{site, prompt_sha1, sha1, label, ts, deleted, dhash, phash}], since, more, mode:"ts"}
   대시보드 (세션 쿠키)
     GET  /ocr/label             라벨링 화면(로그인 안 했으면 /login 으로)
     GET  /ocr/queue             대기열(묶음 대표 한 장씩, ×N)
@@ -78,6 +79,8 @@ import secrets
 import sys
 import time
 import unicodedata
+import zlib
+from datetime import datetime, timezone
 from collections import deque
 
 import aiosqlite
@@ -99,6 +102,9 @@ OCR_DISK_HARD_CAP = int(os.getenv("OCR_DISK_HARD_CAP_MB", "1000")) * 1024 * 1024
 OCR_RATE_PER_MIN = 30                             # PC 한 대(정규화한 기본 pc id)당 1분 제출 상한 → 429
 OCR_RATE_TENANT_PER_MIN = 300                     # 테넌트 한 곳 합계 1분 상한 → 429 (pc id 를 바꿔 끼워도 여기서 막힌다)
 OCR_NEAR_MAX = 4                                  # dhash 해밍 거리 ≤ 이 값이면 같은 묶음
+OCR_NEAR_MAX_256 = 0                              # ★256비트 dhash(매크로 lc/ocr_label.hashes, 2026-09-24 두 형식)★ 는 같은 값만 묶는다 —
+                                                  #   매크로 리뷰 실측 «한 자리 차이가 4~5비트»(lc/ocr_label.py 머리) → 4 로 묶으면 다른 숫자가 한 묶음이 된다.
+                                                  #   묶음 문턱 실측 전(§D) — 0 은 «근접 묶기 안 함»이지 새 임계가 아니다
 OCR_CLUSTER_ROWS_MAX = 64                         # ★묶음 하나의 이미지 줄 상한(v4 반증 2차)★ — 넘으면 새 줄·파일 없이 가장
                                                   #   가까운 구성원의 count 만 올린다. 라벨 된 묶음은 비우기 1단계가 안 지우고
                                                   #   3단계는 파일만 지워 줄이 영원히 쌓였다(최악 하루 ~43만 줄·1GB).
@@ -111,7 +117,48 @@ OCR_SUGGEST_MAX = 200                             # 자동완성 후보(사이�
 _PNG = b"\x89PNG\r\n\x1a\n"
 _JPG = b"\xff\xd8\xff"
 _SITE_SAFE = re.compile(r"[^A-Za-z0-9가-힣_\-]")
-_DHASH_RE = re.compile(r"^[0-9a-f]{16}$")
+_DHASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})\Z")   # 64비트(16자리) · 256비트(64자리 — 매크로 hashes) 둘 다
+_PHASH_RE = re.compile(r"^[0-9a-f]{16}\Z")
+_PSHA_RE = re.compile(r"^[0-9a-f]{6,40}\Z")                     # 매크로 prompt_sha1 = sha1(prompt)[:12]
+_CSHA_RE = re.compile(r"^[0-9a-f]{40}\Z")                       # 매크로 sha1 = sha1(img_b64 ★문자열★)
+OCR_SITE_RAW_MAX = 200
+OCR_BAD_LABEL = "bad image"                     # ts 방식 행에서 «나쁨» 의 라벨(매크로 BAD_LABELS)
+# ★프롬프트 예시값 교체(매크로 1.1.1006, 2026-09-24)로 prompt_sha1[:12] 가 바뀌었다★ — 함대는 옛·새 판이 섞여 돈다.
+#   ts 방식 행을 ★옛·새 두 열쇠로 다 내보낸다★(같은 그림 sha1·같은 라벨) — 어느 판이 보낸 라벨이든 어느 판이든 적중.
+#   1804·1808·1827 세 키나 칸은 새 판에서 한 프롬프트(62fd6da2e23d)로 합쳐졌다 — 칸 구분은 그림 sha1 이 한다.
+#   정본: src/SHARED_ISSUES_아이온2.md «2026-09-24 — 매크로→대시보드: 제미나이 프롬프트 예시값 교체» 표(시험 test_ocr_dual A-*)
+PROMPT_SHA1_OLD_NEW = (
+    ("3374b731e613", "0f0a0ce55c1a"),
+    ("df5e30ca2379", "3f5c4a5e7c8a"),
+    ("7f304249dd85", "6a3ad486f392"),
+    ("5fef62316fe9", "33a4e0bdfb94"),
+    ("dbbb20628ec7", "07d5fa8dd6ef"),
+    ("27e3c02c338e", "2418d6a41d0d"),
+    ("29aaec1d43eb", "ed36edfc2245"),
+    ("c1d1e609f3a6", "ac33c39e5915"),
+    ("5bc6cef0911c", "5dc56ee218d9"),
+    ("3fe15b029f60", "441da031ad7f"),
+    ("1f58164c266d", "62fd6da2e23d"),
+    ("8430599954af", "62fd6da2e23d"),
+    ("44a66f2d988e", "62fd6da2e23d"),
+    ("a805e9a73a83", "e160f18ebb18"),
+    ("c4dc183aad5c", "8f65f1643114"),
+    ("7f3c7b8e46c0", "6c2387e70a32"),
+    ("5905ec7f6ed4", "23ddcd01b0da"),
+    ("1f1ca9cf73fa", "95751516f8bf"),
+    ("d305be10bd60", "6a1d170cb01f"),
+    ("7649cbf459af", "1b16148f62ef"),
+)
+_PSHA_ALIAS: dict = {}
+for _o, _n in PROMPT_SHA1_OLD_NEW:
+    _PSHA_ALIAS.setdefault(_o, set()).add(_n)
+    _PSHA_ALIAS.setdefault(_n, set()).add(_o)
+del _o, _n
+
+
+def psha_aliases(p: str) -> list:
+    """p 와 같은 프롬프트의 다른 판 열쇠들(p 자신 빼고, 정렬). 새 키 62fd6da2e23d 는 옛 키 셋을 다 준다."""
+    return sorted(_PSHA_ALIAS.get((p or "")[:12], set()) - {p})
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _CAPTCHA_WORDS = ("captcha", "캡차", "캡챠")      # 정규화한 site 의 ★어디든★ 있으면 거부(반증 R5)
 # 키릴·그리스·IPA 닮은꼴 → 라틴(casefold 뒤에 쓴다 — 대문자는 이미 소문자로 접혀 있다)
@@ -212,6 +259,15 @@ async def ensure_tables() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS ix_ocr_img_cl ON ocr_img(cluster_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_ocr_img_disk ON ocr_img(on_disk, created)")
         await db.execute("CREATE INDEX IF NOT EXISTS ix_ocr_img_tdisk ON ocr_img(tenant, on_disk)")
+        # ★두 형식(2026-09-24)★ 더하기만 — 옛 줄은 빈칸(NULL). site_raw = 매크로가 보낸 site 원문("파일.py:함수"),
+        #   prompt_sha1·csha1 = 매크로 열쇠, phash = 매크로 근접 섀도용, dhash_bits = 64|256, lts = ts 방식 커서(라벨이 바뀐 서버 시각)
+        cur = await db.execute("PRAGMA table_info(ocr_img)")
+        have = {r[1] for r in await cur.fetchall()}
+        for col, typ in (("site_raw", "TEXT"), ("prompt_sha1", "TEXT"), ("csha1", "TEXT"), ("phash", "TEXT"),
+                         ("dhash_bits", "INTEGER"), ("lts", "REAL")):
+            if col not in have:
+                await db.execute("ALTER TABLE ocr_img ADD COLUMN %s %s" % (col, typ))
+        await db.execute("CREATE INDEX IF NOT EXISTS ix_ocr_img_lts ON ocr_img(tenant, lts)")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ocr_hist (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -317,7 +373,14 @@ def norm_answer(s) -> str:
 
 
 def hamming(a: str, b: str) -> int:
+    """길이(64·256비트)가 다르면 아주 먼 거리 — 두 형식이 한 묶음에 섞이지 않는다(2026-09-24)."""
+    if not a or not b or len(a) != len(b):
+        return 1 << 20
     return bin(int(a, 16) ^ int(b, 16)).count("1")
+
+
+def near_max(dh: str) -> int:
+    return OCR_NEAR_MAX_256 if len(dh or "") == 64 else OCR_NEAR_MAX
 
 
 def _rate_dq(key, now: float) -> deque:
@@ -386,8 +449,24 @@ async def _bump_members(db, tenant: str, cluster_id: int) -> None:
     if not ids:
         return
     first = await _next_seq(db, tenant, len(ids))
+    lts = await _next_lts(db, tenant)
     for i, iid in enumerate(ids):
-        await db.execute("UPDATE ocr_img SET seq=? WHERE id=?", (first + i, iid))
+        await db.execute("UPDATE ocr_img SET seq=?, lts=? WHERE id=?", (first + i, lts, iid))
+
+
+async def _next_lts(db, tenant: str) -> float:
+    """ts 방식 커서 — 서버 시각이되 ★테넌트마다 늘 앞선 값보다 크다★(ocr_meta 'lts:<tenant>').
+    같은 시각에 두 번 바뀌어도, 시계가 뒤로 가도, 매크로의 since(받은 최대 ts) 뒤에 새 변화가 숨지 않는다."""
+    k = "lts:" + tenant
+    cur = await db.execute("SELECT v FROM ocr_meta WHERE k=?", (k,))
+    r = await cur.fetchone()
+    try:
+        prev = float(r[0]) if r else 0.0
+    except (TypeError, ValueError):
+        prev = 0.0
+    v = max(time.time(), prev + 1e-3)
+    await db.execute("INSERT OR REPLACE INTO ocr_meta(k, v) VALUES(?, ?)", (k, repr(v)))
+    return v
 
 
 def _rm(relpath: str) -> None:
@@ -539,7 +618,7 @@ async def ocr_submit(request: Request):
     dh = body.get("dhash")
     dh = dh.strip().lower() if isinstance(dh, str) else ""
     if not _DHASH_RE.match(dh):
-        _bad(400, "dhash 는 16자리 16진수(64비트 dHash)여야 합니다")
+        _bad(400, "dhash 는 16자리(64비트) 또는 64자리(256비트) 16진수여야 합니다")
     b64 = body.get("img_b64")
     if not isinstance(b64, str) or not b64:
         _bad(400, "img_b64 가 필요합니다")
@@ -548,24 +627,50 @@ async def ocr_submit(request: Request):
     # ④ 디코드 전에 길이로 거른다
     if len(b64) > OCR_B64_MAX:
         _bad(413, "이미지가 너무 큽니다(최대 %dKB)" % (OCR_IMG_MAX // 1024))
+    b64_sent = body.get("img_b64")               # 매크로 sha1 = sha1(img_b64 ★보낸 문자열 그대로★)
     try:
         raw = base64.b64decode(b64.strip(), validate=True)
     except (binascii.Error, ValueError):
         _bad(400, "img_b64 가 올바른 base64 가 아닙니다")
     if len(raw) > OCR_IMG_MAX:
         _bad(413, "이미지가 너무 큽니다(최대 %dKB)" % (OCR_IMG_MAX // 1024))
+    ts = body.get("ts")
+    ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == ts and abs(ts) < 1e11 else None
+    return await submit_core(tenant, pc, site, raw, dh, ts, _s(body.get("prompt"), OCR_PROMPT_MAX),
+                             _s(body.get("gemini_answer"), OCR_ANSWER_MAX), _s(body.get("local_answer"), OCR_ANSWER_MAX),
+                             extra=submit_extra(body, raw_site, b64_sent))
+
+
+def _hexf(v, rx) -> str:
+    v = v.strip().lower() if isinstance(v, str) else ""
+    return v if rx.match(v) else ""
+
+
+def submit_extra(body: dict, raw_site, b64_sent) -> dict:
+    """매크로 형식(lc/ocr_label.after) 칸 — ★틀려도 거부하지 않고 빈칸★(옛 형식 제출도 그대로 200).
+    site_raw = site 원문(제어문자만 뺀다 — 매크로 열쇠와 글자 하나 안 다르게) · csha1 = 매크로 sha1, 없으면 서버가 같은 식으로 잰다."""
+    csha = _hexf(body.get("sha1"), _CSHA_RE)
+    if not csha and isinstance(b64_sent, str):
+        csha = hashlib.sha1(b64_sent.encode("utf-8", "ignore")).hexdigest()
+    return {"site_raw": _s(raw_site, OCR_SITE_RAW_MAX), "prompt_sha1": _hexf(body.get("prompt_sha1"), _PSHA_RE),
+            "csha1": csha, "phash": _hexf(body.get("phash"), _PHASH_RE)}
+
+
+async def submit_core(tenant: str, pc: str, site: str, raw: bytes, dh: str, ts, prompt: str, gem: str, loc: str,
+                      err=None, extra=None) -> dict:
+    """★제출 핵심(2026-09-24 떼어 냄 — 동작 그대로)★ 검사(캡차·속도·dhash·크기)를 ★마친★ 이미지 한 장을 저장소에 넣는다.
+    /ocr/submit 과 /bugs 씨앗(seed_bugs_core·seed_one)이 ★같은 길★ 을 탄다 — 정확 일치·묶음·줄 상한·비우기·507 가 같다.
+    err(code, msg) 가 실패를 던진다(기본 _bad = HTTPException · 씨앗은 _ocr_err = OcrError)."""
+    err = err or _bad
+    ex = extra or {}
+    ex = {k: (ex.get(k) or "") for k in ("site_raw", "prompt_sha1", "csha1", "phash")}
     if raw.startswith(_PNG):
         ext, mime = "png", "image/png"
     elif raw.startswith(_JPG):
         ext, mime = "jpg", "image/jpeg"
     else:
-        _bad(400, "PNG 나 JPEG 만 받습니다")
+        err(400, "PNG 나 JPEG 만 받습니다")
     sha = hashlib.sha1(raw).hexdigest()
-    ts = body.get("ts")
-    ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts == ts and abs(ts) < 1e11 else None
-    prompt = _s(body.get("prompt"), OCR_PROMPT_MAX)
-    gem = _s(body.get("gemini_answer"), OCR_ANSWER_MAX)
-    loc = _s(body.get("local_answer"), OCR_ANSWER_MAX)
     now = time.time()
 
     await ensure_tables()
@@ -589,12 +694,13 @@ async def ocr_submit(request: Request):
                         except (OSError, ValueError):
                             pass              # 되살리기 실패는 조용히 — count 는 그대로 올린다
                 await db.execute("UPDATE ocr_img SET count=count+1, last_seen=? WHERE id=?", (now, iid))
+                await _fill_extra(db, tenant, iid, cid, ex)
                 await db.commit()
                 return await _submit_reply(db, tenant, iid, cid, "exact", None)
             # ⑦ 비슷한 것 — 가장 가까운 묶음 대표(거리 같으면 먼저 생긴 묶음)
             async def _nearest():
                 cur_ = await db.execute("SELECT id, rep_dhash FROM ocr_cluster WHERE tenant=? AND site=?", (tenant, site))
-                b, bd = None, OCR_NEAR_MAX + 1
+                b, bd = None, near_max(dh) + 1     # 길이가 다른 대표는 hamming 이 1<<20 — 안 묶인다
                 for cid_, rdh in await cur_.fetchall():
                     d = hamming(dh, rdh)
                     if d < bd or (d == bd and b is not None and cid_ < b):
@@ -620,7 +726,7 @@ async def ocr_submit(request: Request):
             ev = await evict_for(db, tenant, len(raw))
             if ev["full"]:
                 await db.commit()             # 1·2단계에서 지운 줄은 파일과 짝을 맞춰 둔다
-                _bad(507, "OCR 저장 공간이 가득 찼습니다(전체 상한)")
+                err(507, "OCR 저장 공간이 가득 찼습니다(전체 상한)")
             best, bestd = await _nearest()
             # ⑧ 파일 → 줄
             rel = os.path.join(_site_dir(tenant, site), "%s.%s" % (sha, ext))
@@ -638,8 +744,10 @@ async def ocr_submit(request: Request):
                     cid, kind = best, "near"
                 cur = await db.execute(
                     "INSERT INTO ocr_img(tenant, site, sha1, dhash, cluster_id, pc_id, prompt, gemini, local, ts, created,"
-                    " last_seen, count, nbytes, relpath, mime, on_disk, seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,1,0)",
-                    (tenant, site, sha, dh, cid, pc, prompt, gem, loc, ts, now, now, len(raw), rel, mime))
+                    " last_seen, count, nbytes, relpath, mime, on_disk, seq, site_raw, prompt_sha1, csha1, phash, dhash_bits)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,1,0,?,?,?,?,?)",
+                    (tenant, site, sha, dh, cid, pc, prompt, gem, loc, ts, now, now, len(raw), rel, mime,
+                     ex["site_raw"], ex["prompt_sha1"], ex["csha1"], ex["phash"], len(dh) * 4))
                 iid = cur.lastrowid
                 if kind == "new":
                     await db.execute("UPDATE ocr_cluster SET rep_img=? WHERE id=?", (iid, cid))
@@ -652,6 +760,23 @@ async def ocr_submit(request: Request):
                 _rm(rel)
                 raise
             return await _submit_reply(db, tenant, iid, cid, kind, bestd if kind == "near" else None)
+
+
+
+
+async def _fill_extra(db, tenant, iid, cid, ex) -> None:
+    """정확 일치 재제출 — 비어 있던 매크로 칸만 채운다(있던 값은 안 바꾼다: 같은 그림·다른 프롬프트면 ★처음 열쇠★ 가 남는다).
+    채웠고 묶음에 답이 있으면 ts 커서를 올린다 — 옛 형식으로 먼저 온 대표에 라벨이 있어도 매크로가 받아 간다."""
+    cur = await db.execute("SELECT site_raw, prompt_sha1, csha1, phash FROM ocr_img WHERE id=?", (iid,))
+    old = await cur.fetchone()
+    new = [o if o else ex[k] for o, k in zip(old, ("site_raw", "prompt_sha1", "csha1", "phash"))]
+    if list(old) == new:
+        return
+    await db.execute("UPDATE ocr_img SET site_raw=?, prompt_sha1=?, csha1=?, phash=? WHERE id=?", (*new, iid))
+    cur = await db.execute("SELECT status FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
+    r = await cur.fetchone()
+    if r and r[0] in ("labeled", "bad"):
+        await db.execute("UPDATE ocr_img SET lts=? WHERE id=?", (await _next_lts(db, tenant), iid))
 
 
 async def _submit_reply(db, tenant, iid, cid, kind, dist):
@@ -673,9 +798,304 @@ async def _submit_reply(db, tenant, iid, cid, kind, dist):
             "count": cnt, "cluster_count": n}
 
 
+# ─── /bugs 씨앗 (2026-09-24 아이온2 요청 · 주인님 #125 «팜뷰 탭이 뜨자마자 바로 판별») ───────────────
+# 매크로가 예전부터 /bugs 로 올리던 ★로컬 OCR 불일치 크롭★ 을 판별 큐에 넣는다(이미지 파일은 복사 — /bugs 정리와 무관).
+#   ocrdiff_<항목>_L<로컬>_G<제미나이>.png  (info_collector 감사 불일치 — 값은 config._LEARN_TAG_MAP 로 적힌 파일명 글자)
+#   ocrdiff_<항목>.png                       (config 섀도 불일치 — 값 없음)
+#   oddfail_narrow.png / oddfail_wide.png   (오드 실패 증거 — 좁은 = odd_energy, 넓은 = odd_energy_wide: 자른 폭이 달라 묶음을 나눈다)
+# 서버 파일 이름 = {pc}_{YYYYMMDD}_{HHMMSS}_{매크로 이름}. ★같은 그림(sha1)이 이미 큐에 있으면 건너뛴다(count 도 안 올린다)★ —
+#   씨앗은 몇 번 돌려도 같다. dHash 는 서버가 직접 잰다(Pillow 없음 — 순수 파이썬 PNG 디코드, _png_gray).
+# 파일명에서 되읽은 로컬·제미나이 값은 ★힌트★ 다(모르는 글자는 매크로가 'x' 로 적었다 → '?'). prompt 칸에 출처를 남긴다.
+SEED_TAGS = ("ocrdiff_", "oddfail_")
+SEED_MAX_FILES = 5000                             # 한 번에 훑는 파일 수 상한
+SEED_MAX_PIXELS = 4_000_000                       # PNG 한 장 픽셀 상한(압축 폭탄 방어 — 크롭은 수만 픽셀)
+_SEED_NAME = re.compile(r"^(?P<pc>.+?)_(?P<d>\d{8})_(?P<t>\d{6})_(?P<orig>.+)\.png$")
+_SEED_DIFF = re.compile(r"^ocrdiff_(?P<name>.+?)_L(?P<l>[^_]*)_G(?P<g>[^_]*)$")
+_UNTAG = {"c": ",", "s": "/", "p": "%", "d": ".", "l": "(", "r": ")", "u": "+", "m": "-", "k": "K", "g": "M", "x": "?"}
+_SEED_DONE: set = set()                           # (프로세스) 큐 첫 조회 때 자동 씨앗을 이미 돌린 테넌트
+_SEED_BUSY: set = set()
+
+
+def _untag(v: str) -> str:
+    """매크로 파일명 글자 → 값(힌트). 'empty' = 빈 값. 숫자는 그대로, 알려진 글자는 _LEARN_TAG_MAP 거꾸로, 나머지는 그대로."""
+    if v == "empty":
+        return ""
+    return "".join(_UNTAG.get(c, c) for c in v)[:OCR_ANSWER_MAX]
+
+
+def seed_parse(fname: str):
+    """서버 /bugs 파일 이름 → dict(pc, ts, site, gem, loc) 또는 None(씨앗 대상 아님·캡차)."""
+    m = _SEED_NAME.match(fname or "")
+    if not m:
+        return None
+    orig = m.group("orig")
+    i = min([orig.find(t) for t in SEED_TAGS if t in orig] or [-1])
+    if i < 0:
+        return None
+    tag = orig[i:]
+    gem = loc = ""
+    if tag.startswith("oddfail_"):
+        rest = tag[len("oddfail_"):]
+        site = "odd_energy" if rest == "narrow" else "odd_energy_" + rest
+    else:
+        d = _SEED_DIFF.match(tag)
+        if d:
+            site, loc, gem = d.group("name"), _untag(d.group("l")), _untag(d.group("g"))
+        else:
+            site = tag[len("ocrdiff_"):]
+    if is_captcha_site(site) or is_captcha_site(orig):
+        return None
+    site = site_safe(site)
+    if not site:
+        return None
+    try:
+        ts = datetime.strptime(m.group("d") + m.group("t"), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        ts = None
+    return {"pc": m.group("pc"), "ts": ts, "site": site, "gem": gem, "loc": loc}
+
+
+def _png_gray(raw: bytes):
+    """PNG → (w, h, 회색 바이트 목록) 또는 None. 8비트 비인터레이스 회색·RGB·회색+알파·RGBA·팔레트만(매크로 크롭은 회색)."""
+    if not raw.startswith(_PNG):
+        return None
+    pos, idat, ihdr, plte = 8, [], None, None
+    try:
+        while pos + 8 <= len(raw):
+            n = int.from_bytes(raw[pos:pos + 4], "big")
+            typ = raw[pos + 4:pos + 8]
+            data = raw[pos + 8:pos + 8 + n]
+            pos += 12 + n
+            if typ == b"IHDR":
+                ihdr = data
+            elif typ == b"PLTE":
+                plte = data
+            elif typ == b"IDAT":
+                idat.append(data)
+            elif typ == b"IEND":
+                break
+        if not ihdr or len(ihdr) < 13:
+            return None
+        w, h = int.from_bytes(ihdr[0:4], "big"), int.from_bytes(ihdr[4:8], "big")
+        depth, ctype, inter = ihdr[8], ihdr[9], ihdr[12]
+        bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+        if depth != 8 or inter != 0 or bpp is None or w <= 0 or h <= 0 or w * h > SEED_MAX_PIXELS:
+            return None
+        if ctype == 3 and not plte:
+            return None
+        stride = w * bpp
+        dz = zlib.decompressobj()
+        flat = dz.decompress(b"".join(idat), (stride + 1) * h + 1)
+        if len(flat) < (stride + 1) * h:
+            return None
+        out = bytearray(w * h)
+        prev = bytearray(stride)
+        for y in range(h):
+            f = flat[y * (stride + 1)]
+            line = bytearray(flat[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+            if f == 1:
+                for x in range(bpp, stride):
+                    line[x] = (line[x] + line[x - bpp]) & 255
+            elif f == 2:
+                for x in range(stride):
+                    line[x] = (line[x] + prev[x]) & 255
+            elif f == 3:
+                for x in range(stride):
+                    line[x] = (line[x] + (((line[x - bpp] if x >= bpp else 0) + prev[x]) >> 1)) & 255
+            elif f == 4:
+                for x in range(stride):
+                    a_ = line[x - bpp] if x >= bpp else 0
+                    b_ = prev[x]
+                    c_ = prev[x - bpp] if x >= bpp else 0
+                    pa, pb, pc_ = abs(b_ - c_), abs(a_ - c_), abs(a_ + b_ - 2 * c_)
+                    line[x] = (line[x] + (a_ if pa <= pb and pa <= pc_ else b_ if pb <= pc_ else c_)) & 255
+            elif f != 0:
+                return None
+            row = y * w
+            if ctype in (0, 4):
+                out[row:row + w] = line[0::bpp]
+            elif ctype == 3:
+                for x in range(w):
+                    k = line[x] * 3
+                    r_, g_, b2 = plte[k:k + 3] if k + 3 <= len(plte) else (0, 0, 0)
+                    out[row + x] = (r_ * 299 + g_ * 587 + b2 * 114) // 1000
+            else:
+                for x in range(w):
+                    k = x * bpp
+                    out[row + x] = (line[k] * 299 + line[k + 1] * 587 + line[k + 2] * 114) // 1000
+            prev = line
+        return w, h, out
+    except (zlib.error, ValueError, IndexError, TypeError):
+        return None
+
+
+def png_dhash(raw: bytes):
+    """PNG → 64비트 dHash(16자리 16진) 또는 None. 9x8 로 칸 평균(면적) 축소 → 각 줄에서 오른쪽이 더 밝으면 1."""
+    g = _png_gray(raw)
+    if g is None:
+        return None
+    w, h, px = g
+    cells = []
+    for cy in range(8):
+        y0, y1 = cy * h // 8, max(cy * h // 8 + 1, (cy + 1) * h // 8)
+        for cx in range(9):
+            x0, x1 = cx * w // 9, max(cx * w // 9 + 1, (cx + 1) * w // 9)
+            tot = cnt = 0
+            for yy in range(y0, min(y1, h)):
+                r0 = yy * w
+                seg = px[r0 + x0:r0 + min(x1, w)]
+                tot += sum(seg)
+                cnt += len(seg)
+            cells.append(tot / cnt if cnt else 0.0)
+    v = 0
+    for cy in range(8):
+        for cx in range(8):
+            v = (v << 1) | (1 if cells[cy * 9 + cx + 1] > cells[cy * 9 + cx] else 0)
+    return "%016x" % v
+
+
+async def seed_one(tenant: str, bdir: str, fname: str) -> str:
+    """/bugs 파일 한 장 → 큐. 돌려주는 값: added · exists · skip:<까닭> · full."""
+    info = seed_parse(fname)
+    if info is None:
+        return "skip:대상아님"
+    path = os.path.join(bdir, fname)
+    try:
+        if os.path.getsize(path) > OCR_IMG_MAX:
+            return "skip:큼"
+        with open(path, "rb") as fh:
+            raw = fh.read(OCR_IMG_MAX + 1)
+    except OSError:
+        return "skip:못읽음"
+    if len(raw) > OCR_IMG_MAX or not raw.startswith(_PNG):
+        return "skip:PNG아님"
+    sha = hashlib.sha1(raw).hexdigest()
+    await ensure_tables()
+    async with aiosqlite.connect(_dbp()) as db:
+        cur = await db.execute("SELECT 1 FROM ocr_img WHERE tenant=? AND site=? AND sha1=?", (tenant, info["site"], sha))
+        if await cur.fetchone():
+            return "exists"
+    dh = png_dhash(raw)
+    if dh is None:
+        return "skip:디코드못함"
+    pc = _m().clean_pc_id(info["pc"]).strip() or "PC-?"
+    try:
+        r = await submit_core(tenant, pc, info["site"], raw, dh, info["ts"], ("seed:/bugs " + fname)[:OCR_PROMPT_MAX],
+                              info["gem"], info["loc"], err=_ocr_err)
+    except OcrError as e:
+        return "full" if e.code == 507 else "skip:%d" % e.code
+    return "exists" if r.get("dup") == "exact" else "added"
+
+
+async def seed_bugs_core(tenant: str) -> dict:
+    """그 테넌트 /bugs 폴더의 ocrdiff_*·oddfail_* 전부 → 큐(이름순 = 오래된 것부터). 몇 번 돌려도 같다."""
+    bdir = _m().tenant_bugs_dir(tenant)
+    res = {"ok": True, "scanned": 0, "added": 0, "exists": 0, "skipped": {}, "full": False}
+    if tenant in _SEED_BUSY:
+        res.update(ok=False, busy=True)
+        return res
+    _SEED_BUSY.add(tenant)
+    try:
+        try:
+            names = sorted(f for f in os.listdir(bdir) if f.endswith(".png") and any(t in f for t in SEED_TAGS))
+        except OSError:
+            names = []
+        for f in names[:SEED_MAX_FILES]:
+            res["scanned"] += 1
+            r = await seed_one(tenant, bdir, f)
+            if r == "full":
+                res["full"] = True
+                break
+            if r in ("added", "exists"):
+                res[r] += 1
+            else:
+                k = r.split(":", 1)[-1]
+                res["skipped"][k] = res["skipped"].get(k, 0) + 1
+        res["more"] = len(names) > SEED_MAX_FILES
+    finally:
+        _SEED_BUSY.discard(tenant)
+    _SEED_DONE.add(tenant)
+    return res
+
+
+async def seed_upload_hook(tenant: str, bdir: str, fname: str) -> None:
+    """main.upload_bug 가 부른다 — 새로 올라온 ocrdiff_·oddfail_ 한 장을 곧바로 큐에. 실패는 조용히(업로드를 막지 않는다)."""
+    if not any(t in (fname or "") for t in SEED_TAGS):
+        return
+    try:
+        await seed_one(tenant, bdir, fname)
+    except Exception as e:
+        print(f"[OCR] 씨앗(업로드) 실패(무시) {fname}: {e.__class__.__name__}: {e}", flush=True)
+
+
+async def _auto_seed(tenant: str) -> None:
+    """큐를 처음 볼 때(프로세스·테넌트마다 한 번) 씨앗을 돌린다 — 탭이 뜨자마자 판별할 거리가 있게. 실패는 조용히."""
+    if tenant in _SEED_DONE:
+        return
+    try:
+        await seed_bugs_core(tenant)
+    except Exception as e:
+        _SEED_DONE.add(tenant)
+        print(f"[OCR] 자동 씨앗 실패(무시) {tenant}: {e.__class__.__name__}: {e}", flush=True)
+
+
 # ─── 매크로: 라벨 증분 ────────────────────────────────────────────────────────
+def is_ts_mode(since, mode) -> bool:
+    """★ts 방식(매크로 lc/ocr_label_net.poll_now)★ 알아보기 — mode=ts, 또는 since 가 실수 글자("0.0"·"1790164002.41"·"1e-05").
+    매크로 since 는 파이썬 float 이라 requests 가 늘 '.' 이나 'e' 를 붙여 보낸다. 커서 방식(정수)은 그대로."""
+    if isinstance(mode, str) and mode.strip().lower() == "ts":
+        return True
+    s = str(since).strip().lower()
+    return "." in s or "e" in s or s.lstrip("+-") in ("inf", "nan", "infinity")
+
+
+def _ts_row(lts, site, psha, csha, dh, ph, st, lb) -> dict:
+    r = {"site": site, "prompt_sha1": psha, "sha1": csha, "ts": lts, "dhash": dh or "", "phash": ph or "", "status": st}
+    if st == "labeled":
+        r.update(label=lb or "", deleted=False)
+    elif st == "bad":
+        r.update(label=OCR_BAD_LABEL, deleted=False)
+    else:                                   # 되돌리기로 대기에 돌아감 → 매크로는 그 열쇠를 지운다
+        r.update(label="", deleted=True)
+    return r
+
+
+_TS_SQL = ("SELECT i.lts, COALESCE(NULLIF(i.site_raw,''), i.site), i.prompt_sha1, i.csha1, i.dhash, i.phash, c.status, c.label "
+           "FROM ocr_img i JOIN ocr_cluster c ON c.id=i.cluster_id "
+           "WHERE i.tenant=? AND c.rep_img=i.id AND COALESCE(i.prompt_sha1,'')<>'' AND COALESCE(i.csha1,'')<>'' AND ")
+
+
+async def labels_ts_core(tenant: str, since_f: float) -> dict:
+    """{labels:[{site, prompt_sha1, sha1, label, ts, deleted, dhash, phash, status}], since, more, mode:"ts", epoch}.
+    ★묶음 대표 줄만★(반증 R1 — 사람이 본 그 한 장만 정답) · 매크로 열쇠(prompt_sha1·sha1)가 있는 줄만.
+    ts = 라벨이 바뀐 서버 시각(_next_lts, 테넌트마다 늘 증가) — 매크로는 받은 최대 ts 를 since 로 다시 보낸다.
+    한 쪽(5,000줄)을 넘으면 마지막 ts 가 쪽 경계에 걸리지 않게 자른다(같은 ts 가 다음 쪽으로 새지 않게)."""
+    await ensure_tables()
+    async with aiosqlite.connect(_dbp()) as db:
+        ep = await _epoch(db)
+        cur = await db.execute(_TS_SQL + "i.lts>? ORDER BY i.lts, i.id LIMIT ?", (tenant, since_f, OCR_LABELS_PAGE + 1))
+        rows = await cur.fetchall()
+        more = len(rows) > OCR_LABELS_PAGE
+        if more:
+            last = rows[OCR_LABELS_PAGE - 1][0]
+            keep = rows[:OCR_LABELS_PAGE]
+            if rows[OCR_LABELS_PAGE][0] == last:
+                keep = [r for r in keep if r[0] != last]
+                if not keep:                # 한 ts 가 한 쪽보다 크다 → 그 ts 는 통째로
+                    cur = await db.execute(_TS_SQL + "i.lts=? ORDER BY i.id", (tenant, last))
+                    keep = await cur.fetchall()
+            rows = keep
+    out = []
+    for r in rows:
+        row = _ts_row(*r)
+        out.append(row)
+        for alt in psha_aliases(row["prompt_sha1"]):   # 옛·새 판 열쇠 — 행을 하나 더(같은 ts·라벨·deleted)
+            out.append(dict(row, prompt_sha1=alt, alias_of=row["prompt_sha1"]))
+    return {"labels": out, "since": rows[-1][0] if rows else since_f, "more": more, "mode": "ts", "epoch": ep}
+
+
 @router.get("/ocr/labels")
-async def ocr_labels(request: Request, since: str = "0", epoch: str = ""):
+async def ocr_labels(request: Request, since: str = "0", epoch: str = "", mode: str = ""):
     """{labels:{site:{sha1:label}}, near:{site:{dhash:label}}, bad:{site:{sha1:dhash}},
         cleared:{site:[sha1]}, cleared_near:{site:[dhash]}, cursor, more, reset, epoch}.
     since=0 이면 처음부터 전부(OCR_LABELS_PAGE 씩). 매크로는 받은 cursor·epoch 를 저장해 다음에 둘 다 보낸다.
@@ -683,6 +1103,14 @@ async def ocr_labels(request: Request, since: str = "0", epoch: str = ""):
     ★labels 에는 묶음 대표의 sha1 만★(주인님이 본 바로 그 이미지) — 다른 구성원은 near 힌트로만(반증 R1)."""
     m = _m()
     tenant = m._require_api_key(request)
+    if is_ts_mode(since, mode):             # ★두 형식(2026-09-24)★ 매크로 lc/ocr_label 방식 — 아래 커서 방식은 그대로
+        try:
+            since_f = float(str(since).strip() or "0")
+            if not (0.0 <= since_f < 1e11):     # nan 은 비교가 전부 거짓 → 여기서 걸린다
+                raise ValueError
+        except ValueError:
+            _bad(400, "since(ts 방식)는 0 이상의 유한한 수여야 합니다")
+        return JSONResponse(await labels_ts_core(tenant, since_f))
     try:
         since_i = int(str(since).strip() or "0")
         if since_i < 0 or since_i > _I64_MAX:
@@ -971,9 +1399,20 @@ async def ocr_label_page(request: Request):
                                             "Pragma": "no-cache", "Expires": "0"})
 
 
+async def _queue_seeded(t, limit):
+    await _auto_seed(t)
+    return await queue_core(t, limit)
+
+
 @router.get("/ocr/queue")
 async def ocr_queue(request: Request, limit: str = "30"):
-    return await _web_call(request, lambda t: queue_core(t, _limit(limit, 30, 100, False)))
+    return await _web_call(request, lambda t: _queue_seeded(t, _limit(limit, 30, 100, False)))
+
+
+@router.post("/ocr/seed_bugs")
+async def ocr_seed_bugs(request: Request):
+    """/bugs 의 ocrdiff_*·oddfail_* 를 큐로(몇 번 눌러도 같다)."""
+    return await _web_call(request, seed_bugs_core)
 
 
 @router.get("/ocr/img/{img_id}")
@@ -1022,7 +1461,13 @@ async def ocr_stats(request: Request):
 # ─── 팜뷰 (/api/fv/ocr/* — X-FV-Token, 테넌트 = FV_TENANT, 에러 = main._fv_err) ─────────
 @router.get("/api/fv/ocr/queue")
 async def fv_ocr_queue(request: Request, limit: str = "30"):
-    return await _fv_call(request, lambda t: queue_core(t, _limit(limit, 30, 100, True)))
+    return await _fv_call(request, lambda t: _queue_seeded(t, _limit(limit, 30, 100, True)))
+
+
+@router.post("/api/fv/ocr/seed_bugs")
+async def fv_ocr_seed_bugs(request: Request):
+    """{} → {ok, scanned, added, exists, skipped:{까닭:n}, full, more}"""
+    return await _fv_call(request, seed_bugs_core)
 
 
 @router.get("/api/fv/ocr/img/{img_id}")
