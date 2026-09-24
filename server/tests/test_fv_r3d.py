@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 36
+MIN_CHECKS = 45
 TOK = "fvsecret-r3d"
 H = {"X-FV-Token": TOK}
 C1 = [{"slot": 1, "name": "러닝"}]
@@ -71,6 +71,19 @@ async def t_kina_read_age():
     p3 = await _prog(pc)
     ok("KR-4 판독 시각 없는 보고는 kina_read_age_s 를 안 바꾼다", abs(int(p3.get("kina_read_age_s") or 0) - int(p["kina_read_age_s"])) <= 3,
        f"{p['kina_read_age_s']}→{p3.get('kina_read_age_s')}")
+    # ★PC 시계 어긋남 (아이온2 M9)★ — 나이는 PC 시계 판독 시각(raw)이 아니라 서버 시계로 옮긴 read_srv 기준이다
+    pcs = "PC-KR4"
+    await db.upsert_status(pcs, {"pc_id": pcs, "status": "idle"})
+    await _post(pcs, {"total_kina": 800_000_000, "kina_read_at": U(-100 - 600), "kina_seq": 1, "sent_at": U(-600),
+                      "collected_at": U(-600)})           # PC 시계 10분 늦음, 100초 전에 읽음
+    p = await _prog(pcs)
+    ok("KR-8 ★PC 시계가 10분 늦어도 kina_read_age_s ≈ 100(서버 시계) — raw 판독 시각이면 700★",
+       95 <= int(p.get("kina_read_age_s") or 0) <= 130, str(p.get("kina_read_age_s")))
+    await _post(pcs, {"total_kina": 790_000_000, "merge": True, "kina_read_at": U(-30 + 240), "kina_seq": 2, "sent_at": U(240)})
+    p = await _prog(pcs)
+    ok("KR-8b ★PC 시계가 4분 빨라도 merge 판독 나이 ≈ 30 — raw 면 미래라 0★",
+       25 <= int(p.get("kina_read_age_s") or 0) <= 60 and p.get("total_kina") == 790_000_000,
+       f"{p.get('kina_read_age_s')} {p.get('total_kina')}")
     # 표식이 한 번도 없던 카드 = 모름 10^9 (정수)
     pc2 = "PC-KR2"
     await db.upsert_status(pc2, {"pc_id": pc2, "status": "idle"})
@@ -115,8 +128,10 @@ async def _n(body, headers=H):
 def _reset():
     SENT.clear()
     main._FV_NOTIFY_TRIES.clear()
+    main._FV_NOTIFY_SENT_TS.clear()
     main._FV_NOTIFY_INFLIGHT.clear()
     main._FV_NOTIFY_SENT.clear()
+    main._FV_NOTIFY_UNRECORDED.clear()
 
 
 async def t_notify():
@@ -142,13 +157,24 @@ async def t_notify():
         code, b = await _n({"key": "sold_fail:t1", "text": "다른 글", "pc_id": "PC-N1"})
         ok("N-4 ★같은 key 는 다시 안 보낸다 — 200 dup:true·sent_at★", code == 200 and b.get("dup") is True and b.get("sent_at") and len(SENT) == 1,
            f"{code} {b} {len(SENT)}")
+        ok("N-4b ★기억으로 답한 dup 은 장부를 안 쓴다(요청 수 1 그대로 — dup 은 상한이 없으니 DB 쓰기도 없다)★",
+           (await db.fv_notify_get("sold_fail:t1") or {}).get("n") == 1, str(await db.fv_notify_get("sold_fail:t1")))
+
+        async def _db_dead(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+        main.fv_notify_get, main.fv_notify_record = _db_dead, _db_dead
+        code, b = await _n({"key": "sold_fail:t1", "text": "x"})
+        main.fv_notify_get, main.fv_notify_record = real[3], real[4]
+        ok("N-4c ★기억으로 답한 dup 은 DB 를 읽지도 않는다(DB 가 죽어도 200 dup)★", code == 200 and b.get("dup") is True, f"{code} {b}")
         main._FV_NOTIFY_SENT.clear()                     # 재배포 흉내 — 프로세스 기억이 없어도 표가 막는다
         code, b = await _n({"key": "sold_fail:t1", "text": "x"})
         ok("N-5 ★재시작 뒤에도 같은 key 는 dup(표가 막는다)★", code == 200 and b.get("dup") is True and len(SENT) == 1, f"{code} {b}")
+        code, b = await _n({"key": "sold_fail:t1", "text": "x"})   # 재시작 뒤 둘째 dup — 첫 dup 이 기억에 올렸으니 장부 안 씀
+        ok("N-5b 재시작 뒤 둘째 dup 은 기억으로(sent_at 도 장부 값)", code == 200 and b.get("dup") is True and b.get("sent_at"), f"{code} {b}")
         rows = {r["key"]: r for r in _body(await main.fv_notify_list(Req({}, api_key=None, headers=H)))["items"]}
         r1 = rows.get("sold_fail:t1") or {}
-        ok("N-6 ★감사 장부 — status sent 그대로·요청 수 3·보낸 글 그대로·message_id★",
-           r1.get("status") == "sent" and r1.get("n") == 3 and r1.get("text") == "차감 24시간 실패 — 챈가룽 2100만"
+        ok("N-6 ★감사 장부 — status sent 그대로·요청 수 2(보냄 + 재시작 뒤 첫 dup)·보낸 글 그대로·message_id★",
+           r1.get("status") == "sent" and r1.get("n") == 2 and r1.get("text") == "차감 24시간 실패 — 챈가룽 2100만"
            and r1.get("message_id") == 1001 and r1.get("sent_at"), str(r1))
         lines = [x.get("message") or "" for x in await db.get_logs(main.ns("main", "PC-N1"), limit=50)]
         ok("N-7 카드 로그에 «[팜뷰 알림] … (key …)» 한 줄", sum("[팜뷰 알림]" in x and "key sold_fail:t1" in x for x in lines) == 1, str(lines[:3]))
@@ -176,16 +202,39 @@ async def t_notify():
            str(rows.get("sold_fail:t3")))
         # 시간 상한 — 10분 전 시도 20개
         _reset()
-        main._FV_NOTIFY_TRIES.extend([main.time.time() - 600] * main.FV_NOTIFY_PER_HOUR)
+        main._FV_NOTIFY_SENT_TS.extend([main.time.time() - 600] * main.FV_NOTIFY_PER_HOUR)
         code, b = await _n({"key": "sold_fail:t3", "text": "z"})
-        ok("N-10 ★1시간 상한(20) 넘으면 429 — 가장 옛 시도가 빠질 때까지(≈3000초)★",
+        ok("N-10 ★1시간 상한(보냄 20) 넘으면 429 — 가장 옛 보냄이 빠질 때까지(≈3000초)★",
            code == 429 and 2900 <= float(b.get("retry_after_s") or 0) <= 3000 and not SENT, f"{code} {b}")
         _reset()
-        main._FV_NOTIFY_TRIES.extend([main.time.time() - 3700] * 50)     # 한 시간 넘은 시도는 안 센다
+        main._FV_NOTIFY_TRIES.extend([main.time.time() - 3700] * 50)     # 한 시간 넘은 시도·보냄은 안 센다
+        main._FV_NOTIFY_SENT_TS.extend([main.time.time() - 3700] * 50)
         code, b = await _n({"key": "sold_fail:t3", "text": "z"})
         ok("N-10b 한 시간 넘은 시도는 안 센다 — 상한 뒤 같은 key 가 나간다", code == 200 and b.get("sent") is True, f"{code} {b}")
-        ok("N-10c 한 시간 넘은 시도는 기억에서 버린다(목록이 끝없이 안 자란다)", len(main._FV_NOTIFY_TRIES) == 1,
-           str(len(main._FV_NOTIFY_TRIES)))
+        ok("N-10c 지난 시도·보냄은 기억에서 버린다(목록이 끝없이 안 자란다)",
+           len(main._FV_NOTIFY_TRIES) == 1 and len(main._FV_NOTIFY_SENT_TS) == 1,
+           f"{len(main._FV_NOTIFY_TRIES)} {len(main._FV_NOTIFY_SENT_TS)}")
+        # ★sold_fail 몫 (아이온2 반증 b)★ — 다른 알림이 15통 보냈으면 다른 key 는 429, sold_fail 은 나간다
+        _reset()
+        main._FV_NOTIFY_SENT_TS.extend([main.time.time() - 600] * (main.FV_NOTIFY_PER_HOUR - main.FV_NOTIFY_RESERVED))
+        code, b = await _n({"key": "other:x1", "text": "o"})
+        code2, b2 = await _n({"key": "sold_fail:r1", "text": "s"})
+        ok("N-10d ★sold_fail 몫 5칸 — 다른 알림 15통 뒤 다른 key 는 429, sold_fail 은 나간다★",
+           code == 429 and 2900 <= float(b.get("retry_after_s") or 0) <= 3000 and code2 == 200 and b2.get("sent") is True,
+           f"{code} {b.get('retry_after_s')} / {code2} {b2}")
+        # ★실패는 시간 상한에 안 센다 (반증 b)★ — 19통 보낸 뒤 실패 3번(분 상한만 먹는다) → 1분 뒤 sold_fail 이 나간다
+        _reset()
+        main._FV_NOTIFY_SENT_TS.extend([main.time.time() - 600] * (main.FV_NOTIFY_PER_HOUR - 1))
+        main.tg_send_text = _tg_fail
+        fails = [(await _n({"key": f"sold_fail:f{i}", "text": "f"}))[0] for i in range(3)]
+        main.tg_send_text = _tg_ok
+        main._FV_NOTIFY_TRIES[:] = [t - 61 for t in main._FV_NOTIFY_TRIES]      # 1분 지남
+        code, b = await _n({"key": "sold_fail:f0", "text": "f"})
+        ok("N-10e ★텔레그램 실패는 시간 상한(보냄)에 안 센다 — 실패 3번 뒤에도 20번째 sold_fail 이 나간다★",
+           fails == [502, 502, 502] and code == 200 and b.get("sent") is True and len(main._FV_NOTIFY_SENT_TS) == main.FV_NOTIFY_PER_HOUR,
+           f"{fails} {code} {b} {len(main._FV_NOTIFY_SENT_TS)}")
+        code, b = await _n({"key": "sold_fail:f1", "text": "f"})
+        ok("N-10f 대조 — 보냄 20 이면 sold_fail 도 429", code == 429, f"{code} {b}")
 
         # 텔레그램 미설정 → 503 retry:false
         _reset()
@@ -209,6 +258,12 @@ async def t_notify():
         code, b = await _n({"key": "sold_fail:t5", "text": "w"})
         ok("N-12b busy 뒤 재전송은 dup", code == 200 and b.get("dup") is True and len(SENT) == 1, f"{code} {b}")
 
+        # ★text 1000자에서 자른다 (아이온2 M7)★
+        _reset()
+        code, b = await _n({"key": "sold_fail:long", "text": "가" * 1500})
+        ok("N-20 ★text 는 1000자에서 자른다(텔레그램 글 = «[팜뷰] » + 1000자)★",
+           code == 200 and SENT == ["[팜뷰] " + "가" * 1000] and (await db.fv_notify_get("sold_fail:long") or {}).get("text") == "가" * 1000,
+           f"{code} {[len(x) for x in SENT]}")
         # 짝 없는 대리 문자 → 500 이 아니라 보낸다
         _reset()
         code, b = await _n({"key": "sold_fail:\ud800", "text": "a\udfffb"})

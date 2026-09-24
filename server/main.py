@@ -16836,13 +16836,18 @@ async def fv_kina_adjust(request: Request):
 #   팜뷰에는 주인님께 텔레그램 한 통을 보낼 길이 없었다(/telegram/send 는 매크로 API 키 전용). 드문 알림(차감 24시간 실패
 #   sold_fail 등)만 이 길로 — 같은 key 는 ★한 번★ 만 보내고(fv_notify 표, 재배포에도), 분·시간 상한을 넘으면 429 retry.
 #   감사: fv_notify 표(요청 수·마지막 결과·보낸 시각, GET /api/fv/notify) + pc_id 를 주면 그 카드 로그 한 줄.
-FV_NOTIFY_PER_MIN = 3                  # 텔레그램까지 간 시도 — 1분에 이만큼
-FV_NOTIFY_PER_HOUR = 20                # …1시간에 이만큼
+FV_NOTIFY_PER_MIN = 3                  # 텔레그램까지 간 시도(실패 포함) — 1분에 이만큼(텔레그램 두드리기 방지)
+FV_NOTIFY_PER_HOUR = 20                # ★실제로 보낸★ 알림 — 1시간에 이만큼(실패는 안 센다, 아이온2 58715f9 반증 b)
+FV_NOTIFY_RESERVED = 5                 # 그중 이만큼은 sold_fail: key 몫 — 다른 알림이 버그로 쏟아져도 판매 실패 알림은 나간다
+FV_NOTIFY_RESERVED_PREFIX = "sold_fail:"
 FV_NOTIFY_KEY_MAX = 200
 FV_NOTIFY_TEXT_MAX = 1000
-_FV_NOTIFY_TRIES: list = []            # 텔레그램까지 간 시도의 time.time() (한 시간치)
+FV_NOTIFY_MEMO_MAX = 5000              # 보낸 key 기억 상한(오래된 것부터 잊는다 — 잊어도 장부 표가 dup 을 막는다)
+_FV_NOTIFY_TRIES: list = []            # 텔레그램까지 간 시도의 time.time() (1분치)
+_FV_NOTIFY_SENT_TS: list = []          # 실제로 보낸 알림의 time.time() (1시간치)
 _FV_NOTIFY_INFLIGHT: set = set()       # 지금 보내는 중인 key — 같은 key 동시 요청은 409 busy
-_FV_NOTIFY_SENT: set = set()           # 보냈는데 장부 쓰기가 죽은 key — 이 프로세스 안에서라도 두 번 안 보낸다
+_FV_NOTIFY_SENT: dict = {}             # 보낸 것으로 아는 key → sent_at — dup 은 여기서 ★DB 없이★ 답한다(반증 c)
+_FV_NOTIFY_UNRECORDED: set = set()     # 보냈는데 장부에 sent 를 못 적은 key — 다음 dup 때 다시 적어 본다(재시작 뒤 재전송 방지)
 
 
 def _fv_notify_clean(v) -> str:
@@ -16850,23 +16855,33 @@ def _fv_notify_clean(v) -> str:
     return str(v if isinstance(v, str) else "").encode("utf-8", "replace").decode("utf-8").strip()
 
 
-def _fv_notify_limit(now: float) -> float:
-    """상한에 걸리면 기다릴 초(>0), 아니면 0. 한 시간 넘은 시도는 버린다."""
-    _FV_NOTIFY_TRIES[:] = [t for t in _FV_NOTIFY_TRIES if now - t < 3600]
-    last_min = [t for t in _FV_NOTIFY_TRIES if now - t < 60]
-    if len(last_min) >= FV_NOTIFY_PER_MIN:
-        return round(60 - (now - last_min[0]), 1) or 0.1
-    if len(_FV_NOTIFY_TRIES) >= FV_NOTIFY_PER_HOUR:
-        return round(3600 - (now - _FV_NOTIFY_TRIES[0]), 1) or 0.1
+def _fv_notify_memo(key: str, sent_at) -> None:
+    _FV_NOTIFY_SENT[key] = sent_at
+    while len(_FV_NOTIFY_SENT) > FV_NOTIFY_MEMO_MAX:
+        _FV_NOTIFY_SENT.pop(next(iter(_FV_NOTIFY_SENT)))
+
+
+def _fv_notify_limit(now: float, key: str) -> float:
+    """상한에 걸리면 기다릴 초(>0), 아니면 0. 지난 시도(1분)·보냄(1시간)은 버린다.
+    분 상한 = 시도(실패 포함) · 시간 상한 = 실제로 보낸 것만, sold_fail: 아닌 key 는 FV_NOTIFY_RESERVED 칸을 못 쓴다."""
+    _FV_NOTIFY_TRIES[:] = [t for t in _FV_NOTIFY_TRIES if now - t < 60]
+    _FV_NOTIFY_SENT_TS[:] = [t for t in _FV_NOTIFY_SENT_TS if now - t < 3600]
+    if len(_FV_NOTIFY_TRIES) >= FV_NOTIFY_PER_MIN:
+        return round(60 - (now - _FV_NOTIFY_TRIES[0]), 1) or 0.1
+    cap = FV_NOTIFY_PER_HOUR if key.startswith(FV_NOTIFY_RESERVED_PREFIX) else FV_NOTIFY_PER_HOUR - FV_NOTIFY_RESERVED
+    if len(_FV_NOTIFY_SENT_TS) >= cap:
+        return round(3600 - (now - _FV_NOTIFY_SENT_TS[len(_FV_NOTIFY_SENT_TS) - cap]), 1) or 0.1
     return 0.0
 
 
-async def _fv_notify_audit(key: str, pc_id, text: str, status: str, mid=None) -> None:
-    """장부 한 줄 — 실패해도 답을 막지 않는다(서버 출력에 남긴다)."""
+async def _fv_notify_audit(key: str, pc_id, text: str, status: str, mid=None) -> bool:
+    """장부 한 줄 — 실패해도 답을 막지 않는다(서버 출력에 남긴다). 적었으면 True."""
     try:
         await fv_notify_record(key, pc_id, text, status, mid)
+        return True
     except Exception as e:
         print(f"[fv] notify 장부 실패 key {key} status {status}: {type(e).__name__}: {e}", flush=True)
+        return False
 
 
 @app.post("/api/fv/notify")
@@ -16891,20 +16906,22 @@ async def fv_notify(request: Request):
     pc_id = clean_pc_id(_fv_notify_clean(body.get("pc_id"))) or None
     if pc_id in _BROADCAST_IDS:
         return _fv_err(400, "pc_id 는 카드 하나여야 합니다(없어도 됩니다)")
+    if key in _FV_NOTIFY_SENT:
+        # ★보낸 것으로 아는 key — DB 를 안 건드리고 답한다(반증 c: dup 은 상한이 없으니 DB 쓰기도 없어야 한다)★.
+        #   단 장부에 sent 를 못 적은 key 면 한 번 더 적어 본다(반증 #3 — 안 적히면 재시작 뒤 다시 보낸다).
+        if key in _FV_NOTIFY_UNRECORDED and await _fv_notify_audit(key, pc_id, text, "sent"):
+            _FV_NOTIFY_UNRECORDED.discard(key)
+        return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": _FV_NOTIFY_SENT[key]})
     try:
         _row = await fv_notify_get(key)
     except (sqlite3.Error, OSError) as e:
-        if key in _FV_NOTIFY_SENT:        # 이 프로세스가 보낸 key — 장부를 못 읽어도 두 번 안 보낸다
-            return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": None})
         _m = f"일시 오류({type(e).__name__}) — 보내지 않았습니다. 같은 key 로 다시 보내십시오"
         return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 503, "retry": True}, status_code=503)
-    if (_row and _row.get("status") == "sent") or key in _FV_NOTIFY_SENT:
-        # ★장부 먼저★ — sent_at 을 싣고 dup 도 감사에 센다. 장부에 sent 가 없는데 이 프로세스가 보낸 key(보낸 뒤 장부 쓰기가
-        #   죽은 것)도 dup — 두 번 안 보낸다.
-        # 장부에 sent 가 없는데 이 프로세스가 보낸 key 면 ★sent 로★ 고쳐 적는다(반증 #3) — dup 로 적으면 재시작 뒤 다시 보냈다.
-        _sent_row = bool(_row and _row.get("status") == "sent")
-        await _fv_notify_audit(key, pc_id, text, "dup" if _sent_row else "sent")
-        return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": (_row or {}).get("sent_at")})
+    if _row and _row.get("status") == "sent":
+        # 재시작 뒤 첫 dup — 장부가 막고, 감사에 한 번 세고, 기억에 올려 다음부터는 DB 없이
+        await _fv_notify_audit(key, pc_id, text, "dup")
+        _fv_notify_memo(key, _row.get("sent_at"))
+        return JSONResponse({"ok": True, "key": key, "dup": True, "sent_at": _row.get("sent_at")})
     if key in _FV_NOTIFY_INFLIGHT:
         _m = "같은 key 를 지금 보내는 중입니다 — 잠시 뒤 같은 key 로 다시(두 번 안 갑니다)"
         return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 409, "busy": True, "retry": True}, status_code=409)
@@ -16915,10 +16932,11 @@ async def fv_notify(request: Request):
         return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 503, "reason": "disabled", "retry": False},
                             status_code=503)
     _now_t = time.time()
-    _wait = _fv_notify_limit(_now_t)
+    _wait = _fv_notify_limit(_now_t, key)
     if _wait > 0:
         await _fv_notify_audit(key, pc_id, text, "limited")
-        _m = f"알림 상한(1분 {FV_NOTIFY_PER_MIN}·1시간 {FV_NOTIFY_PER_HOUR}) — {_wait:.0f}초 뒤 같은 key 로 다시"
+        _m = (f"알림 상한(시도 1분 {FV_NOTIFY_PER_MIN}·보냄 1시간 {FV_NOTIFY_PER_HOUR}, sold_fail 몫 {FV_NOTIFY_RESERVED}) — "
+              f"{_wait:.0f}초 뒤 같은 key 로 다시")
         return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 429, "limited": True, "retry": True,
                              "retry_after_s": _wait}, status_code=429)
     _FV_NOTIFY_INFLIGHT.add(key)          # ★검사와 붙여서(사이에 await 없음)★ — 같은 key 동시 요청은 위 409 로
@@ -16930,8 +16948,10 @@ async def fv_notify(request: Request):
             _m = "텔레그램 전송 실패 — 같은 key 로 다시 보내십시오"
             return JSONResponse({"ok": False, "error": _m, "err": _m, "code": 502, "reason": "send_failed", "retry": True},
                                 status_code=502)
-        _FV_NOTIFY_SENT.add(key)
-        await _fv_notify_audit(key, pc_id, text, "sent", mid)
+        _FV_NOTIFY_SENT_TS.append(time.time())
+        _fv_notify_memo(key, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"))
+        if not await _fv_notify_audit(key, pc_id, text, "sent", mid):
+            _FV_NOTIFY_UNRECORDED.add(key)
         if pc_id:
             try:
                 _one = re.sub(r"[\r\n]+", " ", text)[:300]

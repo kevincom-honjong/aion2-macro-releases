@@ -803,13 +803,13 @@ asyncio.run(main())
 |---|---|---|
 | 200 `{ok:true, key, sent:true, message_id}` | 보냈다 | 끝 |
 | 200 `{ok:true, key, dup:true, sent_at}` | 이 key 는 이미 보냈다(`sent_at` 은 서버가 장부를 못 쓴 드문 판에 `null`) | 끝 — 재시도가 안전하다 |
-| 429 `{ok:false, limited:true, retry:true, retry_after_s}` | 상한(텔레그램까지 간 시도 1분 3·1시간 20) | `retry_after_s` 뒤 ★같은 key★ 로 |
+| 429 `{ok:false, limited:true, retry:true, retry_after_s}` | 상한 — 텔레그램까지 간 ★시도★(실패 포함) 1분 3 · ★실제로 보낸★ 알림 1시간 20, 그중 5칸은 `sold_fail:` 로 시작하는 key 몫(다른 key 는 15에서 멈춘다) | `retry_after_s` 뒤 ★같은 key★ 로 |
 | 409 `{ok:false, busy:true, retry:true}` | 같은 key 를 지금 보내는 중 | 잠시 뒤 같은 key 로(두 번 안 간다) |
 | 502 `{ok:false, reason:"send_failed", retry:true}` | 텔레그램 전송 실패 — key 는 안 쓰였다 | 같은 key 로 다시 |
 | 503 `{ok:false, retry:true}` | 서버 장부(DB) 일시 오류 — 안 보냈다 | 같은 key 로 다시 |
 | 503 `{ok:false, reason:"disabled", retry:false}` | 서버에 텔레그램 설정 없음 | 다시 보내도 소용없다 — 화면에만 |
 | 400 / 401 | 본문(key·text 없음, 짝 없는 대리 문자는 `?` 로 바꿔 받는다) / 토큰 | 고친다 |
 
-- 중복 막기·감사 장부는 서버 표 `fv_notify(key PK, pc_id, text, status, n, first_at, last_at, sent_at, message_id)` — 재배포에도 남는다(볼륨). `status` = `sent`|`dup`|`limited`|`send_failed`|`disabled`(마지막 결과, 단 `sent` 는 뒤 결과가 안 덮는다), `n` = 받은 요청 수. 30일 지난 key 는 지운다(그 뒤 같은 key 는 새 알림).
+- 중복 막기·감사 장부는 서버 표 `fv_notify(key PK, pc_id, text, status, n, first_at, last_at, sent_at, message_id)` — 재배포에도 남는다(볼륨). `status` = `sent`|`dup`|`limited`|`send_failed`|`disabled`(마지막 결과, 단 `sent` 는 뒤 결과가 안 덮는다), `n` = 장부에 닿은 요청 수 — ★이미 보낸 key 의 dup 은 서버 기억으로 답하고 장부를 안 쓴다★(상한이 없는 dup 이 DB 를 두드리지 않게; 재시작 뒤 첫 dup 만 한 번 센다). 30일 지난 key 는 지운다(그 뒤 같은 key 는 새 알림).
 - `GET /api/fv/notify?limit=50`(1~200) → `{ok:true, items:[행…]}` 새것부터 — 감사용 읽기.
-- 상한·«지금 보내는 중» 은 서버 프로세스 안 기억이다(재배포 때 비워진다, 워커 하나 전제 — 여러 워커면 서버가 시작할 때 크게 경고한다).
+- 상한·«지금 보내는 중»·보낸 key 기억은 서버 프로세스 안이다(재배포 때 비워진다 — 보낸 key 는 장부 표가 계속 막는다; 워커 하나 전제 — 여러 워커면 서버가 시작할 때 크게 경고한다).
