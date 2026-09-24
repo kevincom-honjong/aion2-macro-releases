@@ -4535,9 +4535,22 @@ if(window.speechSynthesis){
   setInterval(()=>{ try{ if(speechSynthesis.paused) speechSynthesis.resume(); }catch(e){} }, 5000);
 }
 
+// ★소리로 나가는 숫자는 한자어로★ (#172, 주인님 2026-09-24 «2번은 두번·9번은 아홉번 — 이 번 구 번 이렇게») — 말하기 직전 한 곳.
+//   speak(서버 /tts)·speakLocal(브라우저 음성) 맨 앞에서 부른다. 화면 글자는 그대로.
+//   ★팜뷰 ui/index.html ttsSino·ttsText 를 글자 그대로 옮겼다★ = farmview/alarmvoice.speak_text —
+//   tests/test_integration_contracts.py I8 이 세 구현(이 JS·팜뷰 JS·팜뷰 파이썬)을 같은 표로 묶는다.
+function ttsSino(n){ n=Math.floor(+n)||0; if(n<=0) return '영';
+  const D=['','일','이','삼','사','오','육','칠','팔','구'], U=['천','백','십','']; const s=String(n).padStart(4,'0'); let o='';
+  for(let k=0;k<4;k++){ const v=+s[k]; if(v) o+=((v===1&&U[k])?'':D[v])+U[k]; } return o; }
+//   곁가지: 한글 바로 뒤면 띄움 · 쉼표 든 수·번 뒤 조사 아닌 한글(«2번호»·«3 번개»)은 그대로 · PC_09 도.
+function ttsText(t){ t=(t==null)?'':String(t); const SFX={a:'에이',b:'비',c:'씨',d:'디'}; const gap=p=>/[가-힣]/.test(p)?p+' ':p;
+  t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
+  return t.replace(/(^|[^\d.,]|(?<!\d),)(\d{1,4})\s*번(?=$|[^가-힣]|[은는이가을를에의도만과와로으부까께씩입인엔뿐])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
+
 // ★1순위는 서버 신경망 음성(사람 목소리). 서버가 못 만들면 브라우저 내장 음성으로
 //   자동 폴백한다 — 목소리는 아쉬워도 알림 자체가 끊기면 안 되기 때문.★
 function speak(text, force){
+  text=ttsText(text);
   if((!ttsOn && !force) || !text) return;
   if(ttsCfg.engine !== 'server'){ speakLocal(text); return; }
   try{
@@ -4553,6 +4566,7 @@ function speak(text, force){
 }
 
 function speakLocal(text){
+  text=ttsText(text);
   if(!window.speechSynthesis || !text) return;
   try{
     const u = new SpeechSynthesisUtterance(text);
@@ -4884,15 +4898,19 @@ function fmtAt(iso) {
 let charTableData = [];
 let charTableSort = {key:'pc_id', asc:true};
 // ★악몽 도전 티켓 상한 — 한 곳(2026-09-23)★ 예전엔 「N/14」 와 「>=14 빨강」 이 세 곳에 박혀 있었다.
-//   주인님이 악몽을 「쉬운 보스로 티켓만 소모」 로 바꾸시면서 상한을 다시 정하신다 — 정해지기 전엔
-//   null(모름): 칸에는 「N」 만 쓰고, 「가득 참」 빨간 표시도 안 한다(모르는 문턱으로 경고하지 않는다).
-const NIGHTMARE_TICKET_MAX = null;
+//   ★주인님 결정 #82 (2026-09-24)★ «하루 2장, 최대 14까지 쌓임» → 상한 14 · 12 이상 경고색(곧 가득 — 이틀 안 쓰면 넘친다)
+//   · 14 이상 빨강(가득 — 새 티켓이 버려진다). ★상한을 넘는 실측(16 등)은 오류로 버리지 않고 그대로 「16/14」★(빨강).
+//   리셋 시각(5시)은 미확인 가정 — 이 표시는 리셋 시각을 쓰지 않는다. null 로 되돌리면 옛 동작(「N」 만·색 없음).
+const NIGHTMARE_TICKET_MAX = 14, NIGHTMARE_TICKET_WARN = 12;
 function nmTicketText(n){
   if (n == null || n === '') return '–';
   return NIGHTMARE_TICKET_MAX != null ? `${n}/${NIGHTMARE_TICKET_MAX}` : String(n);
 }
 function nmTicketFull(n){
   return NIGHTMARE_TICKET_MAX != null && n != null && n !== '' && Number(n) >= NIGHTMARE_TICKET_MAX;
+}
+function nmTicketWarn(n){   // 경고색 = 12·13 (14 이상은 nmTicketFull 빨강이 이긴다). 숫자가 아니면(«?») 색 없음
+  return NIGHTMARE_TICKET_WARN != null && n != null && n !== '' && !nmTicketFull(n) && Number(n) >= NIGHTMARE_TICKET_WARN;
 }
 let charTableVisible = false;
 // ★은퇴·계정없음 PC 는 여기서 한 번에 뺀다(2026-09-23 주인님)★ — 「24번이 구독으로
@@ -5115,7 +5133,7 @@ function renderCharTable() {
     const oddFull = oddFirst >= 840;
     const dailyNum = daily !== '–' ? parseInt(daily) : 0;
     const dailyFull = dailyNum >= 14;
-    const nmFull = nmTicketFull(r.nightmare_ticket);
+    const nmFull = nmTicketFull(r.nightmare_ticket), nmWarn = nmTicketWarn(r.nightmare_ticket);
     const awFull = r.awakening_ticket >= 3;
     const sancParts = sanc !== '–' ? sanc.match(/(\d+).*\/(\d+)/) : null;
     const sancFirst = sancParts ? parseInt(sancParts[1]) : 0;
@@ -5137,7 +5155,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right font-medium ${ppLow?'':'text-cyan-400'}">${ppLow?rc(pp):pp}</td>
       <td class="px-3 py-1.5 ${oddFull?'':'text-yellow-400'}">${oddFull?rc(esc(odd)):esc(odd)}</td>
       <td class="px-3 py-1.5 text-center">${dailyFull?rc(esc(daily)):esc(daily)}</td>
-      <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):nm}</td>
+      <td class="px-3 py-1.5 text-center">${nmFull?rc(nm):(nmWarn?`<span class="text-amber-400 font-bold">${nm}</span>`:nm)}</td>
       <td class="px-3 py-1.5 text-center">${awFull?rc(esc(aw)):esc(aw)}</td>
       <td class="px-3 py-1.5">${sancFull?rc(esc(sanc)):esc(sanc)}</td>
       <td class="px-3 py-1.5 text-center">${esc(mail)}</td>

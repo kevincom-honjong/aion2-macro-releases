@@ -1131,6 +1131,7 @@ failed.push
 failed.slice
 fallback
 false
+farmview/alarmvoice.speak_text
 fetch
 fg
 filename
@@ -2097,6 +2098,7 @@ power
 power_power
 pp
 ppw
+pre
 preconnect
 prefers-reduced-motion:reduce
 prepare
@@ -2566,6 +2568,7 @@ td:nth-child
 tdot
 tdot-rot
 template
+tests/test_integration_contracts.py
 text
 text-2xl
 text-[10px]
@@ -2798,6 +2801,7 @@ u2191
 u26a0
 ucls
 ui-sans-serif
+ui/index.html
 undefined
 underline
 unknown

@@ -9,13 +9,14 @@
   I5 /parsec/map 쓰기는 세션 로그인으로만(API 키·토큰 401)          (CONTRACTS_대시보드 #2 · 주인님 결정 2026-09-13)
   I6 순환 정보수집 상한이 6캐릭 28.5분(PC-07 실측)을 넘긴다          (SHARED_ISSUES_아이온2 #1)
   I7 팜뷰 ocr.py 가 부르는 /api/fv/ocr/* 가 서버에 전부 있다(메서드까지) (FV_API «밤 › D» · 2026-09-24 #125)
+  I8 대시보드 목소리 번호 읽기(ttsText) = 팜뷰 화면 JS = 팜뷰 alarmvoice.speak_text  (#172 후속 · 2026-09-24)
 """
 import os
 import sys
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 24
+MIN_CHECKS = 29
 
 
 async def t_ack_cancelled():
@@ -114,8 +115,27 @@ def t_collect_cap():
 def t_fv_ocr_paths():
     """팜뷰 중계(farmview/ocr.py)의 경로 글자를 그대로 읽어 서버 라우트 표와 맞춘다 — 한쪽이 이름을 바꾸면 여기서 빨간불."""
     import re as _re
+    import subprocess as _sp
     here = os.path.dirname(os.path.abspath(__file__))
-    src = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview", "ocr.py"))
+    fv = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview"))
+    src = os.path.join(fv, "ocr.py")
+    # ★팜뷰 저장소에 커밋된 ocr.py 만 읽는다 (2026-09-24 아이온2 반증 BLOCKER)★ — 개발컴에만 있는 미커밋 파일에 기대면
+    #   깨끗한 체크아웃에서 I7 이 빨갛다(verify_all 종료 1). 추적 안 되면 건너뛰고 ★보이게 적는다★ — 대신 서버 쪽 고정 표를 본다.
+    try:
+        tracked = _sp.run(["git", "-C", fv, "ls-files", "--error-unmatch", "ocr.py"],
+                          capture_output=True, timeout=20).returncode == 0
+    except Exception:
+        tracked = False
+    have = set()
+    for r in main.app.routes:
+        for meth in getattr(r, "methods", None) or ():
+            have.add((meth, getattr(r, "path", "")))
+    if not tracked:
+        print("  [SKIP] I7 팜뷰 farmview/ocr.py 가 팜뷰 저장소에 커밋돼 있지 않다 — 경로 글자 대조 생략(커밋되면 자동으로 다시 본다)")
+        miss = sorted(u for u in _FV_OCR_ROUTES if u not in have)
+        ok("I7 (ocr.py 미커밋 — 건너뜀) 팜뷰 중계가 쓰는 /api/fv/ocr 여덟 길이 서버에 있다(고정 표)", not miss, "없음: %s" % miss)
+        ok("I7 (ocr.py 미커밋 — 건너뜀) 고정 표가 비지 않았다", len(_FV_OCR_ROUTES) == 8, str(len(_FV_OCR_ROUTES)))
+        return
     try:
         txt = open(src, encoding="utf-8").read()
     except OSError:
@@ -125,14 +145,85 @@ def t_fv_ocr_paths():
         used.add(("POST" if "post" in m.group(1) else "GET", m.group(2)))
     for m in _re.finditer(r"[\"'](/api/fv/ocr/img/)", txt):
         used.add(("GET", "/api/fv/ocr/img/{img_id}"))
-    have = set()
-    for r in main.app.routes:
-        for meth in getattr(r, "methods", None) or ():
-            have.add((meth, getattr(r, "path", "")))
     miss = sorted(u for u in used if u not in have)
     ok("I7 팜뷰 ocr.py 에서 /api/fv/ocr 경로를 읽었다(0개면 파일이 없거나 모양이 바뀐 것)", len(used) >= 7, str(sorted(used)))
     ok("I7 ★그 경로가 서버에 전부 있다(메서드까지)★", not miss, "없음: %s" % miss)
 
 
-run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap, t_fv_ocr_paths])
+# 팜뷰 ocr.py(개발컴 미커밋 판, 2026-09-24)가 부르는 길 — ocr.py 가 커밋되면 위의 글자 대조가 대신한다
+_FV_OCR_ROUTES = {("GET", "/api/fv/ocr/history"), ("GET", "/api/fv/ocr/img/{img_id}"), ("GET", "/api/fv/ocr/queue"),
+                  ("GET", "/api/fv/ocr/stats"), ("POST", "/api/fv/ocr/bad"), ("POST", "/api/fv/ocr/label"),
+                  ("POST", "/api/fv/ocr/skip"), ("POST", "/api/fv/ocr/undo")}
+
+
+def _js_fn(src, name):
+    i = src.index("function %s(" % name)
+    j = src.find("\nfunction ", i + 1)
+    k = src.find("\n//", i + 1)
+    ends = [x for x in (j, k) if x > 0]
+    return src[i:min(ends)].rstrip() if ends else src[i:]
+
+
+# 아이온2 가 든 보기(#172 후속) + 팜뷰 test_tts_number_172 의 까다로운 것들 — 정답은 팜뷰 파이썬 speak_text 가 정한다
+_TTS_KEYS = ["2번", "9번", "PC-22c", "PC-22c가 캡차", "계정2번", "43,000번", "2번호", "PC-09 멈춤", "관제PC-09", "PC_22c가",
+             "14번, 어비스 밖으로 나갔습니다", "2번은 두번으로", "3 번개", "12번지", "세 번째", "10번째 시도", "1.5번", "12345번",
+             "DESKTOP-O5SSEIK", "PC-MANIA", "2번,3번 멈춤", "1,2번", "PC 2번도", "0번", "1234번", "pc-7 과 PC-10b", "PC__09", ""]
+_TTS_FIXED = {"2번": "이 번", "9번": "구 번", "PC-22c": "이십이 번 씨", "계정2번": "계정 이 번", "43,000번": "43,000번", "2번호": "2번호"}
+
+
+def t_tts_same_answer():
+    """#172 후속 — 대시보드 목소리(main.HTML_DASHBOARD speak/speakLocal)도 번호를 한자어로. 팜뷰 화면 JS·팜뷰 파이썬과 ★같은 답★."""
+    import importlib.util
+    import json
+    import re as _re
+    import shutil
+    import subprocess
+    import tempfile
+    here = os.path.dirname(os.path.abspath(__file__))
+    fvdir = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview"))
+    html = main.HTML_DASHBOARD
+    d_sino, d_tts = _js_fn(html, "ttsSino"), _js_fn(html, "ttsText")
+    try:
+        ui = open(os.path.join(fvdir, "ui", "index.html"), encoding="utf-8").read().replace("\r\n", "\n")
+        f_sino, f_tts = _js_fn(ui, "ttsSino"), _js_fn(ui, "ttsText")
+    except (OSError, ValueError):
+        f_sino = f_tts = None
+    ok("I8 대시보드 ttsSino·ttsText = 팜뷰 ui/index.html 의 것과 글자 그대로", (d_sino, d_tts) == (f_sino, f_tts),
+       "대시보드 %d/%d자 · 팜뷰 %s" % (len(d_sino), len(d_tts), f_tts and len(f_tts)))
+    spec = importlib.util.spec_from_file_location("fv_alarmvoice_i8", os.path.join(fvdir, "alarmvoice.py"))
+    av = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(av)
+    want = [av.speak_text(k) for k in _TTS_KEYS]
+    bad_fixed = {k: av.speak_text(k) for k, v in _TTS_FIXED.items() if av.speak_text(k) != v}
+    ok("I8 팜뷰 파이썬 speak_text 가 아이온2 보기대로(2번→이 번 · PC-22c→이십이 번 씨 · 계정2번 띄움 · 43,000번·2번호 그대로)",
+       not bad_fixed, str(bad_fixed))
+    node = shutil.which("node")
+    got = None
+    if node:
+        dd = tempfile.mkdtemp(prefix="i8tts_")
+        p = os.path.join(dd, "t.js")
+        open(p, "w", encoding="utf-8").write(d_sino + "\n" + d_tts + "\nconst K=%s;console.log(JSON.stringify(K.map(ttsText).concat([ttsText(null), ttsText(ttsText('PC-22c 2번'))])))"
+                                             % json.dumps(_TTS_KEYS, ensure_ascii=False))
+        r = subprocess.run([node, p], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        shutil.rmtree(dd, ignore_errors=True)
+        try:
+            got = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception:
+            got = None
+    diff = [(k, g, w) for k, g, w in zip(_TTS_KEYS + ["null", "두 번"], got or [], want + ["", "이십이 번 씨 이 번"]) if g != w]
+    ok("I8 ★대시보드 JS ttsText 답 = 팜뷰 파이썬 speak_text 답★(%d개 · 두 번 불러도 같다)" % len(_TTS_KEYS),
+       got is not None and len(got) == len(_TTS_KEYS) + 2 and not diff, "node=%s %s" % (node, diff[:6]))
+    heads = {}
+    for name in ("speak", "speakLocal"):
+        m = _re.search(r"function %s\([^)]*\)\{\n(.*)" % name, html)
+        heads[name] = m.group(1).strip() if m else None
+    ok("I8 speak·speakLocal 맨 앞이 text=ttsText(text);", all(v == "text=ttsText(text);" for v in heads.values()), str(heads))
+    decl = list(_re.finditer(r"(?<![\w$.])function\s+([A-Za-z_$][\w$]*)\s*\(", html))
+    owners = set()
+    for m in _re.finditer(r"new SpeechSynthesisUtterance\(|new Audio\(", html):
+        owners.add([x.group(1) for x in decl if x.start() < m.start()][-1])
+    ok("I8 대시보드에서 말하는 자리(SpeechSynthesisUtterance·Audio)는 speak·speakLocal 안에만", owners == {"speak", "speakLocal"}, str(owners))
+
+
+run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap, t_fv_ocr_paths, t_tts_same_answer])
 finish("test_integration_contracts", MIN_CHECKS)

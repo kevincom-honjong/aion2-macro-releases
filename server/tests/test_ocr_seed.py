@@ -7,6 +7,7 @@
   S  씨앗 돌리기 · 몇 번 돌려도 같다 · 큐/이미지/팜뷰 · 첫 조회 자동 · 업로드 훅 · 가득(507) · 겹침
     cd updater/server && python -X utf8 tests/test_ocr_seed.py
 """
+import asyncio
 import os
 import shutil
 import struct
@@ -18,7 +19,7 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 40
+MIN_CHECKS = 44
 KEY = "testkey"
 TOK = "fvsecret-seed"
 C = TestClient(main.app, raise_server_exceptions=False, follow_redirects=False)
@@ -334,8 +335,39 @@ def t_full_busy():
            str(b))
 
 
+async def t_first_wait():
+    """★첫 조회는 SEED_FIRST_WAIT_S 까지만 기다린다★ (2026-09-24 아이온2 반증: 2,000장 34.8초 > 팜뷰 시간제한 10초)."""
+    import time as _t
+    with _Store() as st:
+        for i in range(20):
+            st.put(_pfx("PC-11", i) + "ocrdiff_kina.png", crop(40 + i))
+        real, wait0 = OL.seed_one, OL.SEED_FIRST_WAIT_S
+        calls = []
+
+        async def _slow(*a, **k):
+            calls.append(1)
+            await asyncio.sleep(0.05)
+            return "added"
+        OL.seed_one, OL.SEED_FIRST_WAIT_S = _slow, 0.2
+        try:
+            t0 = _t.monotonic()
+            await OL._auto_seed("main")
+            dt = _t.monotonic() - t0
+            task = OL._SEED_TASKS.get("main")
+            ok("S-15 ★느린 씨앗(20장×0.05초)이어도 첫 조회는 상한(0.2초) 근처에서 돌아온다★", dt < 0.6, "%.2fs" % dt)
+            ok("S-15b 씨앗은 뒤에서 계속 돈다(과제가 살아 있고 아직 다 안 훑음)",
+               task is not None and not task.done() and 0 < len(calls) < 20, "calls=%d" % len(calls))
+            await OL._auto_seed("main")
+            ok("S-15c 도는 중에 다시 조회하면 새로 안 띄운다(같은 과제·곧바로)", OL._SEED_TASKS.get("main") is task, "")
+            await task
+            ok("S-15d 뒤 과제가 끝까지 훑고 DONE — 20장 한 번씩", len(calls) == 20 and "main" in OL._SEED_DONE, "calls=%d" % len(calls))
+        finally:
+            OL.seed_one, OL.SEED_FIRST_WAIT_S = real, wait0
+            OL._SEED_TASKS.clear()
+
+
 def test_all():
-    run_all([t_png, t_names, t_seed, t_auto_and_upload, t_full_busy])
+    run_all([t_png, t_names, t_seed, t_auto_and_upload, t_full_busy, t_first_wait])
     finish("test_ocr_seed", MIN_CHECKS)
 
 

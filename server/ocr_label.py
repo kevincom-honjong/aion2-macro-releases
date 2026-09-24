@@ -177,6 +177,7 @@ _MAIN_NAME = "main"
 _RATE: dict = {}                 # (tenant, 기본 pc) · ("@tenant", tenant) → deque[시각]
 _LOCKS: dict = {}                # 이벤트 루프 → asyncio.Lock (시험이 루프를 여럿 쓴다)
 _INITED: set = set()             # 표를 만든 DB 경로
+_INIT_LOCKS: dict = {}           # 이벤트 루프 → ensure_tables 전용 asyncio.Lock (_lock 과 따로 — _lock 안에서 불려도 안 막히게)
 
 
 # ─── 연결 ────────────────────────────────────────────────────────────────────
@@ -211,10 +212,26 @@ def _dbp() -> str:
 
 
 async def ensure_tables() -> None:
-    """★표는 처음 쓸 때 만든다★ — main 의 lifespan 을 안 건드리려고(main.py 수정 최소)."""
+    """★표는 처음 쓸 때 만든다★ — main 의 lifespan 을 안 건드리려고(main.py 수정 최소).
+    ★한 번에 하나만 (2026-09-24 아이온2 반증)★ — 옛 표(/data) 위에서 첫 요청 8개가 동시에 오면 ALTER ADD COLUMN 이
+    겹쳐 «duplicate column name» 500 이 하나씩 났다(«database is locked» 경합도 같은 자리). 루프마다 잠금 + 잠금 안에서
+    다시 확인 + ALTER 의 «duplicate column» 은 무시(다른 프로세스가 먼저 더한 판)."""
     p = _dbp()
     if p in _INITED:
         return
+    loop = asyncio.get_running_loop()
+    lk = _INIT_LOCKS.get(loop)
+    if lk is None:
+        if len(_INIT_LOCKS) > 8:
+            _INIT_LOCKS.clear()
+        lk = _INIT_LOCKS[loop] = asyncio.Lock()
+    async with lk:
+        if p in _INITED:
+            return
+        await _ensure_tables_once(p)
+
+
+async def _ensure_tables_once(p: str) -> None:
     async with aiosqlite.connect(p) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
@@ -266,7 +283,11 @@ async def ensure_tables() -> None:
         for col, typ in (("site_raw", "TEXT"), ("prompt_sha1", "TEXT"), ("csha1", "TEXT"), ("phash", "TEXT"),
                          ("dhash_bits", "INTEGER"), ("lts", "REAL")):
             if col not in have:
-                await db.execute("ALTER TABLE ocr_img ADD COLUMN %s %s" % (col, typ))
+                try:
+                    await db.execute("ALTER TABLE ocr_img ADD COLUMN %s %s" % (col, typ))
+                except aiosqlite.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
         await db.execute("CREATE INDEX IF NOT EXISTS ix_ocr_img_lts ON ocr_img(tenant, lts)")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ocr_hist (
@@ -814,6 +835,10 @@ _SEED_DIFF = re.compile(r"^ocrdiff_(?P<name>.+?)_L(?P<l>[^_]*)_G(?P<g>[^_]*)$")
 _UNTAG = {"c": ",", "s": "/", "p": "%", "d": ".", "l": "(", "r": ")", "u": "+", "m": "-", "k": "K", "g": "M", "x": "?"}
 _SEED_DONE: set = set()                           # (프로세스) 큐 첫 조회 때 자동 씨앗을 이미 돌린 테넌트
 _SEED_BUSY: set = set()
+# ★첫 조회가 씨앗을 기다리는 상한(초)★ (2026-09-24 아이온2 반증: 크롭 2,000장 = 34.8초인데 팜뷰 ocr.py 시간제한 10초)
+#   넘으면 씨앗은 뒤에서 계속 돌고 큐는 그때까지 들어간 것만 바로 준다. 적은 장수는 상한 안에 끝나 동작이 예전과 같다.
+SEED_FIRST_WAIT_S = 3.0
+_SEED_TASKS: dict = {}                            # 테넌트 → 뒤에서 도는 씨앗 과제(참조를 쥐어 GC 에 안 먹히게)
 
 
 def _untag(v: str) -> str:
@@ -1028,15 +1053,29 @@ async def seed_upload_hook(tenant: str, bdir: str, fname: str) -> None:
         print(f"[OCR] 씨앗(업로드) 실패(무시) {fname}: {e.__class__.__name__}: {e}", flush=True)
 
 
-async def _auto_seed(tenant: str) -> None:
-    """큐를 처음 볼 때(프로세스·테넌트마다 한 번) 씨앗을 돌린다 — 탭이 뜨자마자 판별할 거리가 있게. 실패는 조용히."""
-    if tenant in _SEED_DONE:
-        return
+async def _auto_seed_run(tenant: str) -> None:
     try:
         await seed_bugs_core(tenant)
     except Exception as e:
         _SEED_DONE.add(tenant)
         print(f"[OCR] 자동 씨앗 실패(무시) {tenant}: {e.__class__.__name__}: {e}", flush=True)
+
+
+async def _auto_seed(tenant: str) -> None:
+    """큐를 처음 볼 때(프로세스·테넌트마다 한 번) 씨앗을 돌린다 — 탭이 뜨자마자 판별할 거리가 있게. 실패는 조용히.
+    ★SEED_FIRST_WAIT_S 까지만 기다린다★ — 넘으면 과제는 뒤에서 계속 돌고 이 조회는 바로 돌아간다(다음 조회는 기다리지 않는다)."""
+    if tenant in _SEED_DONE:
+        return
+    task = _SEED_TASKS.get(tenant)
+    if task is not None and not task.done():
+        try:
+            if task.get_loop() is asyncio.get_running_loop():
+                return                               # 이미 뒤에서 돈다 — 겹쳐 띄우지 않는다
+        except RuntimeError:
+            pass
+    task = _SEED_TASKS[tenant] = asyncio.ensure_future(_auto_seed_run(tenant))
+    task.add_done_callback(lambda t, k=tenant: _SEED_TASKS.pop(k, None) if _SEED_TASKS.get(k) is t else None)
+    await asyncio.wait({task}, timeout=SEED_FIRST_WAIT_S)
 
 
 # ─── 매크로: 라벨 증분 ────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ import time
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 77     # 2026-09-23 실측값으로 맞춘다 — node 없으면 JS 가 빠지므로 일부러 빨간불
+MIN_CHECKS = 79     # 2026-09-23 실측값으로 맞춘다 — node 없으면 JS 가 빠지므로 일부러 빨간불
 
 NOW_ISO = "2099-01-01T00:00:00"     # 리셋 보정이 끼지 않게 먼 미래 수집 시각
 
@@ -241,7 +241,7 @@ let CHAR_TABLE_AT = 0, CORRIDOR_AT = 0;
 
 _JS_FUNCS = ("isAcctSuf", "baseId", "isFakePc", "sumClock", "ageNote", "serverSum", "serverSumNote",
              "summaryPcs", "redrawSummary", "loadServerSummary", "refreshSummary", "updateCorridorTile",
-             "dkHero", "nmTicketText", "nmTicketFull", "isExcludedPc")
+             "dkHero", "nmTicketText", "nmTicketFull", "nmTicketWarn", "isExcludedPc")
 _JS_CONSTS = ("const SERVER_SUMMARY_TTL_MS", "const FAKE_PC_BASES", "const NIGHTMARE_TICKET_MAX")
 
 FAKE_IDS = ["PC-TEST", "pc-test", "PC-TESTb", "pc-testb", "PC-DEMOc", " PC-TEST ", " pc-demo", "PC-DEMO",
@@ -394,9 +394,11 @@ state = {'PC-01': {pc_id:'PC-01'}, 'PC-TEST': {pc_id:'PC-TEST'}, 'PC-DEMO': {pc_
          'PC-TESTb': {pc_id:'PC-TESTb'}, 'PC-02b': {pc_id:'PC-02b'}};
 out.I2 = summaryPcs().map(p => p.pc_id).sort();
 
-// J. 악몽 티켓 — 상한 모르면 「N」 만, 빨강 없음
+// J. 악몽 티켓 — 주인님 #82: 상한 14 · 12↑ 경고 · 14↑ 빨강 · 넘는 실측은 그대로
 out.J = {five: nmTicketText(5), zero: nmTicketText(0), nul: nmTicketText(null), empty: nmTicketText(''),
-         full: nmTicketFull(999), max: NIGHTMARE_TICKET_MAX};
+         over: nmTicketText(16), max: NIGHTMARE_TICKET_MAX, warnAt: NIGHTMARE_TICKET_WARN,
+         full: [11, 12, 13, 14, 16, '14', null, '', '?'].map(nmTicketFull),
+         warn: [11, 12, 13, 14, 16, '12', null, '', '?'].map(nmTicketWarn)};
 console.log(JSON.stringify(out));
 })().catch(e => { console.error(e && e.stack || e); process.exit(3); });
 """
@@ -472,9 +474,13 @@ def t_js():
     ok("JS-10b PC-TESTb·pc-testb·PC-DEMOc 도 가짜", all(o["I"][FAKE_IDS.index(x)] for x in ("PC-TESTb", "pc-testb", "PC-DEMOc")))
     ok("JS-10c 전광판 모집단(summaryPcs)에 가짜 PC 없음", o["I2"] == ["PC-01", "PC-02b"], str(o["I2"]))
     j = o["J"]
-    ok("JS-11 악몽 상한 미정(null)이면 「5」·「0」·「–」 만", j["max"] is None and j["five"] == "5" and j["zero"] == "0"
+    ok("JS-11 악몽 상한 14(주인님 #82) — 「5/14」·「0/14」·빈 값 「–」", j["max"] == 14 and j["five"] == "5/14" and j["zero"] == "0/14"
        and j["nul"] == "–" and j["empty"] == "–", str(j))
-    ok("JS-11b 상한 미정이면 「가득 참」 빨강 없음", j["full"] is False)
+    ok("JS-11b 14 이상 빨강(문자 '14' 도) · 13 이하·빈 값·«?» 는 아님",
+       j["full"] == [False, False, False, True, True, True, False, False, False], str(j["full"]))
+    ok("JS-11d 12·13 경고색 · 11 은 아님 · 14 이상은 빨강이 이겨 경고 아님 · 빈 값·«?» 색 없음",
+       j["warnAt"] == 12 and j["warn"] == [False, True, True, False, False, True, False, False, False], str(j["warn"]))
+    ok("JS-11e 상한 넘는 실측 16 은 버리지 않고 「16/14」", j["over"] == "16/14", str(j["over"]))
     # 정적 — 악몽 「/14」·「>=14」 하드코딩이 다시 생기지 않게
     # 두 방향 다 — `x >= 14` 도 `14 <= x` 도 (반증 2바퀴 M31: 뒤집은 비교가 옛 정규식을 빠져나갔다)
     nm_hard = (re.findall(r"nightmare_ticket[^\n]{0,60}?(?:/ ?14|>= ?14|> ?13)", src)

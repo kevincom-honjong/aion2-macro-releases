@@ -8,6 +8,7 @@
      → ocr_label_net.poll_now(requests 가 실제로 만드는 since 글자) → _merge → before() 적중 · bad · undo
     cd updater/server && python -X utf8 tests/test_ocr_dual.py
 """
+import asyncio
 import base64
 import contextlib
 import hashlib
@@ -25,7 +26,7 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 69
+MIN_CHECKS = 72
 KEY = "testkey"
 TOK = "fvsecret-dual"
 C = TestClient(main.app, raise_server_exceptions=False, follow_redirects=False)
@@ -272,19 +273,23 @@ def t_ts_paging_and_clock():
 
 
 # ─── M. 옛 표에 열 더하기 ────────────────────────────────────────────────────
+def _old_schema():
+    c = sqlite3.connect(db.DB_PATH)
+    c.executescript("""
+        CREATE TABLE ocr_img (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, site TEXT NOT NULL,
+          sha1 TEXT NOT NULL, dhash TEXT NOT NULL, cluster_id INTEGER NOT NULL, pc_id TEXT, prompt TEXT, gemini TEXT,
+          local TEXT, ts REAL, created REAL NOT NULL, last_seen REAL, count INTEGER NOT NULL DEFAULT 1,
+          nbytes INTEGER NOT NULL DEFAULT 0, relpath TEXT, mime TEXT, on_disk INTEGER NOT NULL DEFAULT 1,
+          seq INTEGER NOT NULL DEFAULT 0, UNIQUE(tenant, site, sha1));
+        INSERT INTO ocr_img(tenant, site, sha1, dhash, cluster_id, created) VALUES('main','old','aa','0000000000000000',1,1.0);
+    """)
+    c.commit()
+    c.close()
+
+
 async def t_migrate():
     with _Store():
-        c = sqlite3.connect(db.DB_PATH)
-        c.executescript("""
-            CREATE TABLE ocr_img (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, site TEXT NOT NULL,
-              sha1 TEXT NOT NULL, dhash TEXT NOT NULL, cluster_id INTEGER NOT NULL, pc_id TEXT, prompt TEXT, gemini TEXT,
-              local TEXT, ts REAL, created REAL NOT NULL, last_seen REAL, count INTEGER NOT NULL DEFAULT 1,
-              nbytes INTEGER NOT NULL DEFAULT 0, relpath TEXT, mime TEXT, on_disk INTEGER NOT NULL DEFAULT 1,
-              seq INTEGER NOT NULL DEFAULT 0, UNIQUE(tenant, site, sha1));
-            INSERT INTO ocr_img(tenant, site, sha1, dhash, cluster_id, created) VALUES('main','old','aa','0000000000000000',1,1.0);
-        """)
-        c.commit()
-        c.close()
+        _old_schema()
         await OL.ensure_tables()
         cols = {r[1] for r in rows("PRAGMA table_info(ocr_img)")}
         ok("M-1 옛 표에 열 여섯 더함(site_raw·prompt_sha1·csha1·phash·dhash_bits·lts)",
@@ -295,6 +300,21 @@ async def t_migrate():
         await OL.ensure_tables()
         ok("M-3 두 번 돌려도 된다(있으면 건너뜀)", len({r[1] for r in rows("PRAGMA table_info(ocr_img)")}) == len(cols))
         ok("M-4 ts 인덱스", any(r[0] == "ix_ocr_img_lts" for r in rows("SELECT name FROM sqlite_master WHERE type='index'")))
+    # ★M-5 옛 표 위 첫 요청 8개 동시 (2026-09-24 아이온2 반증: «duplicate column name» 500 하나씩)★
+    with _Store():
+        _old_schema()
+        OL._INITED.discard(OL._dbp())
+        res = await asyncio.gather(*[OL.ensure_tables() for _ in range(8)], return_exceptions=True)
+        errs = [repr(e) for e in res if isinstance(e, BaseException)]
+        ok("M-5 ★옛 표 위 ensure_tables 8개 동시 — 예외 0★", not errs, str(errs)[:300])
+        ok("M-5b 그 뒤 열 여섯이 다 있다", {"site_raw", "prompt_sha1", "csha1", "phash", "dhash_bits", "lts"}
+           <= {r[1] for r in rows("PRAGMA table_info(ocr_img)")})
+    # M-6 잠금 밖(다른 프로세스 흉내)에서 겹쳐 더해도 «duplicate column» 은 삼킨다
+    with _Store():
+        _old_schema()
+        res = await asyncio.gather(*[OL._ensure_tables_once(OL._dbp()) for _ in range(4)], return_exceptions=True)
+        errs = [repr(e) for e in res if isinstance(e, BaseException)]
+        ok("M-6 잠금 밖 4개 겹쳐도 «duplicate column» 로 안 죽는다", not any("duplicate" in e.lower() for e in errs), str(errs)[:300])
 
 
 # ─── R. 매크로 코드 그대로 왕복 ──────────────────────────────────────────────

@@ -25,7 +25,7 @@ import tempfile
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 81     # 2026-09-23 실측값 — node 가 없으면 JS 가 빠지므로 일부러 빨간불
+MIN_CHECKS = 83     # 2026-09-23 실측값 — node 가 없으면 JS 가 빠지므로 일부러 빨간불
 
 TZS = ("Asia/Seoul", "Asia/Ho_Chi_Minh")
 
@@ -386,7 +386,7 @@ console.log(JSON.stringify(o));
     ok("JS3-g 카드 메뉴 머리 macro_version·계정번호에 <img 주입 없음", "<img" not in o["menu"], o["menu"][:160])
 
 
-_CT_FUNCS = ("esc", "escAttr", "isAcctSuf", "baseId", "nmTicketText", "nmTicketFull", "collectedAtDate",
+_CT_FUNCS = ("esc", "escAttr", "isAcctSuf", "baseId", "nmTicketText", "nmTicketFull", "nmTicketWarn", "collectedAtDate",
              "lastDailyReset", "lastWeeklyReset", "isBeforeReset", "isSurfaceZero", "displayAbyssTime",
              "renderCharTable")
 
@@ -407,8 +407,8 @@ def t_js3_js10_table():
         {"pc_id": "PC-01", "slot": 1, "name": "a", "gear_power": 2800, "sanctuary": "2/5"},     # 행 안 빨강
         {"pc_id": "PC-02", "slot": 1, "name": "b", "gear_power": 2800, "sanctuary": "1/1"},     # 행 빨강
         {"pc_id": "PC-03", "slot": 1, "name": "c", "gear_power": 2800, "sanctuary": "5/5"},     # 둘 다 빨강
-        {"pc_id": "PC-04", "slot": "x);alert(1)//", "name": "d", "arcana_image": True, "equip_image": True},
-        {"pc_id": "PC-04", "slot": '"]);alert(2);//', "name": "e"},
+        {"pc_id": "PC-04", "slot": "x);alert(1)//", "name": "d", "arcana_image": True, "equip_image": True, "nightmare_ticket": 12},
+        {"pc_id": "PC-04", "slot": '"]);alert(2);//', "name": "e", "nightmare_ticket": 16},
     ]
     js = _DOM + consts + "\n" + fns + r"""
 let state = {};
@@ -437,6 +437,13 @@ console.log(JSON.stringify({html: els['char-tbody'].innerHTML}));
     for pc in ("PC-01", "PC-02", "PC-03"):
         b, r = res.get(pc, (-1, -2))
         ok("JS10-%s 그룹 뱃지 수 == 빨간 행 수 (%s)" % (pc[-1], pc), b == r, "badge=%s rows=%s" % (b, r))
+    _sl = r"(?:/|&#x2F;|&#47;)"          # esc 가 «/» 를 엔티티로 바꿀 수 있다
+    ok("JS10-nm 악몽 12 → 「12/14」 경고색(주인님 #82 12↑)",
+       bool(re.search(r'<span class="text-amber-400 font-bold">12' + _sl + r'14</span>', html)),
+       str(re.findall(r".{0,60}12" + _sl + r"14.{0,10}", html)[:2]))
+    ok("JS10-nm2 악몽 16(상한 넘는 실측) → 버리지 않고 「16/14」 빨강",
+       bool(re.search(r'<span class="text-red-400 font-bold">16' + _sl + r'14</span>', html)),
+       str(re.findall(r".{0,60}16" + _sl + r"14.{0,10}", html)[:2]))
     handlers = re.findall(r'on(?:click|change)="([^"]*)"', html)
     slot_h = [h for h in handlers if re.search(r"showScreenshot|toggleSlotFilter|collectSlot|selectAllSlots", h)]
     ok("JS3-h 캐릭 표 onclick/onchange 에서 slot 을 찾았다", len(slot_h) >= 8, str(len(slot_h)))
