@@ -9,7 +9,7 @@ Railway 배포용
   DB_PATH             SQLite 파일 경로 (기본: /tmp/macro_control.db)
   PORT                uvicorn 포트 (Railway 자동 설정)
 """
-import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio
+import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio, sqlite3, sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -31,7 +31,7 @@ from database import (
     release_updater_command_from_fv, updater_command_status,
     recent_updater_commands,
     pc_clock_get, pc_clock_put, mark_updater_handed,
-    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
+    upsert_char_info, get_char_info, get_all_char_info, adjust_char_kina, char_info_gen, kina_adjust_row, log_has, KINA_MAX, KINA_SEQ_MAX, UPDATER_COMMAND_MAX_AGE_SEC,
     upsert_nightmare_progress, get_nightmare_progress, get_all_nightmare_progress,
     upsert_slot_filters, get_slot_filters, get_all_slot_filters,
     tg_map_put, tg_map_get, tg_map_recent, tg_map_delete_pc,
@@ -1246,9 +1246,41 @@ async def _fv_claim_sweep_once() -> list:
     return rows
 
 
+def _worker_warning(env=None, argv=None) -> str:
+    """★프로세스가 둘 이상이면 경고 글 (2026-09-24 아이온2 반증 #2)★ — FV 스냅샷 캐시·폴백 세대(database.char_info_gen)·
+    WS 연결·순환 엔진(_ROT)·잠금 칸이 전부 ★프로세스 안★ 상태다. 워커가 둘이면 판매 차감을 한 워커가 받고 다른 워커가 옛 캐시를
+    120초까지 줄 수 있다. uvicorn 은 `--workers` 기본값을 $WEB_CONCURRENCY 에서 읽으므로 Railway 변수 하나로 조용히 늘 수 있다.
+    돌려주는 값: 경고 문장(한 워커면 "")."""
+    env = os.environ if env is None else env
+    argv = sys.argv if argv is None else argv
+    for k in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        try:
+            n = int(str(env.get(k) or "").strip())
+        except ValueError:
+            continue
+        if n > 1:
+            return f"{k}={n} — 워커가 {n}개면 FV 스냅샷 캐시·창고키나 세대·WS·순환 상태가 워커마다 따로다(옛 창고키나가 보일 수 있다)"
+    a = [str(x) for x in (argv or [])]
+    for i, x in enumerate(a):
+        v = a[i + 1] if x == "--workers" and i + 1 < len(a) else (x.split("=", 1)[1] if x.startswith("--workers=") else None)
+        if v is not None:
+            try:
+                n = int(v)
+            except ValueError:
+                continue
+            if n > 1:
+                return f"--workers {n} — 워커가 {n}개면 FV 스냅샷 캐시·창고키나 세대·WS·순환 상태가 워커마다 따로다"
+    return ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _probe_volume()
+    _ww = _worker_warning()
+    if _ww:
+        for _ in range(3):               # ★크게★ — 배포 로그에서 한 줄은 묻힌다
+            print(f"★★★ [경고] 서버 프로세스가 둘 이상입니다: {_ww} — Railway 에서 WEB_CONCURRENCY 를 지우거나 1 로 ★★★",
+                  flush=True)
     await init_db()
     # ★되돌려진 창고키나 부팅 복구 (2026-09-23 P0 v3)★ — 옛 서버가 재전송으로 되살린 판매를 다음 재전송까지
     #   기다리지 않고 지금 고친다. 카드마다 로그 한 줄(A2). 실패해도 부팅은 계속.
@@ -15415,11 +15447,12 @@ async def _fv_dispatch_in_order(pid: str, cmd: str, args: dict) -> dict:
     async with lk:
         return await _dispatch_macro_command(FV_TENANT, pid, cmd, args)
 FV_SNAP_TTL = 3.0                      # 스냅샷 서버 캐시(초) — 주인님 지시
+FV_SNAP_STALE_MAX = 120.0              # 조립이 실패하면 이 나이까지는 마지막 성공본을 cached:true 로 준다(#201 부류, 2026-09-24)
 FV_ALERT_KEEP = 200                    # global.alerts 링버퍼 길이
 FV_AGE_UNKNOWN_S = 10 ** 9             # progress.kina_age_s 「모름」 — 팜뷰 계약(CONTRACTS_팜뷰 2026-09-13): 정수, 모르면 10^9
 FV_KINA_DELTA_MAX = 10 ** 12           # kina_adjust 한 번에 옮길 수 있는 상한(오타·단위 사고 방어: 1조)
 
-_fv_snap: dict = {"ts": 0.0, "body": None}
+_fv_snap: dict = {"ts": 0.0, "body": None, "gen": -1}   # gen = 조립 ★전★ database.char_info_gen() (다르면 캐시·폴백 둘 다 안 준다)
 _FV_ALERTS = _fv_deque(maxlen=FV_ALERT_KEEP)
 _FV_TS_FMT = "%Y-%m-%dT%H:%M:%S"       # DB 가 쓰는 형식(UTC naive) — 문자열 비교가 곧 시간 비교
 # ★B-FV2 (2026-09-23) 아직 안 닫힌 초는 내주지 않는다★ — 커서가 초 단위 `> since` 라, 폴링이
@@ -16493,7 +16526,8 @@ async def fv_snapshot(request: Request):
     if bad:
         return bad
     now = time.time()
-    if _fv_snap["body"] is not None and (now - _fv_snap["ts"]) < FV_SNAP_TTL:
+    _gen = char_info_gen()               # ★조립 전★ 세대 — 조립 중에 창고키나가 바뀌면 적힌 세대가 낡아 다음 요청이 다시 만든다
+    if _fv_snap["body"] is not None and _fv_snap.get("gen") == _gen and (now - _fv_snap["ts"]) < FV_SNAP_TTL:
         body = _fv_snap["body"]
         body = {**body, "cached": True,
                 "cache_age_s": round(now - _fv_snap["ts"], 2)}
@@ -16501,8 +16535,17 @@ async def fv_snapshot(request: Request):
     try:
         body = await _fv_build_snapshot()
     except Exception as e:
+        # ★#201 부류 (2026-09-24 아이온2 승인)★ 조립이 한 번 실패했다고 팜뷰 화면을 500 으로 비우지 않는다 — 마지막 성공본이
+        #   FV_SNAP_STALE_MAX(120초) 안이면 그것을 cached:true + 진짜 나이(cache_age_s)로 준다. 넘으면 예전대로 500.
+        #   ★char_info·장부가 그 사이 한 번이라도 쓰였으면(세대가 다르면) 절대 안 준다★ — 판매 차감·새 판독·장부 재적용을 건너
+        #   옛 창고키나를 내지 않는다(아이온2 반증 #2). 세대는 database 가 커밋 직후 올린다(쓰기 자리 넷, 자원 쪽).
+        # 나이는 ★실패한 지금★ 부터 잰다(아이온2 반증 #3) — 조립이 몇 초 걸리다 죽으면 요청 시작 시각으론 그만큼 젊게 나왔다.
+        _last, _age = _fv_snap["body"], time.time() - float(_fv_snap["ts"] or 0.0)
+        if _last is not None and _fv_snap.get("gen") == char_info_gen() and _age <= FV_SNAP_STALE_MAX:
+            print(f"[fv] 스냅샷 조립 실패 — 마지막 성공본({_age:.0f}초 전)을 준다: {type(e).__name__}: {e}", flush=True)
+            return _fv_json(request, _fv_maybe_raw(request, {**_last, "cached": True, "cache_age_s": round(_age, 2)}))
         return _fv_err(500, f"스냅샷 조립 실패: {e}")
-    _fv_snap["ts"], _fv_snap["body"] = now, body
+    _fv_snap["ts"], _fv_snap["body"], _fv_snap["gen"] = now, body, _gen
     # ★B-FV1 (2026-09-23)★ 캐시 미스 갈래도 raw 를 거른다 — 예전엔 캐시 적중 갈래만
     #   _fv_maybe_raw 를 불러서 ★3초마다 한 번은★ ?raw=1 없이도 카드 59필드·PII 가 나갔다.
     return _fv_json(request, _fv_maybe_raw(request, {**body, "cached": False, "cache_age_s": 0}))
@@ -16718,7 +16761,9 @@ async def fv_kina_adjust(request: Request):
     nspc = ns(FV_TENANT, pc_id)
     try:
         res = await adjust_char_kina(nspc, tid, delta, why)
-    except Exception as e:
+    except (sqlite3.Error, OSError, asyncio.TimeoutError) as e:
+        # ★DB·OS 오류만 (아이온2 반증 #4)★ — 코드 버그(TypeError 등)까지 503 retry 로 감싸면 팜뷰가 같은 tid 를 영원히 다시 보내며
+        #   아무도 버그를 못 본다. 그런 건 예전대로 500 으로 드러나게 둔다.
         # ★#201 부류 (2026-09-24 아이온2 — 일시 실패를 확정 실패로 만들지 않는다)★ DB 가 잠깐 잠기거나(바쁨 5초 초과)
         #   네트워크 디스크가 흔들리면 예전엔 맨 500(«Internal Server Error» 글자)이었고, 팜뷰는 그 답을 «차감 대기 · 기록만
         #   남김» 빨간 칩 + 오류음으로 주인님께 올렸다(자동 재시도 없음). 커밋 뒤 연결 닫기에서 나는 예외도 있을 수 있어
@@ -16761,6 +16806,22 @@ async def fv_kina_adjust(request: Request):
             await push_state(FV_TENANT)   # 카드 재조립(보는 사람 없으면 안 만든다)
         except Exception as e:
             print(f"[fv] kina_adjust 방송 실패 {pc_id}: {e}")
+    else:
+        # ★dup 재전송 (2026-09-24 아이온2 반증 #1)★ — 첫 요청이 커밋 뒤 503(연결 닫기 예외)이었으면 로그줄도 캐시 비우기도
+        #   안 됐다. 재전송이 dup 로 답하면서 ① 캐시를 비우고 ② 그 tid 의 로그줄이 없으면 장부 줄에서 되살린다(A2 증거).
+        _fv_snap["body"] = None
+        try:
+            # ★판매 줄에만 있는 글자★ «원, tid X) » (아이온2 반증 #4) — 부팅·재전송 복구 줄 «(tid X)» 가 빠진 판매 줄을 가리지 않게
+            if not await log_has(nspc, f"원, tid {tid}) "):
+                _row = await kina_adjust_row(tid)
+                if _row and _row.get("pc_id") == nspc:
+                    _w = _row.get("why") or {}
+                    await insert_log(nspc, "info",
+                                     f"[팜뷰] 창고 키나 {int(_row['delta']):+,} ({_w.get('server') or '?'} "
+                                     f"{_w.get('man') or '?'}만 → {_w.get('won') or '?'}원, tid {tid}) "
+                                     f"{int(_row['before']):,} → {int(_row['after']):,} — 재전송 때 남김(첫 답이 일시 오류)")
+        except Exception as e:
+            print(f"[fv] kina_adjust dup 로그줄 되살리기 실패 {pc_id} tid {tid}: {e}", flush=True)
     return JSONResponse({"ok": True, **res})
 
 

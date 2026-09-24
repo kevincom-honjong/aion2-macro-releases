@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 45
+MIN_CHECKS = 51
 TOK = "fvsecret-kl"
 H = {"X-FV-Token": TOK}
 OLD_CA = "2026-09-22T20:00:00"      # 매크로 전체수집 시각(UTC) — 판매보다 앞
@@ -389,6 +389,82 @@ async def t_transient_201():
     v = (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
     ok("K201-d 같은 tid 재전송은 dup — 두 번 빼지 않는다(503 안내가 참)", code == 200 and b.get("dup") is True and v == 800_000_000,
        f"{code} {b} stored={v}")
+
+    async def _lines(pc_, needle):
+        return [x.get("message") or "" for x in await db.get_logs(main.ns("main", pc_), limit=200)
+                if needle in (x.get("message") or "")]
+
+    # ★아이온2 반증 #1★ 커밋은 됐는데 연결 닫기가 죽어 503 → 재전송은 dup → 로그줄·캐시 비우기가 영영 없던 것
+    pc = "PC-LT2"
+    await _collect(pc, 900_000_000)
+
+    async def _commit_then_die(*a, **k):
+        await real_adj(*a, **k)
+        raise sqlite3.OperationalError("disk I/O error")
+    main.adjust_char_kina = _commit_then_die
+    try:
+        code, b = await _raw(pc, -200_000_000, "tid-LT3")
+    finally:
+        main.adjust_char_kina = real_adj
+    main._fv_snap["body"] = {"stale": True}
+    code2, b2 = await _raw(pc, -200_000_000, "tid-LT3")
+    v = (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
+    ln = await _lines(pc, "tid tid-LT3)")
+    ok("K201-e ★커밋 뒤 503 → 재전송 dup 가 로그줄을 장부에서 되살리고 캐시를 비운다(한 번만 뺌)★",
+       code == 503 and code2 == 200 and b2.get("dup") is True and v == 700_000_000 and len(ln) == 1
+       and "900,000,000 → 700,000,000" in ln[0] and "재전송 때 남김" in ln[0] and main._fv_snap.get("body") is None,
+       f"{code}/{code2} {b2} stored={v} lines={ln}")
+    await _raw(pc, -200_000_000, "tid-LT3")
+    ok("K201-f 로그줄이 이미 있으면 dup 재전송이 또 적지 않는다", len(await _lines(pc, "tid tid-LT3)")) == 1,
+       str(await _lines(pc, "tid tid-LT3)")))
+    code, b = await _raw(pc, -100_000_000, "tid-LT4")
+    await _raw(pc, -100_000_000, "tid-LT4")
+    ok("K201-g 정상 판매 뒤 dup 은 되살리기 줄을 안 만든다(원래 줄 1개)", len(await _lines(pc, "tid tid-LT4)")) == 1
+       and not any("재전송 때 남김" in x for x in await _lines(pc, "tid tid-LT4)")), str(await _lines(pc, "tid tid-LT4)")))
+
+    # ★아이온2 반증 #4★ 부팅 복구 줄 «(tid X)» 가 있어도 빠진 판매 줄은 되살린다(바늘은 판매 줄에만 있는 «원, tid X) »)
+    pc = "PC-LT4"
+    await _collect(pc, 900_000_000)
+    main.adjust_char_kina = _commit_then_die
+    try:
+        await _raw(pc, -200_000_000, "tid-LT8")
+    finally:
+        main.adjust_char_kina = real_adj
+    await db.insert_log(main.ns("main", pc), "info", "[팜뷰] 창고 키나 부팅 복구 900,000,000 → 장부 다시 적용 700,000,000 (tid tid-LT8)")
+    code, b = await _raw(pc, -200_000_000, "tid-LT8")
+    ln = [x for x in await _lines(pc, "tid tid-LT8") if "재전송 때 남김" in x]
+    ok("K201-j ★부팅 복구 줄 «(tid X)» 가 빠진 판매 줄을 가리지 않는다 — 되살린다★", b.get("dup") is True and len(ln) == 1, str(ln))
+
+    # ★아이온2 M10★ 되돌림 복구 로그줄이 죽어도 뺀 판매는 200
+    pc = "PC-LT3"
+    await _collect(pc, 600_000_000)
+    await _raw(pc, -100_000_000, "tid-LT5")
+    import aiosqlite
+    async with aiosqlite.connect(db.DB_PATH) as c:                 # 옛 서버가 덮어쓴 상태(되돌려짐)
+        await c.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (600_000_000, main.ns("main", pc)))
+        await c.commit()
+    main.insert_log = _log_dies
+    try:
+        code, b = await _raw(pc, -100_000_000, "tid-LT6")
+    finally:
+        main.insert_log = real_log
+    v = (await db.get_char_info(main.ns("main", pc)) or {}).get("total_kina")
+    ok("K201-h ★되돌림 복구 갈래에서 로그줄이 죽어도 200 ok(복구 600→500, 이번 판매 500→400)★",
+       code == 200 and b.get("ok") is True and b.get("before") == 500_000_000 and v == 400_000_000, f"{code} {b} stored={v}")
+
+    # ★아이온2 반증 #4★ 코드 버그는 503 retry 로 감싸지 않는다(드러나게 500)
+    async def _bug(*a, **k):
+        raise TypeError("code bug")
+    main.adjust_char_kina = _bug
+    try:
+        try:
+            code, b = await _raw("PC-LT1", -1, "tid-LT7")
+            got = f"answered {code} {b}"
+        except TypeError:
+            got = "raised"
+    finally:
+        main.adjust_char_kina = real_adj
+    ok("K201-i DB·OS 오류가 아닌 예외(코드 버그)는 503 이 아니라 그대로 올라간다(→ 500)", got == "raised", got)
 
 
 def test_all():

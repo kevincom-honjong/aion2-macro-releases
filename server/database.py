@@ -337,6 +337,7 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
             await db.execute("DELETE FROM slot_filters       WHERE pc_id=?", (pc_id,))
             await db.execute("DELETE FROM nightmare_progress WHERE pc_id=?", (pc_id,))
         await db.commit()
+        _char_info_bump()                  # ★커밋 뒤·연결 안★ — FV 스냅샷 폴백 세대(char_info_gen)
 
 
 # ★카드 삭제 전 백업용 읽기 전용 덤프 (2026-09-22, 사고 —)★ delete_pc_all_data 가 지우는
@@ -1302,6 +1303,21 @@ KINA_REPLAY_MAX_AGE_H = 72     # 이보다 오래된 판매는 재전송 판정�
 #   2099 년 판독 시각·10^18 순번 하나가 저장되면 그 뒤 진짜 판독이 전부 «옛것» 이 돼 창고키나가 조용히 멈췄다.
 KINA_MAX = 10 ** 15            # 창고키나 상한(1000조) — 넘으면 받는 자리에서 400
 KINA_SEQ_MAX = 2 ** 53         # kina_seq 상한 — 넘으면 400
+
+# ★char_info 세대 (2026-09-24 아이온2 — FV 스냅샷 폴백·#201 부류)★ char_info·kina_adjust 를 쓰는 곳 넷(upsert_char_info ·
+#   adjust_char_kina · heal_reverted_kina · delete_pc_all_data)이 ★커밋 직후★ 올린다. main.fv_snapshot 은 조립 ★전★ 세대를 적어 두고
+#   세대가 달라졌으면 3초 캐시도 120초 폴백도 안 준다 — 판매 차감·새 판독을 건너 옛 창고키나를 내지 않게.
+#   자원 쪽에서 센다(A11) — 호출부마다 캐시를 비우던 방식은 새 쓰기 자리가 생기면 빠진다(스스로 막는 시험: test_fv_snap_fallback).
+#   ★연결 안·커밋 직후★ 인 까닭: 커밋 뒤 연결 닫기가 예외를 내도(→ kina_adjust 503) 세대는 이미 올라가 있다.
+_CHAR_INFO_GEN = [0]
+
+
+def char_info_gen() -> int:
+    return _CHAR_INFO_GEN[0]
+
+
+def _char_info_bump() -> None:
+    _CHAR_INFO_GEN[0] += 1
 KINA_SEQ_JUMP_MAX = 10 ** 6    # 한 번에 이만큼 넘게 뛴 순번은 믿지 않는다(순번 없이 시각으로만 가른다)
 KINA_FUTURE_S = 300            # 판독 시각이 보낸 시각(sent_at, 없으면 서버 수신)보다 이만큼 넘게 뒤면 판독을 버린다
 KINA_TIE_S = 10                # 서버 시계로 옮긴 두 판독이 이만큼 안쪽이면 순번(있으면)이 순서를 정한다(두 전송의 지연 차이만큼 흔들린다)
@@ -1422,6 +1438,7 @@ async def heal_reverted_kina() -> list[dict]:
                 await db.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (got[1], pc))
                 out.append({"pc_id": pc, "before": got[0], "after": got[1], "tids": got[2]})
             await db.commit()
+            _char_info_bump()                  # ★커밋 뒤·연결 안★ — FV 스냅샷 폴백 세대(char_info_gen)
     return out
 
 
@@ -1596,6 +1613,7 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
             (pc_id, total_kina, json.dumps(chars, ensure_ascii=False), collected_at),
         )
         await db.commit()
+        _char_info_bump()                  # ★커밋 뒤·연결 안★ — FV 스냅샷 폴백 세대(char_info_gen)
     return chars
 
 
@@ -1683,10 +1701,34 @@ async def adjust_char_kina(pc_id: str, tid: str, delta: int, why: dict) -> dict 
             (tid, pc_id, int(delta), before, after, json.dumps(why or {}, ensure_ascii=False), _now()))
         await db.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (after, pc_id))
         await db.commit()
+        _char_info_bump()                  # ★커밋 뒤·연결 안★ — FV 스냅샷 폴백 세대(char_info_gen)
     res = {"pc_id": pc_id, "before": before, "after": after, "dup": False}
     if healed:
         res["healed"] = {"stored": stored, "tids": healed}     # 호출부가 로그줄로 남긴다(A2)
     return res
+
+
+async def kina_adjust_row(tid: str) -> dict | None:
+    """장부 한 줄(tid) — dup 재전송 때 원래 차감 값으로 로그줄을 되살리는 데 쓴다(2026-09-24 아이온2 #201 후속)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT tid, pc_id, delta, before, after, why, at FROM kina_adjust WHERE tid=?", (tid,)) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["why"] = json.loads(d.get("why") or "{}") or {}
+    except Exception:
+        d["why"] = {}
+    return d
+
+
+async def log_has(pc_id: str, needle: str) -> bool:
+    """그 PC 로그에 needle 글자가 든 줄이 있나(instr — LIKE 의 %·_ 이스케이프가 필요 없다). 없으면 False."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT 1 FROM logs WHERE pc_id=? AND instr(message, ?) > 0 LIMIT 1", (pc_id, needle)) as cur:
+            return (await cur.fetchone()) is not None
 
 
 # ── 악몽 진행 상태 ──────────────────────────────────────────────────────────
