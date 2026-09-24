@@ -15,7 +15,7 @@ import re
 from _harness import main, db, ok, run_all, finish   # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 7
+MIN_CHECKS = 9
 C = TestClient(main.app, raise_server_exceptions=False, follow_redirects=False)
 SESS = main.new_session("main")
 _EXPECT = {"retired_pcs", "no_account_pcs", "abyss_acc_all", "corridor_prog_all", "lan_cache_last", "acct_rotate",
@@ -46,6 +46,15 @@ async def t_reserved():
                         ("ai_kina_sold", "{}"), ("ai_dungeon_done", "{}"))}
     ok("S-2 대시보드·시드가 쓰는 키는 그대로 200", set(okk.values()) == {200}, str(okk))
     ok("S-2b lan_seed 는 저장된다(시드 재등록 길, C11)", await db.get_setting("lan_seed") == "http://172.30.1.70:8766")
+    # ★S-5 소독 우회 (2026-09-24 아이온2 반증)★ — 값은 ns(tenant, key)=clean_pc_id 뒤 키에 저장된다. 날 키만 보던 판은
+    #   retired%23pcs(→retired_pcs)·tg%40offset·rot%2Callow 가 200 으로 통과해 그 키를 덮었다.
+    await db.set_setting("tg_offset", "777")
+    await db.set_setting("rot_allow", "PC-10")
+    enc = {k: S("post", "/setting/" + k, json={"value": "x"}).status_code
+           for k in ("retired%23pcs", "tg%40offset", "rot%2Callow", "acct_rotate%2Ebroken", "parsec%3Amap", "no_account%3Cpcs")}
+    ok("S-5 ★소독하면 서버 관리 키가 되는 이름도 400★(# @ , : <)", set(enc.values()) == {400}, str(enc))
+    ok("S-5b 그 세 키 저장본이 그대로", (await db.get_setting("retired_pcs"), await db.get_setting("tg_offset"),
+                                   await db.get_setting("rot_allow")) == (long_list, "777", "PC-10"))
 
 
 def t_all_direct_writes_covered():

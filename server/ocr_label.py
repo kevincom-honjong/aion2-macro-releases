@@ -148,6 +148,7 @@ PROMPT_SHA1_OLD_NEW = (
     ("1f1ca9cf73fa", "95751516f8bf"),
     ("d305be10bd60", "6a1d170cb01f"),
     ("7649cbf459af", "1b16148f62ef"),
+    ("ba59cd48acd3", "5141ebd09687"),     # awakening.py:294 (반증 2차 — 정간고수 → 가나다라, 실제 메아리 PC-06/07/09)
 )
 _PSHA_ALIAS: dict = {}
 for _o, _n in PROMPT_SHA1_OLD_NEW:

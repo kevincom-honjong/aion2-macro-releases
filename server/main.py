@@ -2512,6 +2512,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
                          "rot_allow", "parsec_map"}
+_SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
 
 
 @app.get("/setting/{key}")
@@ -2533,7 +2534,10 @@ async def get_setting_ep(key: str, request: Request):
 async def set_setting_ep(key: str, request: Request):
     """대시보드(세션)에서 설정 변경."""
     tenant = _require_session(request)
-    if key in SERVER_MANAGED_SETTINGS:           # ★B-DB10★ 전용 길이 있는 서버 관리 키 — 잘린 값으로 덮지 않게
+    # ★B-DB10★ 전용 길이 있는 서버 관리 키 — 잘린 값으로 덮지 않게.
+    #   ★저장 키로 대조한다 (2026-09-24 아이온2 반증)★ — 값은 ns(tenant, key) = clean_pc_id 소독 뒤 키에 저장되므로
+    #   날 키만 보면 `retired%23pcs`(→ retired_pcs)·`tg%40offset`·`rot%2Callow` 가 200 으로 통과해 그 키를 덮었다.
+    if key in SERVER_MANAGED_SETTINGS or ns("main", key) in _SERVER_MANAGED_NS:
         raise HTTPException(status_code=400, detail="서버가 관리하는 설정이라 /setting 으로는 못 바꿉니다: %s" % key)
     try:
         body = await request.json()
@@ -8810,8 +8814,8 @@ function ttsSino(n){ n=Math.floor(+n)||0; if(n<=0) return '영';
   for(let k=0;k<4;k++){ const v=+s[k]; if(v) o+=((v===1&&U[k])?'':D[v])+U[k]; } return o; }
 //   곁가지: 한글 바로 뒤면 띄움 · 쉼표 든 수·번 뒤 조사 아닌 한글(«2번호»·«3 번개»)은 그대로 · PC_09 도.
 function ttsText(t){ t=(t==null)?'':String(t); const SFX={a:'에이',b:'비',c:'씨',d:'디'}; const gap=p=>/[가-힣]/.test(p)?p+' ':p;
-  t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
-  return t.replace(/(^|[^\d.,]|(?<!\d),)(\d{1,4})\s*번(?=$|[^가-힣]|[은는이가을를에의도만과와로으부까께씩입인엔뿐])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
+  t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])(?:\s*번(?![호째개역거갈쩍]))?/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
+  return t.replace(/(^|[^\d.,]|,(?!\d{3}(?!\d)))(\d{1,4})\s*번(?![호째개역거갈쩍])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
 
 // ★1순위는 서버 신경망 음성(사람 목소리). 서버가 못 만들면 브라우저 내장 음성으로
 //   자동 폴백한다 — 목소리는 아쉬워도 알림 자체가 끊기면 안 되기 때문.★
@@ -11108,6 +11112,36 @@ def _tg_muted(tenant: str, pc_id: str) -> float:
     return max(0.0, _TG_MUTE.get(ns(tenant, base), 0.0) - now)
 
 
+def _tg_hard(text, hard=None, expect_reply: bool = False) -> bool:
+    """★음소거를 뚫는가 — 한 곳 (2026-09-24 주인님 결정, TG7 후속)★ /telegram/send·/telegram/photo 가 같이 쓴다(§A12).
+    ① 본문이 ⛔·🚨 로 시작(2026-09-11 전수조사) ② 요청이 `hard:true`(주인님 «음소거라도 올리기» — 매크로 1.1.1006 이 강제 알람
+    [지역차단·재접속 중 캡차·스트리밍 비번 등]에 싣는다. JSON true·1·"1"·"true"·"yes") ③ 사진의 expect_reply(캡차 — 주인님
+    «항상 올리기»: 답을 기다리는 사진은 음소거와 상관없이 늘 나간다). ★테넌트 차단은 이 규칙보다 먼저다★ — 차단이면 ⛔ 정지 안내만
+    (telegram_send 의 차단 갈래), hard 도 못 뚫는다."""
+    if str(text or "").lstrip().startswith(("⛔", "🚨")):
+        return True
+    if hard is True or (not isinstance(hard, bool) and str(hard).strip().lower() in ("1", "true", "yes")):
+        return True
+    return bool(expect_reply)
+
+
+async def _tg_mute_skip(tenant: str, pc_id: str, name: str, text: str, left: float) -> JSONResponse:
+    """음소거로 생략 — 그 PC 카드에 남기고 200 {ok:false, reason:"muted"}(= 처리됨. 클라이언트는 ★직접 보내지 않는다★)."""
+    print(f"[tg-mute] {name} 음소거 중({left/60:.0f}분 남음) — 전송 생략: {text[:60]}", flush=True)
+    # ★생략도 그 PC 카드에 남긴다 (2026-09-11)★ — 초판은 Railway stdout 에만
+    #   적어서 「왜 안 왔지」를 추적할 방법이 아예 없었다.
+    try:
+        await insert_log(ns(tenant, pc_id), "warn",
+                         f"[텔레그램] 중계 생략(음소거 {left/60:.0f}분 남음): {text[:120]}")
+    except Exception:
+        pass
+    # ★ok:False 로 답한다★ — 매크로는 200 을 성공으로 읽어 「중계 전송」을
+    #   ★안 나갔는데★ 로그에 찍었다(§A2: 로그가 증거인데 거짓이면 전부 무너진다).
+    return JSONResponse({"ok": False, "muted": True,
+                         "reason": "muted",
+                         "minutes_left": round(left / 60.0, 1)})
+
+
 @app.post("/telegram/mute/{pc_id}")
 async def telegram_mute(pc_id: str, request: Request):
     """PC 텔레그램 음소거. body: {"hours": 5}  / hours<=0 이면 해제.
@@ -11251,23 +11285,11 @@ async def telegram_send(pc_id: str, request: Request):
     #   같은 파일 `_rot_say` 가 `hard or (...)` 로 이미 그 규칙을 쓰는데 이 창구만
     #   ★본문을 보지도 않고★ 전부 삼켰다(§A12: 규칙이 둘). 정지·사망·캡차·큐브가
     #   전부 이 경로다. ★사람을 세워놓는 알람이 음소거에 같이 죽으면 안 된다.★
-    _hard = str(text).lstrip().startswith(("⛔", "🚨"))
+    #   ★hard:true 도 (2026-09-24 주인님 «음소거라도 올리기»)★ — 규칙은 _tg_hard 한 곳.
+    _hard = _tg_hard(text, data.get("hard"))
     _left = 0 if _hard else _tg_muted(tenant, pc_id)
     if _left > 0:
-        print(f"[tg-mute] {name} 음소거 중({_left/60:.0f}분 남음) — 전송 생략: {text[:60]}",
-              flush=True)
-        # ★생략도 그 PC 카드에 남긴다 (2026-09-11)★ — 초판은 Railway stdout 에만
-        #   적어서 「왜 안 왔지」를 추적할 방법이 아예 없었다.
-        try:
-            await insert_log(ns(tenant, pc_id), "warn",
-                             f"[텔레그램] 중계 생략(음소거 {_left/60:.0f}분 남음): {text[:120]}")
-        except Exception:
-            pass
-        # ★ok:False 로 답한다★ — 매크로는 200 을 성공으로 읽어 「중계 전송」을
-        #   ★안 나갔는데★ 로그에 찍었다(§A2: 로그가 증거인데 거짓이면 전부 무너진다).
-        return JSONResponse({"ok": False, "muted": True,
-                             "reason": "muted",
-                             "minutes_left": round(_left / 60.0, 1)})
+        return await _tg_mute_skip(tenant, pc_id, name, text, _left)
     _res: dict = {}
     _tok = _TG_RES.set(_res)
     try:
@@ -11298,6 +11320,12 @@ async def telegram_photo(pc_id: str, request: Request, file: UploadFile = File(.
     if not raw or len(raw) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="이미지 크기 오류")
     name = clean_pc_id(pc_id)
+    # ★사진도 음소거 규칙을 탄다 — 명시적으로 (2026-09-24 주인님 «캡차는 항상 올리기»)★ 예전엔 사진 창구에 음소거 확인이
+    #   아예 없어서 캡차가 ★우연히★ 나갔다. 이제 _tg_hard 한 곳: expect_reply(캡차)·⛔/🚨 캡션·hard 는 늘 나가고, 나머지 사진은
+    #   음소거면 텍스트와 같은 200 muted(매크로 호출부는 캡차 expect_reply=1 하나뿐 — 2026-09-24 lc/config.py:4504).
+    _left = 0 if _tg_hard(caption, form.get("hard"), expect_reply) else _tg_muted(tenant, pc_id)
+    if _left > 0:
+        return await _tg_mute_skip(tenant, pc_id, name, f"{caption} (사진)" if caption else "(사진)", _left)
     # 캡션 뒤에 «(사진)» — 팜뷰 alarmvoice.summarize 가 «(» 에서 자르므로 앞에 두면 캡션이 통째로 사라진다
     _res: dict = {}
     _tok = _TG_RES.set(_res)

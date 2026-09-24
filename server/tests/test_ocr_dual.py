@@ -490,7 +490,7 @@ def t_alias():
     for m in _re.finditer(r"\|\s*((?:[0-9a-f]{12}\s*/\s*)*[0-9a-f]{12})\s*→\s*([0-9a-f]{12})\s*\|", sec):
         for o in _re.findall(r"[0-9a-f]{12}", m.group(1)):
             doc.add((o, m.group(2)))
-    ok("A-1 서버 표 = SHARED_ISSUES_아이온2 표(옛→새 20쌍, 문서가 바뀌면 빨간불)", doc == set(OL.PROMPT_SHA1_OLD_NEW) and len(doc) == 20,
+    ok("A-1 서버 표 = SHARED_ISSUES_아이온2 표(옛→새 21쌍, 문서가 바뀌면 빨간불)", doc == set(OL.PROMPT_SHA1_OLD_NEW) and len(doc) == 21,
        "문서만: %s / 서버만: %s" % (sorted(doc - set(OL.PROMPT_SHA1_OLD_NEW)), sorted(set(OL.PROMPT_SHA1_OLD_NEW) - doc)))
     ok("A-2 새 키 62fd6da2e23d 는 옛 키 셋(1804·1808·1827) · 옛 키는 새 키 하나 · 모르는 키는 없음",
        OL.psha_aliases("62fd6da2e23d") == ["1f58164c266d", "44a66f2d988e", "8430599954af"]

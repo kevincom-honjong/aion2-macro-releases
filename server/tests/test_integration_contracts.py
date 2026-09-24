@@ -173,7 +173,7 @@ _TTS_FIXED = {"2번": "이 번", "9번": "구 번", "PC-22c": "이십이 번 씨
 
 def t_tts_same_answer():
     """#172 후속 — 대시보드 목소리(main.HTML_DASHBOARD speak/speakLocal)도 번호를 한자어로. 팜뷰 화면 JS·팜뷰 파이썬과 ★같은 답★."""
-    import importlib.util
+    import types
     import json
     import re as _re
     import shutil
@@ -183,16 +183,30 @@ def t_tts_same_answer():
     fvdir = os.path.normpath(os.path.join(here, "..", "..", "..", "farmview"))
     html = main.HTML_DASHBOARD
     d_sino, d_tts = _js_fn(html, "ttsSino"), _js_fn(html, "ttsText")
+    # ★팜뷰의 ★커밋된★ 파일과 묶는다 (2026-09-24)★ — 개발컴 작업본(미커밋)에 기대면 깨끗한 체크아웃과 답이 갈린다(I7 과 같은 부류).
+    #   git 이 없거나 추적 안 되면 작업본 파일 그대로.
+    def _fv_src(rel):
+        try:
+            r = subprocess.run(["git", "-C", fvdir, "show", "HEAD:" + rel], capture_output=True, timeout=20)
+            if r.returncode == 0 and r.stdout:
+                return r.stdout.decode("utf-8"), "git HEAD"
+        except Exception:
+            pass
+        return open(os.path.join(fvdir, *rel.split("/")), encoding="utf-8").read(), "작업본"
     try:
-        ui = open(os.path.join(fvdir, "ui", "index.html"), encoding="utf-8").read().replace("\r\n", "\n")
+        ui, ui_from = _fv_src("ui/index.html")
+        ui = ui.replace("\r\n", "\n")
         f_sino, f_tts = _js_fn(ui, "ttsSino"), _js_fn(ui, "ttsText")
     except (OSError, ValueError):
         f_sino = f_tts = None
+        ui_from = "없음"
     ok("I8 대시보드 ttsSino·ttsText = 팜뷰 ui/index.html 의 것과 글자 그대로", (d_sino, d_tts) == (f_sino, f_tts),
        "대시보드 %d/%d자 · 팜뷰 %s" % (len(d_sino), len(d_tts), f_tts and len(f_tts)))
-    spec = importlib.util.spec_from_file_location("fv_alarmvoice_i8", os.path.join(fvdir, "alarmvoice.py"))
-    av = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(av)
+    av_src, av_from = _fv_src("alarmvoice.py")
+    print("  [I8] 팜뷰 출처: ui/index.html=%s · alarmvoice.py=%s" % (ui_from, av_from))
+    av = types.ModuleType("fv_alarmvoice_i8")
+    av.__file__ = os.path.join(fvdir, "alarmvoice.py")
+    exec(compile(av_src, av.__file__, "exec"), av.__dict__)
     want = [av.speak_text(k) for k in _TTS_KEYS]
     bad_fixed = {k: av.speak_text(k) for k, v in _TTS_FIXED.items() if av.speak_text(k) != v}
     ok("I8 팜뷰 파이썬 speak_text 가 아이온2 보기대로(2번→이 번 · PC-22c→이십이 번 씨 · 계정2번 띄움 · 43,000번·2번호 그대로)",

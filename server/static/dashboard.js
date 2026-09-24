@@ -4544,8 +4544,8 @@ function ttsSino(n){ n=Math.floor(+n)||0; if(n<=0) return '영';
   for(let k=0;k<4;k++){ const v=+s[k]; if(v) o+=((v===1&&U[k])?'':D[v])+U[k]; } return o; }
 //   곁가지: 한글 바로 뒤면 띄움 · 쉼표 든 수·번 뒤 조사 아닌 한글(«2번호»·«3 번개»)은 그대로 · PC_09 도.
 function ttsText(t){ t=(t==null)?'':String(t); const SFX={a:'에이',b:'비',c:'씨',d:'디'}; const gap=p=>/[가-힣]/.test(p)?p+' ':p;
-  t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
-  return t.replace(/(^|[^\d.,]|(?<!\d),)(\d{1,4})\s*번(?=$|[^가-힣]|[은는이가을를에의도만과와로으부까께씩입인엔뿐])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
+  t=t.replace(/(^|[^A-Za-z0-9])[Pp][Cc][-_]?0*(\d{1,3})([a-dA-D])?(?![A-Za-z0-9])(?:\s*번(?![호째개역거갈쩍]))?/g,(m,pre,n,x)=>gap(pre)+ttsSino(n)+' 번'+(x?' '+SFX[x.toLowerCase()]:''));
+  return t.replace(/(^|[^\d.,]|,(?!\d{3}(?!\d)))(\d{1,4})\s*번(?![호째개역거갈쩍])/g,(m,pre,n)=>gap(pre)+ttsSino(n)+' 번'); }
 
 // ★1순위는 서버 신경망 음성(사람 목소리). 서버가 못 만들면 브라우저 내장 음성으로
 //   자동 폴백한다 — 목소리는 아쉬워도 알림 자체가 끊기면 안 되기 때문.★
