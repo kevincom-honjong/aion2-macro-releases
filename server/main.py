@@ -4395,7 +4395,7 @@ const PEND_HARD_MAX    = 900000;   // 서버 큐 만료(COMMAND_MAX_AGE_SEC=900)
 // acct = status 가 아니라 ★계정번호 변화★ 로만 확인되는 명령(set_account 는 status 를 안 바꾼다)
 // ttl  = 이 시간을 넘기면 ⚠. start 3분은 _ensure_char_select_screen(60+90초) 실측에서 나왔다.
 const CMD_TRACK = {
-  start:           {t:'▶ 사냥 시작',      ttl:180000, exp:['hunting','moving','selling','subquest','dungeon','nightmare','awakening','corridor','abyss']},
+  start:           {t:'▶ 사냥 시작',      ttl:180000, exp:['hunting','moving','selling','subquest','dungeon','nightmare','awakening','corridor','surface','abyss']},
   stop:            {t:'■ 정지',           ttl: 90000, exp:['idle','paused']},
   exit:            {t:'✕ 매크로 종료',    ttl:120000, exp:['offline']},
   restart:         {t:'♻ 매크로 재시작',  ttl:180000, exp:['offline']},
@@ -4411,7 +4411,7 @@ const CMD_TRACK = {
   nightmare:       {t:'😈 악몽',          ttl:180000, exp:['nightmare','nightmare_wait']},
   awakening:       {t:'⚔ 각성전',         ttl:180000, exp:['awakening','awakening_wait']},
   corridor:        {t:'🌀 회랑',          ttl:180000, exp:['corridor']},
-  surface:         {t:'🏔 표층',          ttl:600000, exp:['abyss','idle','hunting','corridor','paused']},   // 사고 574 — 매크로는 새 상태를 안 보낸다(기존 어휘)
+  surface:         {t:'🏔 표층',          ttl:600000, exp:['surface','abyss','idle','hunting','corridor','paused']},   // 사고 574 · #208 새 매크로는 `surface` 를 보낸다 — 옛 판 어휘(abyss…)도 그대로 받는다
   abyss:           {t:'🌌 어비스',        ttl:180000, exp:['abyss']},
   // ★사고 392★ 순회의 전환 구간은 이제 acct_switching 을 보고한다 — 안 넣으면
   //   전환 중인데 「기대 상태 미도달」로 보인다(캐릭 전환과 라벨을 갈랐기 때문).
@@ -4714,6 +4714,9 @@ const STATUS_CFG = {
   awakening_wait:{label:'각성전 대기', vi:'Chờ trận thức tỉnh', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   nightmare_wait:{label:'악몽전 대기', vi:'Chờ trận ác mộng', bg:'bg-red-500/20', border:'border-red-700', badge:'bg-red-500', text:'text-red-400', online:true},
   corridor:     {label:'회랑', vi:'Hành lang',    bg:'bg-blue-500/20',   border:'border-blue-700',   badge:'bg-blue-500',   text:'text-blue-400',   online:true},
+  // ★#208 (2026-09-25 주인님)★ 「표층 중인데 카드가 대기」 — 매크로가 표층 세션 중 `surface` 를 보낸다(회랑과 같은 방식).
+  //   여기 없으면 STATUS_CFG[st]||offline 로 빨간 오프라인이 된다. 모양은 회랑과 같게(주인님 지시).
+  surface:      {label:'표층 진입중', vi:'Vào tầng mặt', bg:'bg-blue-500/20', border:'border-blue-700', badge:'bg-blue-500', text:'text-blue-400', online:true},
   // ★매크로는 이 상태를 보내는데 대시보드가 몰랐다 (2026-08-28 하네스가 잡음)★
   //   lc/sealed_dungeon.py:49 report_status("sealed_dungeon") — 여기 없으면
   //   STATUS_CFG[st]||STATUS_CFG.offline 로 떨어져 ★봉인던전 도는 PC 가 빨간 오프라인★ 으로 보인다.
@@ -4787,6 +4790,7 @@ const DK_BLEED = {
   selling:   ['#4a9eff','ok'],                                 // 파랑 — 판매는 정상 작업이다
   abyss:     ['#e879f9','ok'],                                 // 자홍
   corridor:  ['#38bdf8','ok'],                                 // 하늘
+  surface:   ['#38bdf8','ok'],                                 // 하늘 — #208 회랑과 같게
   dungeon:   ['#a78bfa','ok'],                                 // 보라
   nightmare: ['#f472b6','ok'],                                 // 분홍
   awakening: ['#818cf8','ok'],                                 // 남보라
@@ -6877,7 +6881,7 @@ const AUTO_IDLE_TASKS = ['daily_dungeon', 'corridor', 'nightmare'];
 //   있으면 AUTO_IDLE_DOING 이 라벨을 못 찾아 확인창에 ★"지금 tasking 중"★ 이 그대로 뜬다.
 //   (STATUS_CFG 에 실제로 있는 키만 넣는다 — 아래 자기검사가 콘솔로 알려준다)
 const AUTO_IDLE_BUSY = ['hunting','moving','selling','abyss','subquest','dead',
-                        'dungeon','nightmare','awakening','corridor','sealed_dungeon',
+                        'dungeon','nightmare','awakening','corridor','surface','sealed_dungeon',   // #208 표층 = 세션 중
                         'collecting','switching','acct_switching','reconnecting','captcha'];   // ★사고 392★ 계정전환 중인 PC 를 깨우면 전환이 깨진다
 // ★사람이 세워둔 것 / 사람이 와야 풀리는 것★ — 자동으로는 안 깨운다. 직접 고르면 예외.
 //   ★awakening_wait · nightmare_wait 는 '노는 중' 이 아니다 (2026-08-28 매크로 소스 실측)★
@@ -13311,7 +13315,9 @@ ROT_START_MAX    = 420.0              # start 후 사냥 진입 대기 상한
 #   → 세션 넷은 «세션 중 대기»: 끝나 idle 이 되면 start 를 ★한 번★ 다시(전환 단계 idle 길로 되돌려 완주 판정도 같은 길),
 #     세션 대기 전체는 ROT_SESSION_MAX 로 묶는다.
 ROT_HUNT_OK      = ("hunting", "moving", "abyss")                          # 사냥 시작 확인
-ROT_SESSION      = ("corridor", "nightmare", "dungeon", "awakening")      # 세션 중 — 사냥 아님, 끝나길 기다린다
+ROT_SESSION      = ("corridor", "nightmare", "dungeon", "awakening", "surface")   # 세션 중 — 사냥 아님, 끝나길 기다린다
+#   ★surface (#208, 2026-09-25)★ 표층 세션 — 매크로가 회랑처럼 보고한다. 빠지면 순환이 «사냥 안 잡힘»/딴 일로 읽고
+#   7분 뒤 ⛔ 하거나 세션 위에 ▶start 를 보낸다. ROT_HUNT_LIKE·ROT_SESS_HOLD 는 여기서 따라온다.
 ROT_HUNT_LIKE    = ROT_HUNT_OK + ROT_SESSION                                # 계속 움직이는 상태(_rot_active 신선도)
 ROT_SESSION_MAX  = 5400.0             # 세션 중 대기 전체 상한(첫 세션 목격부터, 90분) — 넘으면 ⛔
 # ★세션 대기로 기다리는 상태 (v4 델타 반증)★ — 세션 넷 + 사람이 손대야 풀리는 두 대기(ROT_HUMAN_WAIT).
@@ -13414,7 +13420,7 @@ ROT_ST_KOR = {"hunting": "사냥", "moving": "이동", "selling": "판매",
               "acct_switching": "계정 전환",   # ★사고 392★
               "reconnecting": "재연결",
               "captcha": "캡차", "dungeon": "일일던전", "nightmare": "악몽",
-              "awakening": "각성전", "corridor": "회랑", "abyss": "어비스",
+              "awakening": "각성전", "corridor": "회랑", "surface": "표층 진입중", "abyss": "어비스",
               "subquest": "서브퀘", "dead": "사망", "paused": "일시정지",
               "error": "에러", "starting": "시작",
               "nightmare_wait": "악몽 최종보스 대기", "awakening_wait": "각성전 대기", "offline": "오프라인"}
@@ -15733,8 +15739,10 @@ def _fv_parse_cmd_table() -> dict:
     try:
         blk = re.search(r"const CMD_TRACK = \{(.*?)\n\};", HTML_DASHBOARD, re.S)
         if blk:
+            # ★줄 끝 `// 주석` 을 허용한다 (#208, 2026-09-25)★ — 예전 식은 `},` 뒤 공백만 받아 주석 달린 줄(surface, 사고 574)이
+            #   명령표에서 ★통째로 빠졌다★(팜뷰 명령 목록에 표층 없음). 이제 CMD_TRACK 키 수 == 명령표 키 수를 시험이 본다.
             for m in re.finditer(
-                    r"^\s*([a-z_][a-z0-9_]*)\s*:\s*\{(.*?)\},\s*$", blk.group(1), re.M):
+                    r"^\s*([a-z_][a-z0-9_]*)\s*:\s*\{(.*?)\},\s*(?://[^\n]*)?$", blk.group(1), re.M):
                 name, rest = m.group(1), m.group(2)
                 lab = re.search(r"t\s*:\s*'([^']*)'", rest)
                 ttl = re.search(r"ttl\s*:\s*(\d+)", rest)
