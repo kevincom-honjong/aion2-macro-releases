@@ -122,7 +122,18 @@ _PHASH_RE = re.compile(r"^[0-9a-f]{16}\Z")
 _PSHA_RE = re.compile(r"^[0-9a-f]{6,40}\Z")                     # 매크로 prompt_sha1 = sha1(prompt)[:12]
 _CSHA_RE = re.compile(r"^[0-9a-f]{40}\Z")                       # 매크로 sha1 = sha1(img_b64 ★문자열★)
 OCR_SITE_RAW_MAX = 200
-OCR_BAD_LABEL = "bad image"                     # ts 방식 행에서 «나쁨» 의 라벨(매크로 BAD_LABELS)
+OCR_BAD_LABEL = "bad image"
+# ★자동 닫기 (2026-09-25 주인님 #218 «OCR 판별 — 홍옥의 섬 계속 올라오네»)★ — 맵 이름(analytics.py:_map_loop)은 답이 16개로 닫혀 있다.
+#   묶음의 ★모든 이미지★ 제미나이 답(앞뒤 공백만 걷고)이 ★한 이름과 글자 그대로 같으면★ 사람 대기열에 안 올리고 status "auto" 로 닫는다.
+#   · auto 는 대기열·기록(history)·매크로 라벨(/ocr/labels)에 안 나간다 — 사람이 본 정답이 아니다(감사용 표시일 뿐).
+#   · 사람이 한 번이라도 손댄 묶음(ocr_hist 줄 있음)은 안 건드린다. 다른 답이 붙으면 auto → pending 으로 되돌린다.
+#   · 사람이 auto 묶음에 라벨·나쁨을 주면 그대로 된다(label_core 는 어떤 상태든 받는다).
+OCR_AUTO_SITES = {
+    "analytics_py__map_loop": frozenset((
+        "홍옥의 섬", "정령의 섬", "베르테론 요새 폐허", "드라나 가공구역", "루브레인 구릉지", "환영신의 정원", "엘듄강 중류",
+        "어비스 회랑", "데바 생체 연구기지", "갈라진 남쪽 추락지", "갈라진 북쪽 추락지", "라 미렌 요새 남쪽 잔해",
+        "라 미렌 요새 북쪽 잔해", "붉은 가시 왕관섬", "영원의 섬", "아울라우 부락")),
+}                     # ts 방식 행에서 «나쁨» 의 라벨(매크로 BAD_LABELS)
 # ★프롬프트 예시값 교체(매크로 1.1.1006, 2026-09-24)로 prompt_sha1[:12] 가 바뀌었다★ — 함대는 옛·새 판이 섞여 돈다.
 #   ts 방식 행을 ★옛·새 두 열쇠로 다 내보낸다★(같은 그림 sha1·같은 라벨) — 어느 판이 보낸 라벨이든 어느 판이든 적중.
 #   1804·1808·1827 세 키나 칸은 새 판에서 한 프롬프트(62fd6da2e23d)로 합쳐졌다 — 칸 구분은 그림 sha1 이 한다.
@@ -309,6 +320,13 @@ async def _ensure_tables_once(p: str) -> None:
         await db.execute("INSERT OR IGNORE INTO ocr_meta(k, v) VALUES('epoch', ?)", (secrets.token_hex(8),))
         await db.commit()
     _INITED.add(p)
+    # ★#218★ 이미 대기 중인 맵 이름 묶음도 같은 규칙으로 닫는다 — 프로세스(배포)마다 한 번. 실패해도 표는 쓴다.
+    try:
+        r = await auto_sweep()
+        if r["closed"]:
+            print(f"[ocr] 자동 닫기 쓸기: {r['closed']}/{r['checked']} 묶음 {r['by_label']}", flush=True)
+    except Exception as e:
+        print(f"[ocr] 자동 닫기 쓸기 실패(무시): {type(e).__name__}: {e}", flush=True)
 
 
 async def _epoch(db) -> str:
@@ -507,12 +525,85 @@ async def _disk_used(db, tenant: str = None) -> int:
     return int((await cur.fetchone())[0])
 
 
+def auto_label(site: str, answers) -> "str | None":
+    """자동 닫기 판정 — site 가 OCR_AUTO_SITES 에 있고, 답이 ★하나 이상★ 이며 ★전부★ strip 뒤 같은 한 이름이면 그 이름.
+    빈 답·다른 답이 하나라도 섞이면 None(사람이 본다)."""
+    names = OCR_AUTO_SITES.get(site)
+    if not names:
+        return None
+    got = {(a if isinstance(a, str) else "").strip() for a in answers}
+    if len(got) != 1:
+        return None
+    (one,) = got
+    return one if one in names else None
+
+
+async def _auto_eval(db, tenant: str, cid: int, now: float) -> str:
+    """묶음 하나를 다시 본다 → "auto"(대기 → 자동 닫음) · "reopen"(자동 → 대기) · ""(그대로). commit 은 부르는 쪽."""
+    cur = await db.execute("SELECT site, status FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
+    r = await cur.fetchone()
+    if not r or r[1] not in ("pending", "auto") or r[0] not in OCR_AUTO_SITES:
+        return ""
+    cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
+    if await cur.fetchone():
+        return ""                                   # 사람이 손댄 묶음 — 사람 몫
+    cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, tenant))
+    lab = auto_label(r[0], [x[0] for x in await cur.fetchall()])
+    if lab and r[1] == "pending":
+        await db.execute("UPDATE ocr_cluster SET status='auto', label=?, labeled_at=? WHERE id=?", (lab, now, cid))
+        return "auto"
+    if not lab and r[1] == "auto":
+        await db.execute("UPDATE ocr_cluster SET status='pending', label=NULL, labeled_at=NULL WHERE id=?", (cid,))
+        return "reopen"
+    if lab and r[1] == "auto":
+        cur = await db.execute("SELECT label FROM ocr_cluster WHERE id=?", (cid,))
+        if (await cur.fetchone())[0] != lab:        # 전부 같은 다른 이름으로 바뀐 경우(대표만 있던 묶음) — 라벨을 맞춘다
+            await db.execute("UPDATE ocr_cluster SET label=?, labeled_at=? WHERE id=?", (lab, now, cid))
+    return ""
+
+
+async def auto_sweep(tenant: str = None, dry: bool = False) -> dict:
+    """지금 대기 중인 자동 닫기 사이트 묶음을 같은 규칙으로 닫는다(tenant=None 이면 전 테넌트).
+    dry=True 면 아무것도 안 바꾸고 셈만. → {"checked", "closed", "by_label": {이름: n}}"""
+    await ensure_tables()
+    out = {"checked": 0, "closed": 0, "by_label": {}}
+    sites = sorted(OCR_AUTO_SITES)
+    q = ("SELECT c.id, c.tenant, c.site FROM ocr_cluster c WHERE c.status='pending' AND c.site IN (%s)"
+         % ",".join("?" * len(sites)))
+    args = list(sites)
+    if tenant is not None:
+        q += " AND c.tenant=?"
+        args.append(tenant)
+    async with _lock():
+        async with aiosqlite.connect(_dbp()) as db:
+            cur = await db.execute(q + " ORDER BY c.id", args)
+            rows = await cur.fetchall()
+            now = time.time()
+            for cid, ten, site in rows:
+                out["checked"] += 1
+                cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
+                if await cur.fetchone():
+                    continue
+                cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, ten))
+                lab = auto_label(site, [x[0] for x in await cur.fetchall()])
+                if not lab:
+                    continue
+                out["closed"] += 1
+                out["by_label"][lab] = out["by_label"].get(lab, 0) + 1
+                if not dry:
+                    await db.execute("UPDATE ocr_cluster SET status='auto', label=?, labeled_at=? WHERE id=? AND status='pending'",
+                                     (lab, now, cid))
+            if not dry:
+                await db.commit()
+    return out
+
+
 async def evict_for(db, tenant: str, need: int) -> dict:
     """새 파일 need 바이트 자리를 ★tenant 자기 것만 지워서★ 만든다. 순서는 머리 주석 「디스크 상한과 비우는 순서」.
     out["full"] = True 면 전체 HARD_CAP 을 못 지킨다 → 호출부가 507 (그때 3단계는 아무것도 안 지운다)."""
     used = await _disk_used(db, tenant)             # 1·2단계 = 테넌트 몫(OCR_DISK_CAP)
     total = await _disk_used(db)                    # 3단계 = 전체(OCR_DISK_HARD_CAP)
-    out = {"pending_clusters": 0, "bad_files": 0, "labeled_files": 0, "full": False}
+    out = {"pending_clusters": 0, "bad_files": 0, "labeled_files": 0, "full": False}   # bad_files 에는 자동 닫은(auto) 파일도 센다
     # 1) 대기 묶음 — 오래된 것부터 통째로. ★라벨·나쁨 기록(ocr_hist)이 한 번이라도 있는 묶음은 뺀다(반증 R3)★
     while used + need > OCR_DISK_CAP:
         cur = await db.execute(
@@ -533,11 +624,11 @@ async def evict_for(db, tenant: str, need: int) -> dict:
             out["pending_clusters"] += 1
             if used + need <= OCR_DISK_CAP:
                 break
-    # 2) 나쁨 — 파일만(줄은 bad 목록으로 남긴다)
+    # 2) 나쁨·자동 닫음(auto, #218) — 파일만(줄은 남긴다). auto 는 사람이 안 본 기계 판정이라 라벨 된 것보다 먼저 비운다
     while used + need > OCR_DISK_CAP:
         cur = await db.execute(
             "SELECT i.id, i.relpath, i.nbytes FROM ocr_img i JOIN ocr_cluster c ON c.id=i.cluster_id "
-            "WHERE i.tenant=? AND i.on_disk=1 AND c.status='bad' ORDER BY i.created, i.id LIMIT 50", (tenant,))
+            "WHERE i.tenant=? AND i.on_disk=1 AND c.status IN ('bad','auto') ORDER BY i.created, i.id LIMIT 50", (tenant,))
         rows = await cur.fetchall()
         if not rows:
             break
@@ -777,6 +868,7 @@ async def submit_core(tenant: str, pc: str, site: str, raw: bytes, dh: str, ts, 
                     cur = await db.execute("SELECT status FROM ocr_cluster WHERE id=?", (cid,))
                     if (await cur.fetchone())[0] in ("labeled", "bad"):   # 이미 답이 있는 묶음 → 매크로에 바로 나간다(near 로)
                         await db.execute("UPDATE ocr_img SET seq=? WHERE id=?", (await _next_seq(db, tenant), iid))
+                await _auto_eval(db, tenant, cid, now)     # ★#218★ 맵 이름이 알려진 한 이름이면 사람 대기열에 안 올린다
                 await db.commit()
             except Exception:
                 _rm(rel)
@@ -1374,6 +1466,10 @@ async def undo_core(tenant: str) -> dict:
                 raise OcrError(404, "되돌릴 것이 없습니다")
             hid, cid, pst, plb = row
             pst = pst or "pending"
+            if pst == "auto":
+                # ★#218 반증★ 자동 닫음 묶음에 라벨 → 되돌리기는 ★대기(맨 앞)★ 로 — auto 로 돌려놓으면 ocr_hist 가 생긴 auto 라
+                #   대기열·기록에 안 나오고 자동 판정도 다시 안 봐 ★영영 숨는다★. 사람이 되돌렸으면 사람이 다시 본다.
+                pst, plb = "pending", None
             now = time.time()
             if pst == "pending":
                 cur = await db.execute("SELECT COALESCE(MIN(qorder), ?) FROM ocr_cluster WHERE tenant=? AND status='pending'",
@@ -1402,13 +1498,13 @@ async def stats_core(tenant: str) -> dict:
     sites: dict = {}
 
     def S(site):
-        return sites.setdefault(site, {"pending": 0, "labeled": 0, "bad": 0, "images": 0, "hits": 0,
+        return sites.setdefault(site, {"pending": 0, "labeled": 0, "bad": 0, "auto": 0, "images": 0, "hits": 0,
                                        "gemini_compared": 0, "gemini_disagree": 0, "gemini_disagree_rate": None,
                                        "local_compared": 0, "local_disagree": 0, "local_disagree_rate": None})
     async with aiosqlite.connect(_dbp()) as db:
         cur = await db.execute("SELECT site, status, COUNT(*) FROM ocr_cluster WHERE tenant=? GROUP BY site, status", (tenant,))
         for site, st, n in await cur.fetchall():
-            if st in ("pending", "labeled", "bad"):
+            if st in ("pending", "labeled", "bad", "auto"):      # auto = #218 자동 닫음(사람 라벨 아님 — 불일치율에도 안 넣는다)
                 S(site)[st] = n
         cur = await db.execute("SELECT site, COUNT(*), COALESCE(SUM(count),0) FROM ocr_img WHERE tenant=? GROUP BY site", (tenant,))
         for site, n, h in await cur.fetchall():

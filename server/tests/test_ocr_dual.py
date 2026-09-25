@@ -401,6 +401,12 @@ def t_macro_roundtrip():
     with _Store() as st:
         shim = _Shim()
         saved = (net.requests, net.ensure_thread)
+        # ★lc 3fea151 #216 제출 정책★ — 숫자 프롬프트는 로컬 불일치·1/20 표본만 올린다(정책 시험은 lc ocrsubmit216_test).
+        #   이 시험은 «올린 한 장이 서버까지 가는 길» 이라 정책을 «올린다» 로 고정한다(없는 옛 lc 면 그대로).
+        pol = getattr(M, "_policy", None)
+        saved_pol = getattr(pol, "should_submit", None)
+        if pol is not None:
+            pol.should_submit = lambda *a, **k: True
         net.requests, net.ensure_thread = shim, (lambda: None)   # 데몬 스레드는 안 띄운다 — _send/poll_now 를 직접
         net._q.clear()
         net._sent.clear()
@@ -473,6 +479,8 @@ def t_macro_roundtrip():
                 net._q.clear()
         finally:
             net.requests, net.ensure_thread = saved
+            if pol is not None:
+                pol.should_submit = saved_pol
             net._q.clear()
             M.configure(server_url=None, api_key=None, pc_id=None, log=None)
 

@@ -735,7 +735,7 @@ asyncio.run(main())
 | `POST /api/fv/ocr/skip` | `{"id": <묶음 id>}` | `{"ok": true, "id"}` — 대기열 맨 뒤로. 대기 아닌 묶음이면 409 |
 | `POST /api/fv/ocr/undo` | `{}` | `{"ok": true, "id", "status", "label"}` — **이 테넌트의** 마지막 저장/나쁨/고치기 하나를 되돌린다(웹 화면에서 한 것도 포함). 되돌려 대기가 되면 대기열 맨 앞. 되돌릴 게 없으면 404 |
 | `GET /api/fv/ocr/history?limit=30` (1~200) | — | `{"items": [Item…]}` — 최근 라벨/나쁨, 새것부터 |
-| `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `*_rate` 는 비교한 게 없으면 `null` |
+| `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","auto","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `*_rate` 는 비교한 게 없으면 `null` |
 | `POST /api/fv/ocr/seed_bugs` (2026-09-24) | `{}` | `{"ok": true, "scanned", "added", "exists", "skipped": {"<까닭>": n}, "full", "more"}` — `/bugs` 의 `ocrdiff_*`·`oddfail_*` 크롭을 큐로(아래 «씨앗»). 몇 번 불러도 같다(`added` 0 · `exists` n). 같은 테넌트 씨앗이 도는 중이면 `{"ok": false, "busy": true, …}` |
 
 `Item`:
@@ -749,6 +749,7 @@ asyncio.run(main())
 - 시각(`created`·`at`)은 유닉스 초(UTC).
 - `label` 은 앞뒤 공백을 걷고 NFC 로 맞춘 글자(최대 200자). 빈 `text` 는 400.
 - 에러 모양은 다른 `/api/fv/*` 와 같다: `{"ok": false, "error": "...", "err": "...", "code": N}` — 400(본문·id)·404(없는 묶음·이미지)·409(skip 대상 아님).
+- ★`status: "auto"` — 맵 이름 자동 닫기 (2026-09-25 주인님 #218 «홍옥의 섬 계속 올라오네», 더하기만)★ — site `analytics_py__map_loop` 에서 묶음의 ★모든★ 이미지 제미나이 답이 앞뒤 공백만 걷고 알려진 16개 지역 이름 중 하나와 ★글자 그대로★ 같으면 서버가 `auto`(label = 그 이름)로 닫는다. `queue`·`history` 에 안 나오고 매크로 라벨(`/ocr/labels`)에도 안 나간다(사람이 본 정답이 아니다) — `stats` 의 `auto` 로만 센다(불일치율 분모에도 안 들어간다). 다른 답이 붙으면 `pending` 으로 돌아온다. 사람이 한 번이라도 손댄 묶음은 안 건드린다. `label`/`bad` 는 `auto` 묶음에도 그대로 먹는다. 배포 뒤 서버가 처음 OCR 표를 볼 때 이미 대기 중인 맵 이름 묶음도 같은 규칙으로 한 번 닫는다.
 - 실시간: 대시보드 화면은 `queue` 를 2초마다 다시 읽는다. 팜뷰도 같은 폴링이면 된다(`pending` 이 줄면 다른 쪽에서 단 것).
 - **씨앗(2026-09-24, 주인님 #125 «탭이 뜨자마자 판별»)** — 매크로가 예전부터 `/bugs` 로 올리던 로컬 OCR 불일치 크롭이 판별 거리다. ① `queue` 를 서버가 켜진 뒤 ★처음★ 읽을 때 씨앗이 저절로 돈다(그 응답에 이미 들어 있다) ② `seed_bugs` 로 다시 돌릴 수 있다 ③ 그 뒤 `/bugs` 로 새로 올라오는 것은 올라오는 순간 큐로 들어간다. site = 파일 이름의 항목(`ocrdiff_<site>_L<로컬>_G<제미나이>` · `oddfail_narrow` → `odd_energy` · `oddfail_wide` → `odd_energy_wide`), `gemini`·`local` 은 파일 이름에서 되읽은 **힌트**(모르는 글자 `?`), `prompt` 는 `seed:/bugs <파일 이름>`, `pc` 는 올린 PC. 캡차 이름·깨진 PNG 는 넣지 않는다. 같은 그림은 두 번 안 들어간다.
 

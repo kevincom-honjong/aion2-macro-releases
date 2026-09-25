@@ -684,7 +684,7 @@ console.log(JSON.stringify(res));
 
 FV_TOK = "fv-ocr-test-token-0123456789abcdef"
 ITEM_KEYS = {"id", "img", "site", "status", "label", "created", "at", "count", "members", "prompt", "gemini", "local", "pc", "thumbs"}
-STAT_KEYS = {"pending", "labeled", "bad", "images", "hits", "gemini_compared", "gemini_disagree", "gemini_disagree_rate",
+STAT_KEYS = {"pending", "labeled", "bad", "auto", "images", "hits", "gemini_compared", "gemini_disagree", "gemini_disagree_rate",
              "local_compared", "local_disagree", "local_disagree_rate"}
 FV_ROUTES = (("get", "/api/fv/ocr/queue", {}), ("get", "/api/fv/ocr/img/1", {}), ("post", "/api/fv/ocr/label", {"json": {"id": 1, "text": "x"}}),
              ("post", "/api/fv/ocr/bad", {"json": {"id": 1}}), ("post", "/api/fv/ocr/skip", {"json": {"id": 1}}),
