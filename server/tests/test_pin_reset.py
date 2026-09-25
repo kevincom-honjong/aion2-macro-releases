@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 43
+MIN_CHECKS = 46
 C = TestClient(main.app, raise_server_exceptions=False, follow_redirects=False)
 SESS = main.new_session("main")
 
@@ -46,6 +46,9 @@ def _args(x):
         except ValueError:
             return {}
     return a if isinstance(a, dict) else {}
+
+
+LAST_NO_HANDLER = "1.1.1012"   # ★사실★ — pin_reset 처리기가 없는 마지막 릴리스(lc a701b11, 아이온2 2026-09-26). 문턱은 이보다 커야 한다
 
 
 async def report(pc, ver):
@@ -142,7 +145,16 @@ async def t_farmview_closed():
 async def t_version_gate():
     """아이온2 HIGH — 옛 매크로(1.1.1012 = lc a701b11)엔 처리기가 없다: 사람 명령이라 도는 전환을 끊고 모르는 명령 알람.
     서버는 ★그 물리 PC 의 최신 보고 버전★ 이 _PIN_RESET_MIN_VER 미만이거나 모르면 409 · 큐에 안 넣는다."""
-    ok("V-0 문턱은 화면 JS 한 줄에서 읽는다(= 1.1.1013)", main._PIN_RESET_MIN_VER == "1.1.1013", str(main._PIN_RESET_MIN_VER))
+    mv = main._PIN_RESET_MIN_VER
+    js = re.search(r"const PIN_RESET_MIN_VER = '([^']*)';", main.HTML_DASHBOARD)
+    ok("V-0 문턱은 화면 JS 한 줄에서 읽는다(서버 값 = JS 값, 형식 N.N.N)",
+       js is not None and mv == js.group(1) and re.fullmatch(r"\d+\.\d+\.\d+", mv or "") is not None, "%s %s" % (mv, js and js.group(1)))
+    ok("V-0b ★문턱 > %s★(처리기 없는 마지막 판 lc a701b11) — '1.1.103' 같은 오타가 문을 열지 못한다" % LAST_NO_HANDLER,
+       mv is not None and main._ver_tuple(mv) > main._ver_tuple(LAST_NO_HANDLER), str(mv))
+    vj = os.path.join(os.path.dirname(os.path.dirname(main.__file__)), "version.json")
+    rel = json.load(open(vj, encoding="utf-8")).get("exe", {}).get("version") if os.path.isfile(vj) else None
+    ok("V-0c 릴리스된 판(version.json)이 문턱보다 낮으면 그 판은 처리기 없는 판이어야 한다(= %s 이하)" % LAST_NO_HANDLER,
+       rel is None or main._ver_at_least(rel, mv) or main._ver_tuple(rel) <= main._ver_tuple(LAST_NO_HANDLER), "%s vs %s" % (rel, mv))
     for pc, ver, why in (("PC-PV1", "1.1.1012", "함대 현재판"), ("PC-PV2", "1.1.999", "★숫자 비교★ — 문자열이면 999 > 1013 으로 통과"),
                          ("PC-PV3", None, "보고 없음(버전 모름)")):
         if ver:
@@ -197,6 +209,9 @@ async def t_delivery_gate():
        r1.status_code == 200 and r2.status_code == 200 and p.get("command") == "start", str(p))
     st = await _status_of(r1.json()["id"])
     ok("W-2 건너뛴 pin_reset 은 cancelled(이력에 보인다 · 다시 안 나간다)", st == "cancelled", str(st))
+    logs = await db.get_logs("PC-PV6", 50) if hasattr(db, "get_logs") else []
+    ok("W-2b 취소 사유가 그 PC 로그에 남는다(«pin_reset 배달 안 함(취소) — 매크로 v1.1.1012 < v…»)",
+       any("pin_reset 배달 안 함" in str(x.get("message", "")) and "1.1.1012" in str(x.get("message", "")) for x in logs), str(logs[:2])[:200])
     await report("PC-PV7", "1.1.1013")
     q1 = post_cmd("PC-PV7", {"command": "pin_reset", "args": {"label": "b"}})
     q2 = post_cmd("PC-PV7", {"command": "stop"})

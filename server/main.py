@@ -10675,7 +10675,12 @@ async def _drop_stale_pin_reset(tenant: str, pc_id: str, cmd) -> bool:
         await cancel_command(int(cmd["id"]))
     except Exception as e:
         print(f"[pin_reset] 배달 전 취소 실패 {pc_id} #{cmd.get('id')}: {e}")
-    print(f"[pin_reset] {ns(tenant, pc_id)} #{cmd.get('id')} 배달 안 함 — 매크로 v{ver or '?'} < v{_PIN_RESET_MIN_VER} (취소)")
+    _why = f"[명령] #{cmd.get('id')} pin_reset 배달 안 함(취소) — 매크로 v{ver or '?'} < v{_PIN_RESET_MIN_VER} (넣은 뒤 옛 판으로 바뀜)"
+    print(f"[pin_reset] {ns(tenant, pc_id)} {_why}")
+    try:                            # ★사유는 그 PC 로그에★ — 매크로가 돌려보낸 취소(ack cancelled)와 같은 자리(명령 표엔 사유 칸이 없다)
+        await insert_log(ns(tenant, pc_id), "warning", _why)
+    except Exception as e:
+        print(f"[pin_reset] 사유 기록 실패(무시): {e}")
     return True
 
 
