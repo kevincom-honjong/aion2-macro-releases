@@ -50,7 +50,7 @@ def t_no_dynamic_classes():
     #   지금 있는 것은 전부 id 조립(card-·stack-·pcmd-·pc-arrow-·cm-)뿐 — 새로 생기면 빨간불.
     src = tw_build.raw_html(main.HTML_DASHBOARD) + tw_build.raw_html(main.HTML_LOGIN)
     hits = set(re.findall(r"([a-z]+-(?:[a-z0-9]+-)*)(?:\$\{|'\s*\+)", src))
-    allowed = {"card-", "stack-", "pcmd-bar-", "pcmd-chip-", "pc-arrow-", "cm-acct-", "cm-cardonly-", "ai-kina-h-"}
+    allowed = {"card-", "stack-", "pcmd-bar-", "pcmd-chip-", "pc-arrow-", "cm-acct-", "cm-cardonly-", "cm-pin-", "ai-kina-h-"}
     ok("T-5 조립한 클래스 이름이 없다(있으면 빌드 CSS 에서 빠진다)", hits <= allowed, str(sorted(hits - allowed)))
 
 

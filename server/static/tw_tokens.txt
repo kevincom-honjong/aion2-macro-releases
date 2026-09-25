@@ -47,6 +47,7 @@
 !keys.length
 !la
 !lab
+!label
 !latest
 !lg
 !live
@@ -812,6 +813,8 @@ cm-lan
 cm-panel
 cm-parsec-app
 cm-parsec-web
+cm-pin-
+cm-pin-box
 cm-sec
 cm-span2
 cmd
@@ -1516,6 +1519,7 @@ launcher_ctl._run_switch_locked
 lazy
 lbl
 lbl]
+lc
 lc/config.py
 lc/info_collector._subscribed
 lc/loot.py
@@ -1628,6 +1632,7 @@ login-btn:hover
 login-btn[disabled]
 login-card
 login-card::before
+loot._dispatch_remote_command
 loot.py
 low
 ls
@@ -2070,6 +2075,7 @@ phong
 picked
 pid
 pid.slice
+pin_reset
 ping
 pl
 pl.cls

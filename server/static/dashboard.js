@@ -119,7 +119,10 @@ const CMD_TRACK = {
 // ★칩을 안 띄우는 명령★ — 라이브 화면·로그 요청처럼 사람이 결과를 즉시 눈으로 보는 것들.
 //   여기에까지 칩을 띄우면 라이브를 켤 때마다 카드가 깜빡여 ★진짜 신호를 가린다.★
 const CMD_SILENT = ['live_on','live_off','get_logs','request_logs','set_slot_filter',
-                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor','stop_surface','netprobe'];
+                    'captcha_code','set_info','stop_tour','stop_nightmare','stop_corridor','stop_surface','netprobe',
+                    // ★pin_reset(2026-09-26 PIN 3차)★ — 칩을 띄우면 물리 PC 당 한 칸인 pendingCmds 에서 ★막혀 있던 전환의 칩을
+                    //   덮어★ 전환 실패 ⚠ 가 사라진다(반증 3). 결과는 토스트·로그·텔레그램으로. ★팜뷰 명령표에서는 뺀다★(_FV_EXCLUDED_CMDS).
+                    'pin_reset'];
 
 let pendingCmds = {};   // base(물리 PC) → 진행 표시 1건. 같은 PC 에 새 명령이 오면 ★덮어쓴다★
                         //   (누적하면 영영 안 지워진다 — 그 PC 의 매크로는 어차피 한 대뿐이다)
@@ -3038,6 +3041,7 @@ function openCardMenu(pc_id, e) {
     (ver?`<span class="text-gray-500 ml-auto" style="font-size:10px">${ver}</span>`:'');
   refreshAcctButtons(pc_id);   // 계정 버튼 활성/비활성 (MAX_ACCT 만큼, 있는 계정만, 현재 계정 ✓)
   refreshCardOnlyButtons(pc_id); // ★카드만★ 버튼 (본컴 안 건드림, 2026-08-27)
+  refreshPinButtons(pc_id);      // ★PIN 막힘 풀기★ 계정별 (2026-09-26 pin_reset)
   refreshParsecButtons(pc_id); // 파섹 주소 없는 PC는 눌러도 소용없으니 흐리게
   menu.classList.remove('hidden');
   // ★★폭도 ★실측★ 한다 (2026-08-23 주인님 지적)★★
@@ -5569,6 +5573,46 @@ function refreshCardOnlyButtons(pc_id){
       : '★카드(매크로 정체성)만★ 계정 ' + n + ' 로 바꿉니다 — account.txt + 매크로 자기 재시작(약 10초). '
         + '본컴 런처와 원격컴 크롬은 건드리지 않습니다. 본컴을 사람이 이미 바꿔둔 경우에 쓰십시오.');
   }
+}
+// ★★PIN 막힘 풀기 (2026-09-26, PIN 3차)★★ — 매크로 명령 pin_reset {label} (lc loot._dispatch_remote_command 인라인).
+//   계정 n → label ACCT_LABELS[n-1]. 없는 계정도 막지 않는다(자격증명을 안 쓴다 — 매크로가 모르는 label 이면 로그로 알린다).
+//   ★한 PC·한 계정★ — 일괄 버튼은 만들지 않는다(아이온2 지시).
+function refreshPinButtons(pc_id){
+  const cur = currentAcctNum(baseId(pc_id));
+  const box = document.getElementById('cm-pin-box');
+  if (!box) return;
+  if (box.childElementCount !== MAX_ACCT) {
+    box.innerHTML = '';
+    for (let k=1; k<=MAX_ACCT; k++){
+      const nb = document.createElement('button');
+      nb.className = 'cm-btn chip-amber'
+                   + ((MAX_ACCT % 2 === 1 && k === MAX_ACCT) ? ' cm-span2' : '');
+      nb.id = 'cm-pin-' + k;
+      nb.onclick = (function(v){ return function(){ pinResetFromMenu(v); }; })(k);
+      box.appendChild(nb);
+    }
+  }
+  for (let n=1; n<=MAX_ACCT; n++){
+    const b = document.getElementById('cm-pin-' + n);
+    if (!b) continue;
+    b.textContent = '🔓 PIN 계정 ' + n + (n === cur ? ' ✓' : '');
+    b.title = '계정 ' + n + ' 의 PIN 막힘(확인된 실패·사람 대기·재요구 기록)을 풉니다 — 도는 작업은 안 끊습니다. '
+            + '★PIN 이 맞는데 막혔을 때만★ 쓰십시오(틀린 PIN 이면 info.txt 를 먼저 고쳐야 합니다).';
+  }
+}
+async function pinResetFromMenu(n){
+  const id = menuPcId;
+  if (!id) return;
+  const label = ACCT_LABELS[n-1];
+  if (!label) return;
+  if (!confirm(baseId(id) + ' 계정 ' + n + ' 의 PIN 막힘을 풉니다.' + String.fromCharCode(10) + String.fromCharCode(10)
+               + '· PIN 이 맞는데 막혔을 때만 쓰십시오' + String.fromCharCode(10)
+               + '· 도는 작업(사냥 등)은 끊지 않습니다')) return;
+  closeCardMenu();
+  const ok = await sendCmd(id, 'pin_reset', {label: label});
+  showToast(ok ? ('🔓 ' + baseId(id) + ' 계정 ' + n + ' PIN 막힘 풀기 전달됨 — 결과는 로그·텔레그램으로')
+               : ('✗ ' + baseId(id) + ' PIN 막힘 풀기 ★전송 실패★'));
+  loadCmdHistory();
 }
 async function setCardOnly(n){
   const id = menuPcId;
