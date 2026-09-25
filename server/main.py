@@ -4321,6 +4321,24 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 //   ★MAX_ACCT 는 9 이하★ — 라벨 풀이 9글자다. 10 이면 ACCT_LABELS[9] 가 undefined 라
 //   조용히 빈 chrome_label 이 나간다(파이썬은 IndexError 로 터지지만 JS 는 안 터진다).
 const MAX_ACCT    = 5;
+// ★pin_reset 최소 매크로 버전 — ★정본은 이 한 줄★(서버 _PIN_RESET_MIN_VER 가 이 줄을 파싱한다, 2026-09-26 아이온2 HIGH)★
+//   옛 매크로(1.1.1012 = lc a701b11)엔 처리기가 없다 — 사람 명령이라 도는 전환·던전을 끊고(cmd_cancel) 모르는 명령
+//   알람+버그스샷까지 낸다. 릴리스 때 아이온2 가 확정·조정한다.
+const PIN_RESET_MIN_VER = '1.1.1013';
+// 버전 비교 — ★숫자로★(문자열 비교면 '1.1.999' > '1.1.1013'). 못 읽으면 null.
+function verTuple(v){
+  const m = String(v == null ? '' : v).match(/\d+/g);
+  return m ? m.map(Number) : null;
+}
+function verAtLeast(v, min){
+  const a = verTuple(v), b = verTuple(min);
+  if (!a || !b) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++){
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
 const ACCT_LABELS = 'abcdefghi'.slice(0, MAX_ACCT);   // 계정번호 n ↔ ACCT_LABELS[n-1]
 const ACCT_SUFFIX = ACCT_LABELS.slice(1);             // 카드 pc_id 접미사(계정1 은 없음)
 // ★정규식은 리터럴 대신 new RegExp★ — 리터럴 안에 줄바꿈이 섞여 <script> 가 통째로
@@ -9898,7 +9916,22 @@ function refreshPinButtons(pc_id){
   const cur = currentAcctNum(baseId(pc_id));
   const box = document.getElementById('cm-pin-box');
   if (!box) return;
-  if (box.childElementCount !== MAX_ACCT) {
+  // ★매크로 버전 문★ — 처리기 없는 옛 매크로에 보내면 도는 작업을 끊고 알람을 낸다(아이온2 HIGH). 서버도 409 로 막는다.
+  const mv = (state[pc_id] || {}).macro_version || '';
+  if (!verAtLeast(mv, PIN_RESET_MIN_VER)) {
+    box.innerHTML = '';
+    const nb = document.createElement('button');
+    nb.className = 'cm-btn chip-gray cm-span2';
+    nb.id = 'cm-pin-old';
+    nb.disabled = true;
+    nb.style.opacity = '0.45';
+    nb.style.cursor = 'not-allowed';
+    nb.textContent = '🔒 매크로 v' + PIN_RESET_MIN_VER + ' 이상에서만 (지금 ' + (mv ? 'v' + mv : '버전 모름') + ')';
+    nb.title = '이 PC 의 매크로에는 PIN 막힘 풀기 명령이 없습니다 — 업데이트 뒤에 보입니다';
+    box.appendChild(nb);
+    return;
+  }
+  if (box.childElementCount !== MAX_ACCT || document.getElementById('cm-pin-old')) {
     box.innerHTML = '';
     for (let k=1; k<=MAX_ACCT; k++){
       const nb = document.createElement('button');
@@ -9922,13 +9955,17 @@ async function pinResetFromMenu(n){
   if (!id) return;
   const label = ACCT_LABELS[n-1];
   if (!label) return;
+  if (!verAtLeast((state[id] || {}).macro_version, PIN_RESET_MIN_VER)) {   // 메뉴가 열린 사이 카드가 바뀌었을 때
+    showToast('🔒 ' + baseId(id) + ' 매크로가 v' + PIN_RESET_MIN_VER + ' 미만이라 PIN 막힘 풀기를 못 보냅니다');
+    return;
+  }
   if (!confirm(baseId(id) + ' 계정 ' + n + ' 의 PIN 막힘을 풉니다.' + String.fromCharCode(10) + String.fromCharCode(10)
                + '· PIN 이 맞는데 막혔을 때만 쓰십시오' + String.fromCharCode(10)
                + '· 도는 작업(사냥 등)은 끊지 않습니다')) return;
   closeCardMenu();
   const ok = await sendCmd(id, 'pin_reset', {label: label});
   showToast(ok ? ('🔓 ' + baseId(id) + ' 계정 ' + n + ' PIN 막힘 풀기 전달됨 — 결과는 로그·텔레그램으로')
-               : ('✗ ' + baseId(id) + ' PIN 막힘 풀기 ★전송 실패★'));
+               : ('✗ ' + baseId(id) + ' PIN 막힘 풀기 ★전송 실패★ (서버 거절 — 매크로 버전이 낮거나 모름)'));
   loadCmdHistory();
 }
 async function setCardOnly(n){
@@ -10575,12 +10612,85 @@ _BROADCAST_IDS = {"all", "ALL", "All", "*"}
 #   ★옮기기만 했다★ — 경로·인증·A7 브로드캐스트 가드·응답 모양은 그대로다.
 #   호출부는 ★인증과 A7 가드를 먼저★ 통과시킨 뒤 이 함수를 부른다.
 # ══════════════════════════════════════════════════════════════════════════
+def _ver_tuple(v) -> tuple | None:
+    """'1.1.1013' → (1, 1, 1013). ★숫자로 비교★(문자열이면 '1.1.999' > '1.1.1013'). 못 읽으면 None."""
+    nums = re.findall(r"\d+", str(v or ""))
+    return tuple(int(x) for x in nums) if nums else None
+
+
+def _ver_at_least(v, minv) -> bool:
+    a, b = _ver_tuple(v), _ver_tuple(minv)
+    if a is None or b is None:
+        return False
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) >= b + (0,) * (n - len(b))
+
+
+def _parse_pin_reset_min_ver() -> str | None:
+    """★정본은 화면 JS 의 `const PIN_RESET_MIN_VER = '…';` 한 줄★ — 두 곳에 적으면 어긋난다. 못 읽으면 None(=전부 거부)."""
+    m = re.search(r"const PIN_RESET_MIN_VER = '([0-9][0-9.]*)';", HTML_DASHBOARD)
+    return m.group(1) if m else None
+
+
+# ★pin_reset 버전 문 (2026-09-26 아이온2 HIGH)★ — 함대 1.1.1012(lc a701b11)엔 처리기가 없다: _by=human 명령이라 워커가
+#   바쁘면 cmd_cancel + _stop_sessions 로 ★구하려던 전환을 끊고★, 모르는 명령 갈래에서 알람+버그스샷. 함대는 스스로 안 올라간다.
+#   → 화면이 버튼을 숨기고, ★서버도 409★(팜뷰·curl·옛 탭이 화면을 우회해도).
+_PIN_RESET_MIN_VER = _parse_pin_reset_min_ver()
+
+
+async def _pc_macro_version(tenant: str, pc_id: str) -> str:
+    """그 ★물리 PC★ 의 지금 매크로 버전 — exe 는 PC 당 하나(카드 2차 패스와 같은 뜻): 같은 base 카드 중 보고가 가장 최근인 것."""
+    base = _base_pc(ns(tenant, pc_id))
+    rows = [r for r in await get_all_statuses() if _base_pc(str(r.get("pc_id") or "")) == base]   # pc_status 키는 ns() 한 값
+    rows = [r for r in rows if r.get("macro_version")]
+    if not rows:
+        return ""
+    # 같은 초에 두 카드가 보고했으면(동률) 높은 판 — exe 는 PC 당 하나라 둘 중 새 판이 지금 도는 것이다
+    return str(max(rows, key=lambda r: (str(r.get("_updated_at") or ""), _ver_tuple(r.get("macro_version")) or ()))
+               .get("macro_version") or "")
+
+
+async def _pin_reset_ok(tenant: str, pc_id: str) -> tuple:
+    """(되나, 설명용 버전). ★둘 다★ 문턱 이상이어야 한다 — ① 그 물리 PC 의 가장 최근 보고(지금 도는 exe)
+    ② 받는 카드 id 자신의 보고(있으면) — 한 PC 에 옛 매크로가 옛 카드 id 로 아직 폴링하는 경우(외부 기동·이중 실행, 반증 2차 #2).
+    문턱을 못 읽으면 거부(닫힌 채로)."""
+    newest = await _pc_macro_version(tenant, pc_id)
+    own = str(((await get_status(ns(tenant, pc_id))) or {}).get("macro_version") or "")
+    if not _PIN_RESET_MIN_VER or not _ver_at_least(newest, _PIN_RESET_MIN_VER):
+        return False, newest
+    if own and not _ver_at_least(own, _PIN_RESET_MIN_VER):
+        return False, own
+    return True, newest
+
+
+async def _drop_stale_pin_reset(tenant: str, pc_id: str, cmd) -> bool:
+    """★배달 때 다시 본다★(반증 2차 #1) — 큐에 넣을 땐 새 판이었는데 재시작·롤백(deploy_to --ver)으로 옛 판이 받아 가면
+    도는 작업을 끊고 알람을 낸다. 문을 못 넘으면 그 명령을 취소하고 True(배달하지 말 것)."""
+    if not cmd or cmd.get("command") != "pin_reset":
+        return False
+    ok_, ver = await _pin_reset_ok(tenant, pc_id)
+    if ok_:
+        return False
+    try:
+        await cancel_command(int(cmd["id"]))
+    except Exception as e:
+        print(f"[pin_reset] 배달 전 취소 실패 {pc_id} #{cmd.get('id')}: {e}")
+    print(f"[pin_reset] {ns(tenant, pc_id)} #{cmd.get('id')} 배달 안 함 — 매크로 v{ver or '?'} < v{_PIN_RESET_MIN_VER} (취소)")
+    return True
+
+
 async def _dispatch_macro_command(tenant: str, pc_id: str,
                                   command: str, args: dict) -> dict:
     """명령을 큐에 넣고 매크로에 전달한다. 응답 dict(ok/id/ws/무장결과)를 돌려준다."""
     args = dict(args or {})
     nspc = ns(tenant, pc_id)
     _rot_result: dict = {}          # ▶시작이면 무장 결과를 응답에 실어 화면에 알린다
+    if command == "pin_reset":      # ★버전 문★ — 옛 매크로는 도는 작업을 끊고 알람을 낸다(위 _PIN_RESET_MIN_VER 주석)
+        _ok, _mv = await _pin_reset_ok(tenant, pc_id)
+        if not _ok:
+            raise HTTPException(status_code=409, detail=(
+                f"{pc_id} 매크로 v{_mv or '?'} — PIN 막힘 풀기는 v{_PIN_RESET_MIN_VER or '?'} 이상에서만 됩니다"
+                " (옛 매크로는 이 명령을 몰라 도는 작업을 끊습니다). 매크로를 먼저 업데이트하십시오"))
 
     # ★비밀은 서버가 끼워넣는다 (2026-08-16, switch_launcher)★
     #   대시보드는 비번을 ★모른다★ — 브라우저에도, 명령 DB 행에도, 명령 이력 화면에도
@@ -10946,6 +11056,9 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             if not _pending:
                 break
             for _p in _pending:
+                if await _drop_stale_pin_reset(tenant, pc_id, _p):   # ★pin_reset 배달 문★ — 취소됨, 안 보낸다
+                    _last_id = max(_last_id, int(_p["id"]))
+                    continue
                 _pargs = await enrich_cmd_args(tenant, pc_id,
                                                _p["command"], _p.get("args") or {})
                 await websocket.send_text(json.dumps({
@@ -11501,6 +11614,12 @@ async def poll_command(pc_id: str, request: Request):
     tenant = _require_api_key(request)
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
+    for _ in range(5):              # ★pin_reset 배달 문★ — 못 넘으면 취소하고 다음 것(한 요청에 최대 5건 건너뜀)
+        if not await _drop_stale_pin_reset(tenant, pc_id, cmd):
+            break
+        cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
+    if cmd and cmd.get("command") == "pin_reset" and await _drop_stale_pin_reset(tenant, pc_id, cmd):
+        cmd = None                  # 5건 넘게 밀려 있으면 이번엔 안 준다(다음 폴링에서 이어서 거른다)
     if cmd:
         # ★WS 가 끊겨 폴링으로 받아가는 경로★ — DB 는 마스킹돼 있으므로 여기서 다시 채운다
         # (안 채우면 매크로가 '***' 를 파섹 비번으로 입력해 로그인 실패)
@@ -17065,7 +17184,9 @@ async def fv_command_send(request: Request):
     if not cmd:
         return _fv_err(400, "cmd 필드가 필요합니다")
     known = _fv_cmds()
-    if known and cmd not in known:
+    if not known:                   # ★닫힌 채로 실패★ — 명령표 파싱이 비면 전부 통과시키던 구멍(아이온2 LOW)
+        return _fv_err(503, "명령표를 읽지 못했습니다 — 서버 로그 «[FV] 명령표 파싱 실패» 를 보십시오")
+    if cmd not in known:
         return _fv_err(400, f"모르는 cmd '{cmd}' — GET /api/fv/command 로 목록을 보십시오")
     args = body.get("args") or {}
     if not isinstance(args, dict):

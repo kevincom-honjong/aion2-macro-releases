@@ -4,6 +4,24 @@
 //   ★MAX_ACCT 는 9 이하★ — 라벨 풀이 9글자다. 10 이면 ACCT_LABELS[9] 가 undefined 라
 //   조용히 빈 chrome_label 이 나간다(파이썬은 IndexError 로 터지지만 JS 는 안 터진다).
 const MAX_ACCT    = 5;
+// ★pin_reset 최소 매크로 버전 — ★정본은 이 한 줄★(서버 _PIN_RESET_MIN_VER 가 이 줄을 파싱한다, 2026-09-26 아이온2 HIGH)★
+//   옛 매크로(1.1.1012 = lc a701b11)엔 처리기가 없다 — 사람 명령이라 도는 전환·던전을 끊고(cmd_cancel) 모르는 명령
+//   알람+버그스샷까지 낸다. 릴리스 때 아이온2 가 확정·조정한다.
+const PIN_RESET_MIN_VER = '1.1.1013';
+// 버전 비교 — ★숫자로★(문자열 비교면 '1.1.999' > '1.1.1013'). 못 읽으면 null.
+function verTuple(v){
+  const m = String(v == null ? '' : v).match(/\d+/g);
+  return m ? m.map(Number) : null;
+}
+function verAtLeast(v, min){
+  const a = verTuple(v), b = verTuple(min);
+  if (!a || !b) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++){
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
 const ACCT_LABELS = 'abcdefghi'.slice(0, MAX_ACCT);   // 계정번호 n ↔ ACCT_LABELS[n-1]
 const ACCT_SUFFIX = ACCT_LABELS.slice(1);             // 카드 pc_id 접미사(계정1 은 없음)
 // ★정규식은 리터럴 대신 new RegExp★ — 리터럴 안에 줄바꿈이 섞여 <script> 가 통째로
@@ -5581,7 +5599,22 @@ function refreshPinButtons(pc_id){
   const cur = currentAcctNum(baseId(pc_id));
   const box = document.getElementById('cm-pin-box');
   if (!box) return;
-  if (box.childElementCount !== MAX_ACCT) {
+  // ★매크로 버전 문★ — 처리기 없는 옛 매크로에 보내면 도는 작업을 끊고 알람을 낸다(아이온2 HIGH). 서버도 409 로 막는다.
+  const mv = (state[pc_id] || {}).macro_version || '';
+  if (!verAtLeast(mv, PIN_RESET_MIN_VER)) {
+    box.innerHTML = '';
+    const nb = document.createElement('button');
+    nb.className = 'cm-btn chip-gray cm-span2';
+    nb.id = 'cm-pin-old';
+    nb.disabled = true;
+    nb.style.opacity = '0.45';
+    nb.style.cursor = 'not-allowed';
+    nb.textContent = '🔒 매크로 v' + PIN_RESET_MIN_VER + ' 이상에서만 (지금 ' + (mv ? 'v' + mv : '버전 모름') + ')';
+    nb.title = '이 PC 의 매크로에는 PIN 막힘 풀기 명령이 없습니다 — 업데이트 뒤에 보입니다';
+    box.appendChild(nb);
+    return;
+  }
+  if (box.childElementCount !== MAX_ACCT || document.getElementById('cm-pin-old')) {
     box.innerHTML = '';
     for (let k=1; k<=MAX_ACCT; k++){
       const nb = document.createElement('button');
@@ -5605,13 +5638,17 @@ async function pinResetFromMenu(n){
   if (!id) return;
   const label = ACCT_LABELS[n-1];
   if (!label) return;
+  if (!verAtLeast((state[id] || {}).macro_version, PIN_RESET_MIN_VER)) {   // 메뉴가 열린 사이 카드가 바뀌었을 때
+    showToast('🔒 ' + baseId(id) + ' 매크로가 v' + PIN_RESET_MIN_VER + ' 미만이라 PIN 막힘 풀기를 못 보냅니다');
+    return;
+  }
   if (!confirm(baseId(id) + ' 계정 ' + n + ' 의 PIN 막힘을 풉니다.' + String.fromCharCode(10) + String.fromCharCode(10)
                + '· PIN 이 맞는데 막혔을 때만 쓰십시오' + String.fromCharCode(10)
                + '· 도는 작업(사냥 등)은 끊지 않습니다')) return;
   closeCardMenu();
   const ok = await sendCmd(id, 'pin_reset', {label: label});
   showToast(ok ? ('🔓 ' + baseId(id) + ' 계정 ' + n + ' PIN 막힘 풀기 전달됨 — 결과는 로그·텔레그램으로')
-               : ('✗ ' + baseId(id) + ' PIN 막힘 풀기 ★전송 실패★'));
+               : ('✗ ' + baseId(id) + ' PIN 막힘 풀기 ★전송 실패★ (서버 거절 — 매크로 버전이 낮거나 모름)'));
   loadCmdHistory();
 }
 async function setCardOnly(n){

@@ -136,6 +136,7 @@ a.href
 a.id.replace
 a.label
 a.left
+a.length
 a.max
 a.min_mins
 a.n-b.n
@@ -155,9 +156,11 @@ a.today_pcs
 a.total
 a.wait_n
 a/b/c/d
+a701b11
 a7guard
 a7guard.py
 a:hover
+a[i]
 a[key]
 abcd
 abcdefghi
@@ -351,6 +354,7 @@ awakening_wait
 awakening_wait:[
 b.disabled
 b.filename
+b.length
 b.pc
 b.size/1024
 b.style.background
@@ -360,6 +364,7 @@ b.style.opacity
 b.title
 b/c/d
 b[0]
+b[i]
 b[key]
 back
 backdrop-filter
@@ -815,6 +820,7 @@ cm-parsec-app
 cm-parsec-web
 cm-pin-
 cm-pin-box
+cm-pin-old
 cm-sec
 cm-span2
 cmd
@@ -827,6 +833,7 @@ cmd-one
 cmd-rot
 cmd-rot:hover
 cmd:command
+cmd_cancel
 cmd_history
 cmd_id
 cmds
@@ -1641,6 +1648,7 @@ m.age
 m.alive
 m.at
 m.clicks
+m.map
 m.old
 m.src_h
 m.src_w
@@ -1799,6 +1807,7 @@ mt-2
 mt-3
 mt-4
 multi
+mv
 mvcls
 mw
 mx
@@ -1818,8 +1827,11 @@ names.join
 natural
 nay
 nb
+nb.disabled
 nb.id
 nb.onclick
+nb.style.cursor
+nb.style.opacity
 nb.title
 netprobe
 neural
