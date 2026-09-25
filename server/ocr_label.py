@@ -133,7 +133,16 @@ OCR_AUTO_SITES = {
         "홍옥의 섬", "정령의 섬", "베르테론 요새 폐허", "드라나 가공구역", "루브레인 구릉지", "환영신의 정원", "엘듄강 중류",
         "어비스 회랑", "데바 생체 연구기지", "갈라진 남쪽 추락지", "갈라진 북쪽 추락지", "라 미렌 요새 남쪽 잔해",
         "라 미렌 요새 북쪽 잔해", "붉은 가시 왕관섬", "영원의 섬", "아울라우 부락")),
-}                     # ts 방식 행에서 «나쁨» 의 라벨(매크로 BAD_LABELS)
+}
+# ★믿을 만한 자리 자동 닫기 (2026-09-25 주인님 #228 «OCR 80개 찼다»)★ — read_server_kina_open 이 사람 라벨 240·불일치 0 인데
+#   대기 80 중 40 을 차지했다. 사람 라벨이 OCR_TRUST_MIN_LABELED 이상이고 ★최근 OCR_TRUST_WINDOW 장★(사람이 라벨 준 묶음의
+#   이미지 중 제미나이 답이 있는 것, 라벨 시각 최신순 — /ocr/stats 불일치율과 같은 비교 norm_answer)이 전부 일치하는 site 는
+#   ★새 묶음★ 을 status "auto"(label = 제미나이 답) 로 닫는다. 단 OCR_TRUST_SPOT_EVERY 번째마다 1건은 대기로 남긴다(표본 검사).
+#   표본에 사람이 다른 답을 주면 그 줄이 최근 창에 들어가 ★창이 다시 깨끗해질 때까지 저절로 꺼진다★(따로 끄는 상태가 없다).
+#   auto 는 사람 라벨이 아니라서 창에 안 들어간다(스스로 믿음을 키우지 않는다). 맵 이름 site(OCR_AUTO_SITES)는 위 규칙만.
+OCR_TRUST_MIN_LABELED = 200       # 그 site 의 사람 라벨 묶음 수 하한
+OCR_TRUST_WINDOW = 200            # 최근 비교 이미지 수 — 이만큼 있고 불일치 0 이어야 한다
+OCR_TRUST_SPOT_EVERY = 20         # n 번째마다 1건은 사람 대기열로(표본)                     # ts 방식 행에서 «나쁨» 의 라벨(매크로 BAD_LABELS)
 # ★프롬프트 예시값 교체(매크로 1.1.1006, 2026-09-24)로 prompt_sha1[:12] 가 바뀌었다★ — 함대는 옛·새 판이 섞여 돈다.
 #   ts 방식 행을 ★옛·새 두 열쇠로 다 내보낸다★(같은 그림 sha1·같은 라벨) — 어느 판이 보낸 라벨이든 어느 판이든 적중.
 #   1804·1808·1827 세 키나 칸은 새 판에서 한 프롬프트(62fd6da2e23d)로 합쳐졌다 — 칸 구분은 그림 sha1 이 한다.
@@ -538,12 +547,84 @@ def auto_label(site: str, answers) -> "str | None":
     return one if one in names else None
 
 
-async def _auto_eval(db, tenant: str, cid: int, now: float) -> str:
-    """묶음 하나를 다시 본다 → "auto"(대기 → 자동 닫음) · "reopen"(자동 → 대기) · ""(그대로). commit 은 부르는 쪽."""
-    cur = await db.execute("SELECT site, status FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
+async def site_trusted(db, tenant: str, site: str) -> dict:
+    """#228 — {"trusted", "labeled", "compared", "disagree"}. compared/disagree 는 최근 OCR_TRUST_WINDOW 장 기준."""
+    cur = await db.execute("SELECT COUNT(*) FROM ocr_cluster WHERE tenant=? AND site=? AND status='labeled'", (tenant, site))
+    labeled = int((await cur.fetchone())[0])
+    out = {"trusted": False, "labeled": labeled, "compared": 0, "disagree": 0}
+    if labeled < OCR_TRUST_MIN_LABELED:
+        return out
+    # ★순서 = 그 판단이 «생긴» 때 — MAX(라벨 시각, 이미지 도착)★ (#228 반증 1) 옛 라벨 묶음에 오늘 붙은 오독 이미지가
+    #   옛 라벨 시각에 묻혀 창에 안 들어오던 것. ★나쁨(bad)★ 묶음의 답 있는 이미지도 창에 넣고 불일치로 센다(반증 4 — 표본을
+    #   «잘못된 이미지» 로 찍었는데 제미나이가 답을 지어냈으면 믿으면 안 된다). 라벨 수 하한은 사람 라벨(labeled)만.
+    cur = await db.execute(
+        "SELECT i.gemini, c.label, c.status FROM ocr_img i JOIN ocr_cluster c ON c.id=i.cluster_id "
+        "WHERE i.tenant=? AND c.site=? AND c.status IN ('labeled','bad') AND TRIM(COALESCE(i.gemini,''))<>'' "
+        "ORDER BY MAX(COALESCE(c.labeled_at, 0), COALESCE(i.created, 0)) DESC, i.id DESC", (tenant, site))
+    while out["compared"] < OCR_TRUST_WINDOW:
+        rows = await cur.fetchmany(OCR_TRUST_WINDOW)
+        if not rows:
+            break
+        for gm, lb, cst in rows:
+            if not norm_answer(gm):
+                continue                            # 공백만 있는 답 — stats 와 같이 분모에서 뺀다
+            out["compared"] += 1
+            if cst == "bad" or norm_answer(gm) != norm_answer(lb):
+                out["disagree"] += 1
+            if out["compared"] >= OCR_TRUST_WINDOW:
+                break
+    out["trusted"] = out["compared"] >= OCR_TRUST_WINDOW and out["disagree"] == 0
+    return out
+
+
+async def _trust_spot(db, tenant: str, site: str) -> bool:
+    """#228 표본 셈 — 믿는 site 의 새 묶음마다 1 올리고 OCR_TRUST_SPOT_EVERY 번째면 True(사람 대기열로). 재배포에도 이어진다."""
+    k = "trust_n:%s:%s" % (tenant, site)
+    cur = await db.execute("SELECT v FROM ocr_meta WHERE k=?", (k,))
     r = await cur.fetchone()
-    if not r or r[1] not in ("pending", "auto") or r[0] not in OCR_AUTO_SITES:
+    try:
+        n = int(r[0]) + 1 if r else 1
+    except (TypeError, ValueError):
+        n = 1
+    await db.execute("INSERT INTO ocr_meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(n)))
+    return n % OCR_TRUST_SPOT_EVERY == 0
+
+
+async def _trust_eval(db, tenant: str, cid: int, site: str, status: str, label, now: float, new: bool) -> str:
+    """#228 — 맵 이름이 아닌 site. 새 대기 묶음 → 믿는 site 면 auto(표본 제외) · auto 묶음에 다른 답이 붙으면 대기로."""
+    if status == "auto":
+        cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, tenant))
+        if all(norm_answer(_norm_label(g)) == norm_answer(label) for (g,) in await cur.fetchall()):   # auto 라벨과 같은 정규화(반증 5)
+            return ""
+        await db.execute("UPDATE ocr_cluster SET status='pending', label=NULL, labeled_at=NULL WHERE id=?", (cid,))
+        return "reopen"
+    if not new:
+        return ""                                   # 이미 사람 대기열에 있던 묶음은 그대로(사람이 보던 것)
+    cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, tenant))
+    gms = [g for (g,) in await cur.fetchall()]
+    lab = _norm_label(gms[0]) if len(gms) == 1 and isinstance(gms[0], str) else ""
+    if not lab or not norm_answer(lab):
+        return ""                                   # 답 없는 제출은 사람 몫
+    if not (await site_trusted(db, tenant, site))["trusted"]:
         return ""
+    if await _trust_spot(db, tenant, site):
+        return "spot"                               # 표본 — 대기로 남긴다
+    await db.execute("UPDATE ocr_cluster SET status='auto', label=?, labeled_at=? WHERE id=?", (lab, now, cid))
+    return "auto"
+
+
+async def _auto_eval(db, tenant: str, cid: int, now: float, new: bool = False) -> str:
+    """묶음 하나를 다시 본다 → "auto"(대기 → 자동 닫음) · "reopen"(자동 → 대기) · "spot"(#228 표본) · ""(그대로).
+    commit 은 부르는 쪽. new = 이 제출이 묶음을 새로 만들었다(#228 은 새 묶음만 닫는다)."""
+    cur = await db.execute("SELECT site, status, label FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
+    r = await cur.fetchone()
+    if not r or r[1] not in ("pending", "auto"):
+        return ""
+    if r[0] not in OCR_AUTO_SITES:
+        cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
+        if await cur.fetchone():
+            return ""                               # 사람이 손댄 묶음 — 사람 몫
+        return await _trust_eval(db, tenant, cid, r[0], r[1], r[2], now, new)
     cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
     if await cur.fetchone():
         return ""                                   # 사람이 손댄 묶음 — 사람 몫
@@ -868,7 +949,7 @@ async def submit_core(tenant: str, pc: str, site: str, raw: bytes, dh: str, ts, 
                     cur = await db.execute("SELECT status FROM ocr_cluster WHERE id=?", (cid,))
                     if (await cur.fetchone())[0] in ("labeled", "bad"):   # 이미 답이 있는 묶음 → 매크로에 바로 나간다(near 로)
                         await db.execute("UPDATE ocr_img SET seq=? WHERE id=?", (await _next_seq(db, tenant), iid))
-                await _auto_eval(db, tenant, cid, now)     # ★#218★ 맵 이름이 알려진 한 이름이면 사람 대기열에 안 올린다
+                await _auto_eval(db, tenant, cid, now, kind == "new")   # ★#218★ 맵 이름 · ★#228★ 믿을 만한 site 는 사람 대기열에 안 올린다
                 await db.commit()
             except Exception:
                 _rm(rel)
