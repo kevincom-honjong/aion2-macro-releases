@@ -19,7 +19,6 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 
 MIN_CHECKS = 23
-OL.OCR_RATE_PER_MIN = OL.OCR_RATE_TENANT_PER_MIN = 10 ** 6   # 이 시험은 수백 장을 한 번에 낸다 — 속도 상한은 test_ocr_label 이 지킨다
 KEY = "testkey"
 C = TestClient(main.app, raise_server_exceptions=False, follow_redirects=False)
 SESS = main.new_session("main")
@@ -223,7 +222,14 @@ def t_consts():
 
 
 def test_all():
-    run_all([t_threshold, t_spot_ratio, t_disagree_turns_off, t_other_sites, t_counts_apart, t_window_arrival_and_bad, t_consts])
+    # 이 시험은 수백 장을 한 번에 낸다 — 속도 상한은 test_ocr_label 이 지킨다. ★모듈 수준에서 바꾸면 pytest 수집 때
+    #   다른 파일까지 상한이 풀린다★ → 여기서만 올리고 되돌린다.
+    keep = (OL.OCR_RATE_PER_MIN, OL.OCR_RATE_TENANT_PER_MIN)
+    OL.OCR_RATE_PER_MIN = OL.OCR_RATE_TENANT_PER_MIN = 10 ** 6
+    try:
+        run_all([t_threshold, t_spot_ratio, t_disagree_turns_off, t_other_sites, t_counts_apart, t_window_arrival_and_bad, t_consts])
+    finally:
+        OL.OCR_RATE_PER_MIN, OL.OCR_RATE_TENANT_PER_MIN = keep
     finish("test_ocr_trust_228", MIN_CHECKS)
 
 

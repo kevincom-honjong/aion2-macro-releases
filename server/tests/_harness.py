@@ -132,10 +132,31 @@ class Req:
         return self._body
 
 
+_OCR_TABLES = ("ocr_cluster", "ocr_img", "ocr_hist", "ocr_seq", "ocr_meta")
+
+
+async def ocr_fresh():
+    """#228 격리 — OCR 상태를 새 프로세스 처음과 같게(표 비움 · 이미지 폴더 · 메모리 셈). 한 pytest 프로세스에서
+    파일이 이어 돌 때 앞 파일의 라벨·대기·표본 셈이 다음 파일 stats 에 새지 않게(228→218 A-10 실패, 아이온2 실측)."""
+    import shutil
+    import ocr_label as OL
+    async with aiosqlite.connect(db.DB_PATH) as c:
+        for t in _OCR_TABLES:
+            cur = await c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,))
+            if await cur.fetchone():
+                await c.execute("DELETE FROM %s" % t)
+        await c.commit()
+    shutil.rmtree(OL.OCR_DIR, ignore_errors=True)
+    for s in (OL._RATE, OL._SEED_DONE, OL._SEED_BUSY, OL._SEED_TASKS, OL._INITED):
+        s.clear()
+    await OL.ensure_tables()        # ocr_meta 를 비웠다 → DB 세대(epoch)를 새 DB 처럼 다시 적는다(안 하면 since 커서가 매번 reset)
+
+
 def run_all(tests):
-    """async 시험 함수 목록을 순서대로. DB 는 처음 한 번 만든다."""
+    """async 시험 함수 목록을 순서대로. DB 는 처음 한 번 만든다. ★OCR 상태는 파일마다 새로★(ocr_fresh)."""
     async def _go():
         await db.init_db()
+        await ocr_fresh()
         for t in tests:
             r = t()
             if asyncio.iscoroutine(r) or hasattr(r, "__await__"):   # 동기 시험도 섞어 쓴다

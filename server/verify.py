@@ -172,6 +172,13 @@ def main_(quick=False):
         tail = [ln for ln in out.splitlines() if ln.strip()][-3:]
         step("5 %s" % t, rc == 0, " | ".join(x.strip() for x in tail))
 
+    # 5-b. ★한 프로세스 격리★ (#228 — 파일마다 따로면 초록인데 pytest 한 번에 이어 돌리면 228 의 OCR 라벨·대기가 218 A-10
+    #   stats 에 샜다, 아이온2 실측). _harness.run_all 이 파일마다 ocr_fresh() 로 OCR 상태를 비우는지 지킨다.
+    chain = ["tests/test_ocr_trust_228.py", "tests/test_ocr_auto_218.py", "tests/test_ocr_label.py"]
+    rc, out = _run([PY, "-X", "utf8", "-m", "pytest", "-q", "-p", "no:cacheprovider", *chain], timeout=1800)
+    tail = [ln for ln in out.splitlines() if ln.strip()][-2:]
+    step("5-b OCR 시험 한 프로세스 연쇄 228→218→ocr_label (파일 간 상태 누수 없음)", rc == 0, " | ".join(x.strip() for x in tail))
+
 
 def sync_static():
     src = open(MAIN, encoding="utf-8").read()
