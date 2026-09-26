@@ -13249,7 +13249,9 @@ def _fetch_image_upstream(fname: str, sources: list):
     return None, "", errs
 
 
-IMG_IP_CAP_N, IMG_IP_CAP_WIN_S = 60, 3600   # 한 IP 가 한 파일을 한 시간에 — 24대 × 재시도 한두 번 여유
+IMG_IP_CAP_N, IMG_IP_CAP_WIN_S = 600, 3600  # 한 IP 가 한 파일을 한 시간에 — ★함대 24대가 공인 IP 하나 뒤★(아이온2 2026-09-26)
+#   업데이터 /img 요청엔 PC 이름이 없다(download_file 은 헤더 없음, 주소는 /check 가 만든다) → IP 로만 센다.
+#   정상 함대 업데이트 = 24대 × (한 번 + sha 재시도 최대 3) = 96 — 여섯 배 여유. 고리(5분마다 24대 × 4)는 약 25분 만에 걸린다.
 _IMG_IP_HITS: dict = {}
 _IMG_CAP_HITS = {"n": 0}
 

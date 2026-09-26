@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 16
+MIN_CHECKS = 17
 C = TestClient(main.app, raise_server_exceptions=False)
 PNG = b"\x89PNG-fake-" * 3000
 SHA = hashlib.sha256(PNG).hexdigest()
@@ -125,9 +125,13 @@ async def t_img_guards():
         d = main._EGRESS["img"].get("a.png") or {}
         ok("E-10 /img 파일별 바이트 — 내준 것만 센다(429·503 은 0)", d.get("n") == 3 and d.get("bytes") == 3 * len(PNG), str(d))
         ok("E-11 막은 횟수가 남는다", main._IMG_CAP_HITS["n"] == 1, str(main._IMG_CAP_HITS))
-        ok("E-12 ★기본 상한이 함대 한 번 업데이트를 안 막는다★ — 24대 × 2", keep_n >= 48, str(keep_n))
+        ok("E-12 ★기본 상한이 함대 한 번 업데이트를 안 막는다★ — 24대 × 4(재시도) 의 여러 배", keep_n >= 24 * 4 * 5, str(keep_n))
         main._IMG_IP_HITS.clear()
         main.IMG_IP_CAP_N = keep_n
+        fleet = [C.get("/img/a.png", headers={"x-forwarded-for": "203.0.113.7"}).status_code for _pc in range(24) for _try in range(4)]
+        ok("E-12b ★공인 IP 하나 뒤 24대가 같은 파일을 4번씩(96회)★ — 전부 200", fleet == [200] * 96,
+           "%d 개 중 200 이 아닌 것 %s" % (len(fleet), sorted(set(fleet))))
+        main._IMG_IP_HITS.clear()
         other = C.get("/img/a.png", headers={"x-forwarded-for": "9.9.9.9"})
         ok("E-13 다른 파일·다른 곳은 따로 센다", other.status_code == 200, str(other.status_code))
     finally:
