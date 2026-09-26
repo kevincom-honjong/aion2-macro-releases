@@ -10505,16 +10505,72 @@ async def _push_cmd_history(tenant: str):
 LOG_READ_MAX = 3500   # 보존(database.LOG_KEEP_PER_PC 3000 + 정리 주기 199)보다 커야 ★전부★ 읽힌다
 
 @app.get("/logs/{pc_id}")
-async def pc_logs(pc_id: str, request: Request, limit: int = 2000):
+async def pc_logs(pc_id: str, request: Request, limit: int = 2000, since: str = "", contains: str = ""):
     """limit 기본 2000(화면용). 보존분 전부를 봐야 할 때만 올린다 — 2026-09-21 사고 612
-    감사에서 2000 이 상한이라 ★보존된 줄의 3분의 1을 못 봤다★(없다고 말할 근거가 안 됐다)."""
+    감사에서 2000 이 상한이라 ★보존된 줄의 3분의 1을 못 봤다★(없다고 말할 근거가 안 됐다).
+    ★since= 를 주면 그 뒤만(커서) — /logs_since 와 같은 모양★(2026-09-26 Railway 나가는 바이트: 감시기가 매번 2000줄)."""
     tenant = _require_session(request)
+    if since:
+        return JSONResponse(await _logs_since_core(tenant, since, limit, pc_ns=ns(tenant, pc_id), contains=contains))
     try:
         limit = max(1, min(int(limit), LOG_READ_MAX))
     except Exception:
         limit = 2000
     logs = await get_logs(ns(tenant, pc_id), limit=limit)
     return JSONResponse({"logs": logs})
+
+
+LOGS_SINCE_MAX = 2000
+LOGS_CONTAINS_MAX = 200
+
+
+async def _logs_since_core(tenant: str, since: str, limit, pc_ns: "str | None" = None, contains: str = "") -> dict:
+    """★since 뒤 로그를 전 PC(또는 한 PC) 한 번에 — 커서★ (2026-09-26 Railway 나가는 바이트, 아이온2 T2).
+    감시기(tgwatch)가 PC 마다 /logs/{pc}(2000줄)를 1분에 60번 당기던 것을 1분에 몇 번으로.
+    커서 규칙은 /api/fv/events 와 같다: 위 끝 = 지금-FV_EVENT_SETTLE_S(아직 안 닫힌 초는 다음 판),
+    커밋 중인 업데이터 줄 앞까지, 잘리면 경계 초를 통째로 다음 장으로. contains 는 ★읽은 뒤★ 거른다 —
+    next_since 는 거르기 전 기준이라 안 맞는 줄이 많아도 커서가 멈추지 않는다."""
+    try:
+        limit = max(1, min(int(str(limit).strip() or 500), LOGS_SINCE_MAX))
+    except Exception:
+        raise HTTPException(status_code=400, detail="limit 이 숫자가 아닙니다")
+    contains = str(contains or "")
+    if len(contains) > LOGS_CONTAINS_MAX:
+        raise HTTPException(status_code=400, detail=f"contains 는 {LOGS_CONTAINS_MAX}자까지")
+    default_since = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(_FV_TS_FMT)
+    s_since = _fv_iso(since, default_since)
+    if since and _fv_iso(since) == "":
+        raise HTTPException(status_code=400, detail="since 가 ISO8601 이 아닙니다 (예: 2026-09-26T05:00:00Z)")
+    until = (datetime.now(timezone.utc) - timedelta(seconds=FV_EVENT_SETTLE_S)).strftime(_FV_TS_FMT)
+    if _FV_INFLIGHT:
+        until = min(until, min(_FV_INFLIGHT))
+    if until > _FV_HORIZON_HI[0]:
+        _FV_HORIZON_HI[0] = until
+    nsp = "" if tenant == "main" else tenant
+    rows = await _fv_logs_since(s_since, limit + 1, pc_id=pc_ns, until=until, ns_prefix=nsp)
+    rows = [r for r in rows if split_ns(str(r.get("pc_id") or ""))[0] == tenant]
+    truncated = len(rows) > limit
+    if truncated:
+        cut_at = str(rows[-1].get("created_at") or "")
+        keep = [r for r in rows if str(r.get("created_at") or "") < cut_at]
+        rows = keep[:limit] if keep else [r for r in rows if str(r.get("created_at") or "") == cut_at][:limit]
+    next_since = str(rows[-1].get("created_at")) if rows else s_since
+    out = []
+    for r in rows:
+        msg = str(r.get("message") or "")
+        if contains and contains not in msg:
+            continue
+        out.append({"id": r.get("id"), "pc": split_ns(str(r.get("pc_id") or ""))[1], "level": r.get("level"),
+                    "message": msg, "created_at": r.get("created_at")})
+    return {"since": s_since, "next_since": next_since, "truncated": truncated, "count": len(out), "logs": out}
+
+
+@app.get("/logs_since")
+async def logs_since(request: Request, since: str = "", limit: str = "500", contains: str = "", pc: str = ""):
+    """전 PC 로그를 since 뒤로 한 번에(커서). pc= 로 한 대만, contains= 로 글자 거르기. 세션 인증."""
+    tenant = _require_session(request)
+    return JSONResponse(await _logs_since_core(tenant, since, limit, pc_ns=ns(tenant, pc) if pc else None,
+                                               contains=contains))
 
 
 @app.post("/log/{pc_id}")
