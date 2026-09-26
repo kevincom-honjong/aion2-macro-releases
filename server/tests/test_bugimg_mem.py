@@ -15,7 +15,7 @@ from PIL import Image
 
 from _harness import main, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 19
+MIN_CHECKS = 23
 C = TestClient(main.app, raise_server_exceptions=False)
 FN = "PC-01_20260927_010203_PC-01_20260927_100203_test-shot.png"
 
@@ -119,8 +119,34 @@ async def t_mem():
        C.post("/diag/mem/trim").status_code == 401 and tr.status_code == 200 and "ok" in tr.json(), tr.text[:120])
 
 
+async def t_series():
+    main._MEM_SERIES.clear()
+    main._MEM_NEXT[0] = 0.0
+    main._mem_sample_tick(1000.0)
+    main._mem_sample_tick(1000.0 + main.MEM_SAMPLE_S - 1)
+    n1 = len(main._MEM_SERIES)
+    main._mem_sample_tick(1000.0 + main.MEM_SAMPLE_S)
+    ok("M-6 5분에 한 점만(감시견 0.5초마다 불려도)", n1 == 1 and len(main._MEM_SERIES) == 2, f"{n1} {len(main._MEM_SERIES)}")
+    for i in range(700):
+        main._MEM_NEXT[0] = 0.0
+        main._mem_sample_tick(float(i))
+    ok("M-7 점은 576개(48시간)에서 잘린다", len(main._MEM_SERIES) == 576, str(len(main._MEM_SERIES)))
+    import asyncio
+    main._MEM_SERIES.clear()
+    main._MEM_NEXT[0] = 0.0
+    wd = asyncio.create_task(main._loop_watchdog())
+    await asyncio.sleep(0.8)
+    wd.cancel()
+    ok("M-9 ★감시견이 실제로 점을 찍는다★(부팅 때 도는 그 코루틴)", len(main._MEM_SERIES) == 1, str(len(main._MEM_SERIES)))
+    for i in range(300):
+        main._MEM_NEXT[0] = 0.0
+        main._mem_sample_tick(float(i))
+    j = _get("/diag/mem").json()
+    ok("M-8 /diag/mem 에 최근 288점(24시간)과 up_s", len(j["series_5min"]) == 288 and "up_s" in j["series_5min"][-1], "")
+
+
 def test_all():
-    run_all([t_bugimg, t_mem])
+    run_all([t_bugimg, t_mem, t_series])
     finish("test_bugimg_mem", MIN_CHECKS)
 
 

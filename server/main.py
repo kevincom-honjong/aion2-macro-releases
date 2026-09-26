@@ -395,6 +395,7 @@ async def _loop_watchdog() -> None:
             await asyncio.sleep(period)
         except asyncio.CancelledError:
             return
+        _mem_sample_tick(t0)
         late = time.monotonic() - t0 - period
         if late >= STALL_MIN_S:
             try:
@@ -1336,7 +1337,8 @@ async def lifespan(app: FastAPI):
         #   닫는다. Railway 로그에서 이 줄과 화면·매크로의 1012 시각을 대조하면 재배포인지 가른다.
         try:
             print(f"[shutdown] boot={SERVER_BOOT_ID[:8]} uptime={int(time.time() - SERVER_BOOT_TS)}s "
-                  f"macro_ws={len(macro_ws_connections)} dash_ws={len(manager.active)}", flush=True)
+                  f"macro_ws={len(macro_ws_connections)} dash_ws={len(manager.active)} "
+                  f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
         for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task):
@@ -2870,6 +2872,29 @@ def _mem_proc() -> dict:
     return out
 
 
+MEM_SAMPLE_S = 300.0                         # 5분마다 한 점 — 부팅 뒤 기울기(새는가·단편화인가)를 본다
+_MEM_SERIES: list = []                       # [{"up_s","rss","anon","file","cg"}] 최근 576점(48시간)
+_MEM_NEXT = [0.0]
+
+
+def _mem_sample_tick(now: float) -> None:
+    """감시견이 0.5초마다 부른다 — 5분에 한 번만 /proc 두세 줄을 읽는다(루프 안 막음). 1시간마다 로그 한 줄."""
+    if now < _MEM_NEXT[0]:
+        return
+    _MEM_NEXT[0] = now + MEM_SAMPLE_S
+    try:
+        m = _mem_proc()
+        pt = {"up_s": int(time.time() - SERVER_BOOT_TS), "rss": m.get("VmRSS"), "anon": m.get("cg_anon"),
+              "file": m.get("cg_file"), "cg": m.get("cg_current")}
+        _MEM_SERIES.append(pt)
+        del _MEM_SERIES[:-576]
+        if len(_MEM_SERIES) % 12 == 1:
+            print(f"[mem] up={pt['up_s']}s rss={(pt['rss'] or 0) >> 20}MB cg={(pt['cg'] or 0) >> 20}MB "
+                  f"anon={(pt['anon'] or 0) >> 20}MB file={(pt['file'] or 0) >> 20}MB", flush=True)
+    except Exception:
+        pass
+
+
 def _mem_deep(obj, budget: int = 300_000) -> tuple:
     """(대략 바이트, 다 셌나) — dict/list/tuple/set/bytes/str 만 따라간다. 너무 크면 budget 에서 멈춘다."""
     seen, stack, total, n = set(), [obj], 0, 0
@@ -2906,7 +2931,7 @@ async def diag_mem(request: Request, types: int = 0):
         if b >= 64 << 10:
             rows.append({"name": name, "len": len(v), "bytes": b, "complete": full})
     rows.sort(key=lambda r: -r["bytes"])
-    out = {"proc": _mem_proc(), "globals_over_64k": rows[:30],
+    out = {"proc": _mem_proc(), "globals_over_64k": rows[:30], "series_5min": _MEM_SERIES[-288:],
            "note": "cg_* = Railway 가 재는 컨테이너(파일 캐시 포함) · RssAnon = 파이썬 힙 · globals = 우리가 쥔 것(대략)"}
     try:
         import gc
