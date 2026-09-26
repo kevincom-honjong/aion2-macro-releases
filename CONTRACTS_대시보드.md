@@ -90,6 +90,10 @@
   tag = 서버 이름 `{pc}_{ts}_{원래이름}` 에서 `{pc}_{ts}_` 를 두 겹까지 벗긴 것. `upload-harvest` = tag 마다 최신 6장 **나이 무관 영구** ·
   `upload-learn`·`local-learn` = 120장 + 7일 · 그 밖(`upload-incident`·표에 없는 옛 파일) = 48시간(최신 6장·40장 상한은 그대로) ·
   이름에서 시각을 못 읽으면 나이로 안 지움.
+  ★표를 따른 결과(의도)★: flyout 이 아닌 `lc08`·`lc09`·`switch-pl2` 는 이제 «최신 6장 영구» 가 아니라 48시간 —
+  매크로는 실패 없는 `lc08`/`lc09` 를 더는 올리지 않는다(`local`, PC 의 bugs_local 에만).
+- 업로드 저장은 임시 이름 `.{이름}.{난수}.part` → fsync → `os.replace` (목록·보기·OCR 훑기는 `.png` 만 본다 — 반쪽 파일이 안 보인다).
+  저장 실패(EIO 등)는 **500** 이고 임시 파일도 지운다. 죽은 쓰기의 `.part` 는 한 시간 뒤 훑기가 지운다.
 - 메모리: 업로드한 스샷은 fsync 뒤 페이지 캐시에서 내린다(`posix_fadvise DONTNEED`) · 한 시간마다 `malloc_trim(0)`
   (+1h 실측: cg_file 17→83MB · anon +12.6MB 는 trim 으로 전부 회수).
 - 핀: `POST /bugs/pin/{fn}?on=1|0` (main 세션) → settings `bug_pins`, 정리가 절대 안 지운다. 핀을 못 읽으면 그 판은 안 지운다.
@@ -98,4 +102,4 @@
   (`document.hidden` 또는 창 크기 0). 서버는 25초마다 모든 소켓에 ping(숨어도) — 화면은 보일 때 90초·숨었을 때 180초 무수신이면 다시 붙는다. 숨은 소켓엔 `state`·`state_diff`·`log`·`cmd_history`·`char_info`·`corridor_progress`·`nightmare_progress` 를 안 보내고
   `alert`(소리)·`ping` 만 보낸다. 보이는 소켓이 하나도 없으면 상태를 만들지도 않는다. 보이게 되면 새 판을 만들어 보낸다.
 - `/diag/egress` `ws_clients`: 소켓마다 ip(첫 홉)·ua·origin·embedded·hidden·tx·age_s — 누가 붙어 있는지 여기서 본다.
-- 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-22 · W-1..W-13 · `tests/test_bug_kinds_mirror.py` K-1..K-4 · `tests/test_bugimg_mem.py` B-15 · M-10..M-12.
+- 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-22 · W-1..W-13 · `tests/test_bug_kinds_mirror.py` K-1..K-4 · `tests/test_bugimg_mem.py` B-15..B-17 · M-10..M-12 · R-23.

@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, ok, run_all, finish, WebSocketDisconnect   # noqa: E402
 
-MIN_CHECKS = 37
+MIN_CHECKS = 38
 C = TestClient(main.app, raise_server_exceptions=False)
 NOW = time.time()
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -100,6 +100,17 @@ async def t_files():
         open(os.path.join(d, nm("PC-02", 72, "stuck", i)), "wb").write(PNG)
     r = C.post("/bugs/PC-02", headers={"X-Api-Key": "testkey"},
                files={"file": ("PC-02_20260927_010101_stuck.png", PNG, "image/png")})
+    stale = os.path.join(d, ".PC-05_x.png.deadbeef.part")
+    fresh = os.path.join(d, ".PC-05_y.png.cafebabe.part")
+    for pth in (stale, fresh):
+        open(pth, "wb").write(b"half")
+    os.utime(stale, (NOW - 7200, NOW - 7200))
+    dry2 = main._bug_sweep_all(dry=True)
+    left_dry = os.path.exists(stale)
+    main._bug_sweep_all()
+    ok("R-23 죽은 쓰기의 .part 는 한 시간 넘으면 훑기가 지운다(dry 는 안 지운다·방금 것은 남긴다)",
+       left_dry and not os.path.exists(stale) and os.path.exists(fresh) and dry2 is not None, "")
+    os.remove(fresh)
     ok("R-12 업로드하면 그 PC 의 오래된 증거가 정리된다(최신 6장만)", r.status_code == 200 and not os.path.exists(os.path.join(d, oldf))
        and len([f for f in os.listdir(d) if f.startswith("PC-02_")]) == 6, r.text[:80])
 

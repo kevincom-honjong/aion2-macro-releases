@@ -12553,6 +12553,15 @@ def _bug_sweep_all(dry: bool = False, now: Optional[float] = None) -> dict:
         if not os.path.isdir(bdir):
             continue
         n_t = 0
+        if not dry:                       # 죽은 쓰기의 임시 파일(.part) — 한 시간 넘은 것만
+            try:
+                for f in os.listdir(bdir):
+                    if f.startswith(".") and f.endswith(".part"):
+                        fp = os.path.join(bdir, f)
+                        if now - os.path.getmtime(fp) > BUG_PART_STALE_S:
+                            os.remove(fp)
+            except OSError:
+                pass
         for _pc, files in _bug_pc_groups(bdir).items():
             drop = set(_bug_prune_plan(files, now, frozenset(_BUG_PINS)))
             rep["kept"] += len(files) - len(drop)
@@ -12671,7 +12680,11 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     content = await file.read(8 * 1024 * 1024 + 1)   # ★넘치는 만큼만 읽는다 (2026-09-23) — 예전엔 통째로★
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
-    await asyncio.to_thread(_write_cold, dest, content)
+    try:
+        await asyncio.to_thread(_write_cold, dest, content)
+    except OSError as e:
+        print(f"[bugs] 저장 실패 {filename}: {e.__class__.__name__}: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"저장 실패: {e.__class__.__name__}")
     # ★#125 (2026-09-24 아이온2)★ 로컬 OCR 불일치 크롭(ocrdiff_·oddfail_)은 곧바로 OCR 판별 큐에도(복사 — 정리와 무관, 실패 무시)
     await _ocr_label.seed_upload_hook(tenant, bdir, filename)
     try:
@@ -12794,16 +12807,29 @@ def _drop_page_cache(fd: int) -> None:
 _FADVISE = getattr(os, "posix_fadvise", None) or (lambda *a: None)
 
 
+BUG_PART_STALE_S = 3600.0          # 이보다 오래된 .part 는 죽은 쓰기의 찌꺼기 — 훑기가 지운다
+
+
 def _write_cold(dest: str, content: bytes) -> None:
-    """★스레드에서★ 쓰고 → 디스크로 내리고(fsync — 더러운 페이지는 DONTNEED 가 못 내린다) → 캐시에서 내린다."""
-    with open(dest, "wb") as f:
-        f.write(content)
-        f.flush()
-        try:
+    """★스레드에서★ 임시 이름에 쓰고 → fsync(더러운 페이지는 DONTNEED 가 못 내린다) → 캐시에서 내리고 → os.replace.
+    (반증 2026-09-27) 루프가 도는 동안 스레드가 목적지를 바로 열면 목록·보기·OCR 큐 훑기가 0바이트/반쪽 파일을
+    봤고, 같은 초 같은 이름 두 업로드가 섞였다. 임시 이름 `.{이름}.{난수}.part` 는 .png 가 아니라 목록·훑기·정리가
+    안 본다. 실패(EIO 등)는 삼키지 않는다 — 임시 파일을 지우고 예외를 올린다(업로드는 500)."""
+    d, b = os.path.split(dest)
+    tmp = os.path.join(d, f".{b}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(content)
+            f.flush()
             os.fsync(f.fileno())
+            _drop_page_cache(f.fileno())
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.remove(tmp)
         except OSError:
             pass
-        _drop_page_cache(f.fileno())
+        raise
 
 
 BUG_JPEG_CACHE_MAX = 16 << 20                # 변환본 캐시 상한(바이트) — 같은 장을 여러 번 열 때만 쓸모

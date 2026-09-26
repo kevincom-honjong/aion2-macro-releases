@@ -15,7 +15,7 @@ from PIL import Image
 
 from _harness import main, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 27
+MIN_CHECKS = 29
 C = TestClient(main.app, raise_server_exceptions=False)
 FN = "PC-01_20260927_010203_PC-01_20260927_100203_test-shot.png"
 
@@ -103,6 +103,39 @@ async def t_bugimg():
         main._FADVISE = keepf
     ok("B-15 ★업로드한 스샷은 페이지 캐시에서 내린다(DONTNEED)★", r.status_code == 200 and seen == [(0, 0, getattr(os, "POSIX_FADV_DONTNEED", 4))],
        str(seen))
+    bdir = main.tenant_bugs_dir("main")
+    seen_mid = {}
+    real_fsync = os.fsync
+
+    def spy_fsync(fd):
+        main._bug_cache_bust("main")
+        seen_mid["list"] = [b["filename"] for b in main._list_bug_files("main", "PC-08")]
+        seen_mid["scan"] = [f for f in os.listdir(bdir) if f.endswith(".png") and f.startswith("PC-08_")]
+        seen_mid["part"] = [f for f in os.listdir(bdir) if f.endswith(".part")]
+        return real_fsync(fd)
+    os.fsync = spy_fsync
+    try:
+        r = C.post("/bugs/PC-08", headers={"X-Api-Key": "testkey"},
+                   files={"file": ("PC-08_20260927_000000_stuck.png", raw, "image/png")})
+    finally:
+        os.fsync = real_fsync
+    fn8 = r.json().get("filename", "")
+    ok("B-16 ★쓰는 중엔 목록·훑기에 안 보이고(.part 만 있다), 끝나면 온전한 파일★(반증 2026-09-27)",
+       r.status_code == 200 and seen_mid.get("list") == [] and seen_mid.get("scan") == [] and len(seen_mid.get("part", [])) == 1
+       and open(os.path.join(bdir, fn8), "rb").read() == raw and not [f for f in os.listdir(bdir) if f.endswith(".part")],
+       str(seen_mid))
+
+    def bad_fsync(fd):
+        raise OSError(5, "EIO")
+    os.fsync = bad_fsync
+    try:
+        r = C.post("/bugs/PC-07", headers={"X-Api-Key": "testkey"},
+                   files={"file": ("PC-07_20260927_000000_stuck.png", raw, "image/png")})
+    finally:
+        os.fsync = real_fsync
+    ok("B-17 ★fsync 실패(EIO)는 500 · 반쪽 파일도 임시 파일도 안 남는다★",
+       r.status_code == 500 and not [f for f in os.listdir(bdir) if f.startswith("PC-07_") or f.endswith(".part")],
+       f"{r.status_code} {[f for f in os.listdir(bdir) if 'PC-07' in f]}")
     ok("B-13 대시보드 썸네일은 ?fmt=jpg, 클릭은 원본", "?fmt=jpg&q=70&w=640\" data-orig=\"/bugs/image/" in html
        and "window.open(this.dataset.orig" in html, "")
 
