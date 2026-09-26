@@ -20,18 +20,24 @@ import re
 CLASSES = ("upload-harvest", "upload-learn", "upload-incident", "local-learn", "local")
 
 TABLE = (
+    # ★맨 위★ 학습 크롭은 이름에 _fail·_dd 가 들어 있어도 PC 에만 (ocrlearn_x_dd5 · ocrlearn_power_kfmt_1_fail 이
+    #   아래 사고 무늬에 먼저 걸려 올라가던 순서 결함 — 아이온2 반증 2026-09-27)
+    ("local-learn", ("ocrlearn_*",)),
     ("upload-harvest", ("plrowfull", "plrowlist", "plrowmiss*", "autorow*", "profcard*", "plrow_*_CAND",
                         "*flyout*", "*dropdown-fail*")),
     ("upload-learn", ("ocrdiff_*", "oddfail_*")),
-    ("upload-incident", ("*teleport_timeout*", "*_fail*", "*-fail*", "*unknown_screen*", "*stuck*",
+    ("upload-incident", ("*teleport_timeout*", "*_fail*", "*-fail*", "*FAIL*", "*unknown*", "*stuck*",
+                         # 진단 때 여는 사고 종류(옛 스카우터 BUG_HARD·BUG_WAKE · ops alarmshot FAIL_PAT 가 보던 낱말) —
+                         #   acct_mismatch(info_collector) · tour_switch_exception · tour/prime_no_stream · switch_slotN_no_popup
+                         "acct_mismatch", "*exception*", "*no_stream*", "*no_popup*", "captcha*",
+                         "*error*", "*warn*", "*nohost*", "*nogame*",
                          "corridor_portal_enter_fail",
                          "cview-*",                          # 사람 명령 chrome_view — 올리는 것이 그 명령의 결과물
                          # 드문 진단: ops alarmshot FAIL_PAT · plrow_sim/plrow_dist · 대시보드 판매 검수(sale.py _snap) · 알람 문구
-                         "*-warn", "tour_nogame", "captcha_missed_fraud", "*dropdown-miss", "*MISS*",
-                         "*switch-pick*", "*_dd*", "*ddregion*", "lc10-switch*", "sale??_*",
+                         "*dropdown-miss", "*MISS*", "*miss*",
+                         "*switch-pick*", "*_dd*", "*ddregion*", "lc10-switch*", "sale[0-9]*_*",
                          "hostacct_ambiguous", "switch-stream-dropped-to-list", "switch-parsec-maint-banner",
                          "reconnect_f5cap", "nightmare_combat_timeout", "exitlag_taskmgr_harvest", "chip1-*")),
-    ("local-learn", ("ocrlearn_*",)),
 )
 
 # 30분 같은 tag 중복 거름에서 빠지는 것 — 사람 명령(cview) · 자기 예산이 있는 학습 크롭(ocrlearn)
