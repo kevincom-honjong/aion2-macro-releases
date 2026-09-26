@@ -1007,6 +1007,7 @@ async def tg_send_text(chat_id: str, text: str) -> int | None:
 
 
 async def tg_send_photo(chat_id: str, caption: str, photo: bytes, filename: str = "shot.png") -> int | None:
+    _egress_add("out", "telegram sendPhoto", len(photo or b""))   # 나가는 바이트 계기판(2026-09-26)
     res = await _tg_call("sendPhoto", {"chat_id": chat_id, "caption": caption[:900]},
                          files={"photo": (filename, photo, "image/png")}, timeout=TG_PHOTO_TIMEOUT)
     return (res or {}).get("message_id")
@@ -1418,6 +1419,76 @@ class _BodyCapMiddleware:
 
 
 app.add_middleware(_BodyCapMiddleware)
+
+
+# ★★나가는 바이트 계기판 (2026-09-26 주인님 «레일웨이 결제 비용이 왜이러냐» — 한 달 $51.62 = 약 1TB 나감)★★
+#   Railway 청구는 경로별로 안 나눠 준다 → 앱이 소켓에 넘기는 바이트를 경로 묶음별로 센다(HTTP 본문 · WS 보낸 글자).
+#   gzip 은 앱 안에서 하므로 센 값 = 압축 뒤 · WS permessage-deflate(uvicorn) 는 그 뒤라 WS 는 실제보다 크게 잡힐 수 있다.
+#   읽기 = GET /diag/egress (main 세션). 값은 부팅 뒤 누적 — 비율은 uptime 으로 나눈다.
+_EGRESS: dict = {"since": time.time(), "route": {}, "img": {}, "img_ip": {}, "check_offer": {}, "out": {}}
+_EGRESS_KEYS_MAX = 400
+
+
+def _egress_key(path: str) -> str:
+    """경로 묶음 — 이름·PC·서명 같은 가변 조각은 * 로 (종류 수가 불지 않게)."""
+    p = [x for x in (path or "/").split("/") if x]
+    if not p:
+        return "/"
+    if p[0] == "api" and len(p) >= 3:
+        return "/" + "/".join(p[:3])
+    if p[0] in ("diag", "updater", "setting", "check") and len(p) >= 2:
+        return "/" + p[0] + "/" + p[1]
+    if p[0] == "bugs" and len(p) >= 2 and p[1] == "image":
+        return "/bugs/image/*"
+    if p[0] == "ws":
+        return "/ws/" + p[1] if len(p) >= 2 else "/ws"
+    return "/" + p[0] + ("/*" if len(p) > 1 else "")
+
+
+def _egress_add(table: str, key: str, n: int) -> None:
+    t = _EGRESS[table]
+    d = t.get(key)
+    if d is None:
+        if len(t) >= _EGRESS_KEYS_MAX:
+            key = "(기타)"
+            d = t.get(key)
+        if d is None:
+            d = t[key] = {"n": 0, "bytes": 0}
+    d["n"] += 1
+    d["bytes"] += int(n)
+
+
+class _EgressMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        typ = scope.get("type")
+        if typ not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        key = ("WS " if typ == "websocket" else "") + _egress_key(scope.get("path") or "/")
+        tot = [0]
+
+        async def _send(m):
+            t = m.get("type")
+            if t == "http.response.body":
+                tot[0] += len(m.get("body") or b"")
+            elif t == "websocket.send":
+                if m.get("bytes") is not None:
+                    tot[0] += len(m["bytes"])
+                elif m.get("text") is not None:
+                    tot[0] += len(m["text"].encode("utf-8", "ignore"))
+                if tot[0] >= 1 << 20:          # 오래 사는 WS 는 1MB 마다 흘려 적는다(끊길 때까지 안 기다림)
+                    _egress_add("route", key, tot[0])
+                    tot[0] = 0
+            await send(m)
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            _egress_add("route", key, tot[0])
+
+
+app.add_middleware(_EgressMiddleware)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2663,6 +2734,34 @@ def _bucket_count(items, top: int = 0) -> dict:
     if top:
         return dict(sorted(d.items(), key=lambda kv: -kv[1])[:top])
     return dict(sorted(d.items()))
+
+
+@app.get("/diag/egress")
+async def diag_egress(request: Request):
+    """[진단] 나가는 바이트(Railway 청구 Network) — 경로 묶음별 · /img 파일별 · /check 가 권한 이미지별.
+    ★/check 가 같은 이미지를 계속 권하고(check_offer) /img 가 같은 파일을 계속 내주면 = 업데이터 재다운로드 고리★."""
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    up = max(1.0, time.time() - _EGRESS["since"])
+
+    def _top(t, n=20):
+        rows = sorted(t.items(), key=lambda kv: -kv[1]["bytes"] if "bytes" in kv[1] else -kv[1]["n"])[:n]
+        out = []
+        for k, v in rows:
+            r = {"key": k, "n": v["n"], "n_per_h": round(v["n"] * 3600 / up, 1)}
+            if "bytes" in v:
+                r.update(bytes=v["bytes"], mb_per_h=round(v["bytes"] * 3600 / up / 1e6, 2),
+                         gb_per_month=round(v["bytes"] * 86400 * 30 / up / 1e9, 1))
+            out.append(r)
+        return out
+    tot = sum(v["bytes"] for v in _EGRESS["route"].values())
+    return {"uptime_s": int(up), "total_bytes": tot,
+            "total_gb_per_month": round(tot * 86400 * 30 / up / 1e9, 1),
+            "usd_per_month_at_0.05": round(tot * 86400 * 30 / up / 1e9 * 0.05, 2),
+            "route": _top(_EGRESS["route"], 30), "img": _top(_EGRESS["img"]),
+            "img_ip_capped": _IMG_CAP_HITS, "check_offer": _top(_EGRESS["check_offer"]),
+            "out": _top(_EGRESS["out"]),
+            "note": "앱이 소켓에 넘긴 바이트(HTTP 는 gzip 뒤, WS 는 permessage-deflate 앞). Railway 청구와 ±."}
 
 
 @app.get("/diag/perf")
@@ -13150,8 +13249,31 @@ def _fetch_image_upstream(fname: str, sources: list):
     return None, "", errs
 
 
+IMG_IP_CAP_N, IMG_IP_CAP_WIN_S = 60, 3600   # 한 IP 가 한 파일을 한 시간에 — 24대 × 재시도 한두 번 여유
+_IMG_IP_HITS: dict = {}
+_IMG_CAP_HITS = {"n": 0}
+
+
+def _img_ip_ok(ip: str, fname: str, now: float) -> bool:
+    """★같은 곳이 같은 파일을 계속 당기면(업데이터 고리) 끊는다★ — 작은 429 로 답해 2MB 를 매번 안 보낸다."""
+    k = (ip, fname)
+    q = [t for t in _IMG_IP_HITS.get(k, ()) if now - t < IMG_IP_CAP_WIN_S]
+    if len(q) >= IMG_IP_CAP_N:
+        _IMG_IP_HITS[k] = q
+        _IMG_CAP_HITS["n"] += 1
+        if _IMG_CAP_HITS["n"] in (1, 10, 100) or _IMG_CAP_HITS["n"] % 1000 == 0:
+            print(f"[img] ★같은 파일 반복 요청 차단★ {fname} ← {ip} 한 시간 {len(q)}회 (누적 차단 {_IMG_CAP_HITS['n']})", flush=True)
+        return False
+    q.append(now)
+    _IMG_IP_HITS[k] = q
+    if len(_IMG_IP_HITS) > 20000:
+        for kk in [kk for kk, v in _IMG_IP_HITS.items() if not v or now - v[-1] >= IMG_IP_CAP_WIN_S]:
+            _IMG_IP_HITS.pop(kk, None)
+    return True
+
+
 @app.get("/img/{fname}")
-async def serve_image(fname: str):
+async def serve_image(fname: str, request: Request = None):
     """이미지 중계 — ★서버가 GitHub 에서 받아 함대에 넘겨준다★ (2026-08-18 신설)
 
     ★왜 필요했나★ 함대가 이미지를 받을 통로가 둘 다 죽었다:
@@ -13169,6 +13291,8 @@ async def serve_image(fname: str):
     import re as _re2
     if not _re2.fullmatch(r"(?i)[^/\\\x00]{1,120}\.png", fname):
         raise HTTPException(status_code=404)
+    if request is not None and not _img_ip_ok(_client_ip(request), fname, time.time()):
+        raise HTTPException(status_code=429, detail="같은 이미지를 너무 자주 받습니다", headers={"Retry-After": "600"})
     # ★사고 413★ 캐시를 믿기 전에 ①안 낡았나 ②version.json 해시와 같은가 를 본다
     data = None
     _hit = _IMG_PROXY_CACHE.get(fname)
@@ -13214,11 +13338,19 @@ async def serve_image(fname: str):
             raise HTTPException(status_code=404)
         if _name != "raw":
             print(f"[img] {fname} — raw 실패 → {_name} 로 받음", flush=True)
-        _IMG_PROXY_CACHE[fname] = (data, hashlib.sha256(data).hexdigest(), time.time())
+        _dsha = hashlib.sha256(data).hexdigest()
+        _want2 = _manifest.get(fname) if _manifest else None
+        if _want2 and _dsha != _want2:
+            # ★상류가 아직 옛 판(raw 엣지 캐시)이면 내주지도 담지도 않는다★ — 업데이터는 sha 가 틀리면 같은 파일을
+            #   4번 다시 받는다(24대 × 4 × 파일 크기). 작은 503 으로 끝내고 다음 /check(5분)에 다시.
+            print(f"[img] {fname} 상류({_name}) 해시가 json 과 다름 {_dsha[:10]} ≠ {_want2[:10]} — 안 내줌", flush=True)
+            raise HTTPException(status_code=503, detail="이미지 원본이 아직 옛 판입니다", headers={"Retry-After": "300"})
+        _IMG_PROXY_CACHE[fname] = (data, _dsha, time.time())
         # ★가장 오래 담긴 것부터 하나씩★ — 통째로 비우지 않는다
         while len(_IMG_PROXY_CACHE) > _IMG_CACHE_MAX:
             _oldest = min(_IMG_PROXY_CACHE, key=lambda k: _IMG_PROXY_CACHE[k][2])
             _IMG_PROXY_CACHE.pop(_oldest, None)
+    _egress_add("img", fname, len(data))
     return Response(content=data, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
 
@@ -13320,6 +13452,7 @@ async def updater_check(request: Request):
             continue
         client_hash = client_img_hashes.get(fname)
         if client_hash != server_hash:
+            _egress_add("check_offer", fname, 0)
             images_to_update.append({
                 "filename":     fname,
                 "sha256":       server_hash,

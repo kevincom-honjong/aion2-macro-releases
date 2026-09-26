@@ -103,14 +103,20 @@ async def t_img():
         ok("T1-c 두 번째는 캐시(상류 호출 안 늘음)", hit[0] == 1 and r.body == b"PNGDATA")
         # 매니페스트 해시가 바뀌면(새 릴리스) 캐시를 믿지 않고 다시 받는다 — 사고 413 가드 회귀 확인
         main._version_cache["data"]["images"]["known.png"] = "changed"
-        await main.serve_image("known.png")
-        ok("T1-e 매니페스트 해시가 바뀌면 캐시를 버리고 다시 받는다", hit[0] == 2, "상류호출=%d" % hit[0])
+        _st = None
+        try:
+            await main.serve_image("known.png")
+        except HTTPException as e:
+            _st = e.status_code
+        # 2026-09-26 나가는 바이트 가드: 상류도 json 과 다르면 내주지 않는다(503) — 업데이터 4회 재다운로드 방지
+        ok("T1-e 매니페스트 해시가 바뀌면 캐시를 버리고 다시 받는다(상류도 옛것이면 503)", hit[0] == 2 and _st == 503,
+           "상류호출=%d status=%s" % (hit[0], _st))
         main._version_cache["data"]["images"]["known.png"] = _h
         # LRU — 상한을 넘기면 ★가장 오래된 것부터★ 빠진다, 통째로 안 비운다
         main._IMG_PROXY_CACHE.clear()
         for i in range(main._IMG_CACHE_MAX + 5):
             main._IMG_PROXY_CACHE["f%d.png" % i] = (b"x", "h", 1000 + i)
-        main._version_cache["data"]["images"]["last.png"] = "z"
+        main._version_cache["data"]["images"]["last.png"] = _h
         await main.serve_image("last.png")
         n = len(main._IMG_PROXY_CACHE)
         ok("T1-d 캐시가 상한을 넘으면 오래된 것만 빠진다(통째 clear 아님)",
