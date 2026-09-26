@@ -1421,6 +1421,72 @@ class _BodyCapMiddleware:
 app.add_middleware(_BodyCapMiddleware)
 
 
+# ★JSON·글자 응답 gzip (2026-09-26 Railway 나가는 바이트)★ — 실측(Railway HTTP 로그 14분): /logs/PC-* 21.6MB·/status 6.3MB·
+#   /characters 1.7MB 가 압축 없이 나갔다(대시보드 HTML·FV 경로만 gzip 이었다). 요청이 gzip 을 받는다고 할 때만,
+#   이미 인코딩된 것·그림·exe·SSE·1KB 이하·16MB 넘는 것은 그대로. 나가는 바이트 계기판(_EgressMiddleware)보다 ★안쪽★ —
+#   계기판이 압축 뒤를 센다(아래 add_middleware 순서가 곧 그것: 나중에 더한 것이 바깥).
+import gzip as _gz_mw                                      # noqa: E402
+GZIP_MIN, GZIP_MAX = 1024, 16 << 20
+
+
+class _GzipJsonMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") == "HEAD":
+            return await self.app(scope, receive, send)
+        acc = b""
+        for k, v in scope.get("headers") or ():
+            if k == b"accept-encoding":
+                acc = v.lower()
+        if b"gzip" not in acc:
+            return await self.app(scope, receive, send)
+        st = {"start": None, "buf": [], "n": 0, "mode": None}   # mode None=모으는 중 · "pass"=그대로
+
+        async def _send(m):
+            t = m.get("type")
+            if t == "http.response.start":
+                hdr = {k.lower(): v for k, v in m.get("headers") or ()}
+                ct = hdr.get(b"content-type", b"").lower()
+                ok_ct = (ct.startswith(b"application/json") or ct.startswith(b"text/")) and not ct.startswith(b"text/event-stream")
+                if (b"content-encoding" in hdr or not ok_ct or m.get("status") in (204, 304)):
+                    st["mode"] = "pass"
+                    return await send(m)
+                st["start"] = m
+                return
+            if t != "http.response.body" or st["mode"] == "pass":
+                return await send(m)
+            body = m.get("body") or b""
+            st["buf"].append(body)
+            st["n"] += len(body)
+            more = m.get("more_body", False)
+            if st["n"] > GZIP_MAX:                   # 너무 크다 — 모은 것부터 그대로 흘린다
+                st["mode"] = "pass"
+                await send(st["start"])
+                await send({"type": "http.response.body", "body": b"".join(st["buf"]), "more_body": more})
+                st["buf"] = []
+                return
+            if more:
+                return
+            raw = b"".join(st["buf"])
+            start = st["start"]
+            if len(raw) < GZIP_MIN:
+                await send(start)
+                return await send({"type": "http.response.body", "body": raw})
+            gz = _gz_mw.compress(raw, 5)
+            hs = [(k, v) for k, v in start.get("headers") or () if k.lower() not in (b"content-length", b"vary")]
+            vary = [v for k, v in start.get("headers") or () if k.lower() == b"vary"]
+            hs += [(b"content-encoding", b"gzip"), (b"content-length", str(len(gz)).encode()),
+                   (b"vary", (vary[0] + b", Accept-Encoding") if vary else b"Accept-Encoding")]
+            await send({"type": "http.response.start", "status": start["status"], "headers": hs})
+            await send({"type": "http.response.body", "body": gz})
+        await self.app(scope, receive, _send)
+
+
+app.add_middleware(_GzipJsonMiddleware)
+
+
 # ★★나가는 바이트 계기판 (2026-09-26 주인님 «레일웨이 결제 비용이 왜이러냐» — 한 달 $51.62 = 약 1TB 나감)★★
 #   Railway 청구는 경로별로 안 나눠 준다 → 앱이 소켓에 넘기는 바이트를 경로 묶음별로 센다(HTTP 본문 · WS 보낸 글자).
 #   gzip 은 앱 안에서 하므로 센 값 = 압축 뒤 · WS permessage-deflate(uvicorn) 는 그 뒤라 WS 는 실제보다 크게 잡힐 수 있다.
