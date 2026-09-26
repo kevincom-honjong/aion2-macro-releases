@@ -1364,6 +1364,7 @@ async def lifespan(app: FastAPI):
     maint_task = asyncio.create_task(_cmd_table_maint())
     abyss_task = asyncio.create_task(_abyss_saver())
     bugsweep_task = asyncio.create_task(_bug_sweeper())     # #271 버그스샷 나이 정리
+    ka_task = asyncio.create_task(_dash_keepalive())         # #271 숨은 대시보드 ping
     try:
         yield
     finally:
@@ -1375,7 +1376,7 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task):
             if _t:
                 _t.cancel()
                 try:
@@ -2912,6 +2913,22 @@ def _mem_proc() -> dict:
 MEM_SAMPLE_S = 300.0                         # 5분마다 한 점 — 부팅 뒤 기울기(새는가·단편화인가)를 본다
 _MEM_SERIES: list = []                       # [{"up_s","rss","anon","file","cg"}] 최근 576점(48시간)
 _MEM_NEXT = [0.0]
+_MEM_N = [0]                                 # 찍은 점 수(누적) — len(_MEM_SERIES) 는 576 에서 멈춘다(반증 2026-09-27)
+
+
+_LIBC = [None]
+
+
+def _malloc_trim() -> int:
+    """glibc 가 쥐고 있는 빈 칸을 OS 에 돌려준다. 리눅스 밖이면 -1."""
+    try:
+        if _LIBC[0] is None:
+            import ctypes
+            _LIBC[0] = ctypes.CDLL("libc.so.6")
+        return int(_LIBC[0].malloc_trim(0))
+    except Exception:
+        _LIBC[0] = False
+        return -1
 
 
 def _mem_sample_tick(now: float) -> None:
@@ -2925,7 +2942,10 @@ def _mem_sample_tick(now: float) -> None:
               "file": m.get("cg_file"), "cg": m.get("cg_current")}
         _MEM_SERIES.append(pt)
         del _MEM_SERIES[:-576]
-        if len(_MEM_SERIES) % 12 == 1:
+        _MEM_N[0] += 1
+        if _MEM_N[0] % 12 == 0:
+            _malloc_trim()                   # 한 시간마다 — +1h 실측: 불어난 anon 12.6MB 가 trim 으로 전부 돌아왔다(단편화)
+        if _MEM_N[0] % 12 == 1:
             print(f"[mem] up={pt['up_s']}s rss={(pt['rss'] or 0) >> 20}MB cg={(pt['cg'] or 0) >> 20}MB "
                   f"anon={(pt['anon'] or 0) >> 20}MB file={(pt['file'] or 0) >> 20}MB", flush=True)
     except Exception:
@@ -8117,7 +8137,7 @@ function connectWS() {
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(!_wsHid() && _ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);   // 숨은 동안은 원래 조용하다(#271)
+setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>(_wsHid()?180000:90000)){ try{_ws.close();}catch(err){} } },15000);   // 숨어도 서버가 25초마다 ping(#271) — 숨은 동안은 180초로 느슨하게
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
@@ -12425,19 +12445,34 @@ BUG_HARVEST_KEEP = 6               # (PC, 종류)마다 남기는 최신 수확 
 BUG_LEARN_KEEP_S = 7 * 86400
 BUG_SWEEP_S = 1800.0               # 전체 훑기 간격 — 첫 훑기는 부팅 뒤 이만큼 지나서(그 사이 /diag/bugs_prune 로 미리 본다)
 _BUG_TS_RE = re.compile(r"^.+?_(\d{8})_(\d{6})_")
-_BUG_HARVEST_RE = re.compile(r"(plrow_[A-Za-z0-9-]+_\d+_CAND|plrowfull|plrowlist|profcard\d*|autorow\d*|plrowmiss\d*"
-                             r"|pl2-flyout|switch-pl2|flyout)")
-_BUG_LEARN_RE = re.compile(r"(ocrlearn_|ocrdiff_|oddfail_)")
 _BUG_PINS: set = set()
 _BUG_PINS_LOADED = [False]
+# ★종류는 매크로와 ★한 표★ — server/bug_kinds.py = lc/bug_kinds.py 의 거울(tests/test_bug_kinds_mirror.py 가 표를 글자 대조)★
+#   (반증 2026-09-27) 서버가 따로 정규식을 두자 `lcNN-switch-pl2-login-id-fail` 이 수확으로 묶여 5시간 안에 지워졌고
+#   `dropdown-fail` 은 사고로 묶였다. 매크로가 무엇을 올리는지 정하는 그 표로 보관 무리도 정한다.
+#   upload-harvest → 수확(최신 6, tag 마다) · upload-learn·local-learn → 학습(120+7일) · 그 밖 → 사고(48시간).
+import bug_kinds as BUGK                                   # noqa: E402
+_BUG_TAG_RE = re.compile(r"^(.+?)_(\d{8})_(\d{6})_(.+)$")
+
+
+def _bug_tag(fname: str) -> str:
+    """서버 이름 `{pc}_{ts}_{원래이름}` 에서 표가 보는 tag. 원래 이름도 `{pc}_{ts}_{tag}` 라 두 겹을 벗긴다."""
+    t = fname[:-4] if fname.lower().endswith(".png") else fname
+    for _ in range(2):
+        m = _BUG_TAG_RE.match(t)
+        if not m:
+            break
+        t = m.group(4)
+    return t
 
 
 def _bug_kind(fname: str) -> tuple:
-    """(무리, 묶음 열쇠) — 무리 = harvest | learn | incident."""
-    m = _BUG_HARVEST_RE.search(fname)
-    if m:
-        return "harvest", m.group(1)
-    if _BUG_LEARN_RE.search(fname):
+    """(무리, 묶음 열쇠) — 무리 = harvest | learn | incident. 열쇠 = tag(수확만)."""
+    tag = _bug_tag(fname)
+    cls = BUGK.classify(tag)
+    if cls == "upload-harvest":
+        return "harvest", tag
+    if cls in ("upload-learn", "local-learn"):
         return "learn", ""
     return "incident", ""
 
@@ -12550,6 +12585,25 @@ async def _bug_pins_load() -> None:
     _BUG_PINS_LOADED[0] = True
 
 
+DASH_KEEPALIVE_S = 25.0
+
+
+async def _dash_keepalive() -> None:
+    """★숨은 대시보드에도 ping★ (반증 2026-09-27) — ping 은 _push_state_now 안에서만 났는데 보이는 화면이
+    없으면 그 함수가 일찍 돌아가 숨은 소켓엔 아무것도 안 갔다. 죽은 소켓을 화면이 알아채지 못하면
+    소리 알림(alert)을 조용히 잃는다. 붙어 있는 테넌트마다 ping 한 통(작다)."""
+    while True:
+        try:
+            await asyncio.sleep(DASH_KEEPALIVE_S)
+        except asyncio.CancelledError:
+            return
+        try:
+            for t in sorted({t for _w, t in list(manager.active)}):
+                await manager.broadcast({"type": "ping"}, t)
+        except Exception:
+            pass
+
+
 async def _bug_sweeper() -> None:
     """30분마다 전체 정리(첫 판은 부팅 30분 뒤)."""
     while True:
@@ -12617,8 +12671,7 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
     content = await file.read(8 * 1024 * 1024 + 1)   # ★넘치는 만큼만 읽는다 (2026-09-23) — 예전엔 통째로★
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="파일이 너무 큽니다(최대 8MB)")
-    with open(dest, 'wb') as f:
-        f.write(content)
+    await asyncio.to_thread(_write_cold, dest, content)
     # ★#125 (2026-09-24 아이온2)★ 로컬 OCR 불일치 크롭(ocrdiff_·oddfail_)은 곧바로 OCR 판별 큐에도(복사 — 정리와 무관, 실패 무시)
     await _ocr_label.seed_upload_hook(tenant, bdir, filename)
     try:
@@ -12726,6 +12779,31 @@ async def serve_bug_image(filename: str, request: Request):
         if data is None:
             cc["X-Fmt-Fallback"] = "png"   # 변환 못 함(Pillow 없음·깨진 파일) → 원본을 준다
     return FileResponse(path, media_type="image/png", headers=cc)
+
+
+def _drop_page_cache(fd: int) -> None:
+    """★다 쓴 파일을 페이지 캐시에서 내린다(2026-09-27 /diag/mem +1h: cg_file 17→83MB, 대부분 inactive)★
+    Railway 는 컨테이너 메모리(cgroup, 파일 캐시 포함)를 잰다. 버그스샷은 한 번 쓰고 거의 안 읽는다.
+    리눅스 밖(시험)은 조용히 넘어간다."""
+    try:
+        _FADVISE(fd, 0, 0, getattr(os, "POSIX_FADV_DONTNEED", 4))
+    except Exception:
+        pass
+
+
+_FADVISE = getattr(os, "posix_fadvise", None) or (lambda *a: None)
+
+
+def _write_cold(dest: str, content: bytes) -> None:
+    """★스레드에서★ 쓰고 → 디스크로 내리고(fsync — 더러운 페이지는 DONTNEED 가 못 내린다) → 캐시에서 내린다."""
+    with open(dest, "wb") as f:
+        f.write(content)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+        _drop_page_cache(f.fileno())
 
 
 BUG_JPEG_CACHE_MAX = 16 << 20                # 변환본 캐시 상한(바이트) — 같은 장을 여러 번 열 때만 쓸모

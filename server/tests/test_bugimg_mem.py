@@ -15,7 +15,7 @@ from PIL import Image
 
 from _harness import main, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 23
+MIN_CHECKS = 27
 C = TestClient(main.app, raise_server_exceptions=False)
 FN = "PC-01_20260927_010203_PC-01_20260927_100203_test-shot.png"
 
@@ -92,6 +92,17 @@ async def t_bugimg():
     tb = _get("/bugs/image/PC-01_20260927_000001_crop.png", fmt="jpg")
     ok("B-14 ★JPEG 이 더 크면(작은 단색 크롭) 원본을 준다★", tb.headers["content-type"] == "image/png"
        and tb.content == open(tiny, "rb").read(), str(tb.headers.get("content-type")))
+    seen = []
+    keepf = main._FADVISE
+    main._FADVISE = lambda fd, off, ln, adv: seen.append((off, ln, adv))
+    try:
+        r = C.post(
+            "/bugs/PC-09", headers={"X-Api-Key": "testkey"},
+            files={"file": ("PC-09_20260927_000000_stuck.png", raw, "image/png")})
+    finally:
+        main._FADVISE = keepf
+    ok("B-15 ★업로드한 스샷은 페이지 캐시에서 내린다(DONTNEED)★", r.status_code == 200 and seen == [(0, 0, getattr(os, "POSIX_FADV_DONTNEED", 4))],
+       str(seen))
     ok("B-13 대시보드 썸네일은 ?fmt=jpg, 클릭은 원본", "?fmt=jpg&q=70&w=640\" data-orig=\"/bugs/image/" in html
        and "window.open(this.dataset.orig" in html, "")
 
@@ -131,6 +142,25 @@ async def t_series():
         main._MEM_NEXT[0] = 0.0
         main._mem_sample_tick(float(i))
     ok("M-7 점은 576개(48시간)에서 잘린다", len(main._MEM_SERIES) == 576, str(len(main._MEM_SERIES)))
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        for i in range(24):
+            main._MEM_NEXT[0] = 0.0
+            main._mem_sample_tick(float(i))
+    calls = []
+    keep = main._malloc_trim
+    main._malloc_trim = lambda: calls.append(1) or 1
+    try:
+        for i in range(24):
+            main._MEM_NEXT[0] = 0.0
+            main._mem_sample_tick(float(i))
+    finally:
+        main._malloc_trim = keep
+    ok("M-11 한 시간(12점)마다 malloc_trim", len(calls) == 2, str(len(calls)))
+    ok("M-12 리눅스 밖에선 malloc_trim 이 -1(죽지 않는다)", main._malloc_trim() == -1, "")
+    ok("M-10 ★48시간이 지나 점이 꽉 차도 [mem] 줄은 12점마다 계속★(반증 2026-09-27)",
+       buf.getvalue().count("[mem]") == 2 and len(main._MEM_SERIES) == 576, str(buf.getvalue().count("[mem]")))
     import asyncio
     main._MEM_SERIES.clear()
     main._MEM_NEXT[0] = 0.0

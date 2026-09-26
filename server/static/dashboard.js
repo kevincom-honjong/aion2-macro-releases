@@ -3464,7 +3464,7 @@ function connectWS() {
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(!_wsHid() && _ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);   // 숨은 동안은 원래 조용하다(#271)
+setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>(_wsHid()?180000:90000)){ try{_ws.close();}catch(err){} } },15000);   // 숨어도 서버가 25초마다 ping(#271) — 숨은 동안은 180초로 느슨하게
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}

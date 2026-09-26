@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, ok, run_all, finish, WebSocketDisconnect   # noqa: E402
 
-MIN_CHECKS = 32
+MIN_CHECKS = 37
 C = TestClient(main.app, raise_server_exceptions=False)
 NOW = time.time()
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -63,6 +63,15 @@ async def t_plan():
     odd = ["PC-01_x%02d_bug.png" % i for i in range(12)]
     ok("R-7 시각을 못 읽는 이름은 나이로 안 지운다", main._bug_age_s("PC-01_bug.png", NOW) is None
        and P(odd, NOW) == [], "")
+    pl2 = [nm("PC-01", 1 + i * 0.5, t, i) for i, t in enumerate(["lc12-switch-pl2-login-id-fail", "lc12-switch-pl2-login-timeout"] * 4)]
+    ok("R-20 ★로그인 실패 트레이스(switch-pl2-…-fail/timeout)는 사고 증거 — 5시간 안엔 안 지운다★(반증 2026-09-27)",
+       P(pl2, NOW) == [] and main._bug_kind(pl2[0])[0] == "incident", str(P(pl2, NOW)))
+    dd = [nm("PC-01", 24 * 60, "plrow-dropdown-fail", i) for i in range(3)]
+    ok("R-21 dropdown-fail 은 수확 재료(두 달 지나도 남는다)", P(dd, NOW) == [] and main._bug_kind(dd[0])[0] == "harvest", "")
+    ok("R-22 종류는 매크로와 같은 표(bug_kinds)로 — ocrlearn 은 학습, 표에 없는 것은 사고",
+       main._bug_kind(nm("PC-01", 1, "ocrlearn_cube_7"))[0] == "learn"
+       and main._bug_kind(nm("PC-01", 1, "lc08-switch-open"))[0] == "incident"
+       and main._bug_tag(nm("PC-01", 1, "profcard2")) == "profcard2", "")
     k = main._bug_kind(nm("PC-01", 1, "_lc12-switch-relogin-fail"))
     ok("R-8 사고 증거 이름이 수확 재료로 잘못 묶이지 않는다", k == ("incident", ""), str(k))
 
@@ -200,6 +209,26 @@ async def t_ws():
     await a.inq.put("not json {\"vis\"")
     await _settle()
     ok("W-8 깨진 vis 글은 무시(소켓 안 죽음)", main.manager._is_active(a), "")
+    c = DashWS(ua="old-js")
+    c.query_params = {}                                   # 배포 중 옛 화면 JS 는 h 를 안 싣는다
+    tc = asyncio.create_task(main.websocket_endpoint(c))
+    await _settle()
+    await main.push_state("main")
+    await _settle()
+    ok("W-12 ★h 가 없으면 보이는 것으로★(옛 JS·캐시된 화면이 상태를 잃지 않는다)", "state" in c.sent, str(c.sent))
+    await c.inq.put(None)
+    await tc
+    b.sent.clear()
+    keep = main.DASH_KEEPALIVE_S
+    main.DASH_KEEPALIVE_S = 0.05
+    ka = asyncio.create_task(main._dash_keepalive())
+    try:
+        await _settle()
+    finally:
+        ka.cancel()
+        main.DASH_KEEPALIVE_S = keep
+    ok("W-13 ★아무도 안 보여도 숨은 소켓에 ping 이 간다★(죽은 소켓을 화면이 알아채게 — 소리 알림 보호)",
+       not main.manager.watching("main") and "ping" in b.sent and "state" not in b.sent, str(b.sent[:5]))
     await a.inq.put(None)
     await b.inq.put(None)
     await asyncio.gather(ta, tb)
@@ -245,9 +274,9 @@ console.log(JSON.stringify({sent}));
 """)
     o, err = _node(js)
     ok("W-10 화면 JS 는 숨음/보임이 ★바뀔 때만★ 한 번씩 알린다(크기 0 도 숨음)", o is not None and o["sent"] == [1, 0, 1, 0], str(o or err))
-    ok("W-11 접속 주소에 숨김·iframe 여부를 싣고, 숨은 동안엔 90초 감시견이 안 끊는다",
+    ok("W-11 접속 주소에 숨김·iframe 여부를 싣고, 숨은 동안엔 감시견이 180초로 느슨해진다(끄지 않는다)",
        "/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}" in src
-       and "if(!_wsHid() && _ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000)" in src, "")
+       and "Date.now()-_wsLastMsg>(_wsHid()?180000:90000)" in src, "")
 
 
 def test_all():

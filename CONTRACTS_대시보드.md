@@ -85,13 +85,17 @@
 - 지키는 시험: `tests/test_bugimg_mem.py` B-1..B-14.
 
 ## 11. 버그스샷 정리(나이) · 숨은 대시보드엔 안 보낸다 (#271, 2026-09-27 주인님 «쓸모없이 쌓인다» · «라이브 안 쓰는데»)
-- **정리** (업로드 때 그 pc_id + 30분마다 전체, 첫 판은 부팅 30분 뒤):
-  사고 증거 = 48시간 지나면 지움(최신 6장·40장 상한은 그대로) · 수확 재료(`plrowfull`·`plrowlist`·`profcardN`·`autorowN`·`plrowmissN`·`*_CAND`·`flyout`)
-  = (pc_id, 종류) 최신 6장 **나이 무관 영구** · 학습(`ocrlearn_`·`ocrdiff_`·`oddfail_`) = 120장 + 7일 · 이름에서 시각을 못 읽으면 나이로 안 지움.
+- **정리** (업로드 때 그 pc_id + 30분마다 전체, 첫 판은 부팅 30분 뒤). ★종류는 매크로와 한 표★ — 정본 `lc/bug_kinds.py`,
+  서버 거울 `server/bug_kinds.py`(`tests/test_bug_kinds_mirror.py` 가 표·코드를 대조, 다르면 빨강 → `cp ../../lc/bug_kinds.py bug_kinds.py`).
+  tag = 서버 이름 `{pc}_{ts}_{원래이름}` 에서 `{pc}_{ts}_` 를 두 겹까지 벗긴 것. `upload-harvest` = tag 마다 최신 6장 **나이 무관 영구** ·
+  `upload-learn`·`local-learn` = 120장 + 7일 · 그 밖(`upload-incident`·표에 없는 옛 파일) = 48시간(최신 6장·40장 상한은 그대로) ·
+  이름에서 시각을 못 읽으면 나이로 안 지움.
+- 메모리: 업로드한 스샷은 fsync 뒤 페이지 캐시에서 내린다(`posix_fadvise DONTNEED`) · 한 시간마다 `malloc_trim(0)`
+  (+1h 실측: cg_file 17→83MB · anon +12.6MB 는 trim 으로 전부 회수).
 - 핀: `POST /bugs/pin/{fn}?on=1|0` (main 세션) → settings `bug_pins`, 정리가 절대 안 지운다. 핀을 못 읽으면 그 판은 안 지운다.
 - 미리보기: `GET /diag/bugs_prune` (main) — 지금 훑으면 지울 수·바이트(종류별). ★배포 직후 30분 안에 읽어 본다.★
 - **WS `/ws`**: 접속 주소에 `?h=1|0&e=1|0`(숨김·iframe). 화면은 숨음/보임이 바뀔 때 `{"t":"vis","h":0|1}` 을 보낸다
-  (`document.hidden` 또는 창 크기 0). 숨은 소켓엔 `state`·`state_diff`·`log`·`cmd_history`·`char_info`·`corridor_progress`·`nightmare_progress` 를 안 보내고
+  (`document.hidden` 또는 창 크기 0). 서버는 25초마다 모든 소켓에 ping(숨어도) — 화면은 보일 때 90초·숨었을 때 180초 무수신이면 다시 붙는다. 숨은 소켓엔 `state`·`state_diff`·`log`·`cmd_history`·`char_info`·`corridor_progress`·`nightmare_progress` 를 안 보내고
   `alert`(소리)·`ping` 만 보낸다. 보이는 소켓이 하나도 없으면 상태를 만들지도 않는다. 보이게 되면 새 판을 만들어 보낸다.
 - `/diag/egress` `ws_clients`: 소켓마다 ip(첫 홉)·ua·origin·embedded·hidden·tx·age_s — 누가 붙어 있는지 여기서 본다.
-- 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-19 · W-1..W-11.
+- 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-22 · W-1..W-13 · `tests/test_bug_kinds_mirror.py` K-1..K-4 · `tests/test_bugimg_mem.py` B-15 · M-10..M-12.
