@@ -577,9 +577,10 @@ def t_js_feed_b2():
     src = main.HTML_DASHBOARD
     # B2-2 재접속하면 판 번호·조르기 표시가 비워진다
     i = src.index("let STATE_VER")
-    js = (src[i:src.index("\n", i)] + "\nlet state={}, RETIRED=new Set(), latestVersions={}, _ws=null, _wsLastMsg=0;\n"
-          + _fn(src, "applyStateMsg") + "\n" + _fn(src, "connectWS") + r"""
-const location={protocol:'http:',host:'x'}; const document={getElementById:()=>({})};
+    js = (src[i:src.index("\n", i)] + "\nlet state={}, RETIRED=new Set(), latestVersions={}, _ws=null, _wsLastMsg=0, _wsVisSent=false;\n"
+          + "const innerWidth=800, innerHeight=600, window={};\n"      # #271 connectWS 가 숨김 여부(_wsHid)를 주소에 싣는다
+          + _fn(src, "_wsHid") + "\n" + _fn(src, "applyStateMsg") + "\n" + _fn(src, "connectWS") + r"""
+const location={protocol:'http:',host:'x'}; const document={getElementById:()=>({}), hidden:false};
 function WebSocket(u){ this.readyState=1; this.send=()=>{}; }
 const sock={readyState:1, send:()=>{}};
 applyStateMsg({type:'state', ver:5, pcs:[], retired:[]}, sock);

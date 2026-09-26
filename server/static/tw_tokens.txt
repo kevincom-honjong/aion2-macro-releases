@@ -31,6 +31,7 @@
 !g
 !grid
 !groups[pc]
+!h
 !handle
 !has
 !id
@@ -1312,6 +1313,7 @@ grow
 grp
 grp[b]
 gungsung
+h!
 h-2
 h-2.5
 h-3
@@ -1429,6 +1431,7 @@ idx
 idx[id]
 idx[k
 if
+iframe
 im
 img
 img.onerror
@@ -2262,6 +2265,7 @@ res.ok
 res.status
 reset
 reset_progress
+resize
 restart
 result
 resync
@@ -2880,6 +2884,7 @@ vietnam-body
 vietnam-head
 vietnam-modal
 viewport
+vis
 visibilitychange
 visible
 visible[k]
@@ -2951,6 +2956,7 @@ win.print
 window.location.assign
 window.name
 window.open
+window.top!
 word-break:keep-all
 wrap
 wrap.children.length

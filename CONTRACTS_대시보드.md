@@ -83,3 +83,16 @@
 - 모든 응답 `Cache-Control: private, max-age=604800, immutable` (파일명에 시각 — 안 바뀐다).
 - 대시보드 버그 패널 썸네일은 `?fmt=jpg&q=70&w=640`, 클릭은 원본. **보기만 하는 에이전트(alarmshot·bugshots)는 `?fmt=jpg` 를 붙이면 된다(프로그램 방).**
 - 지키는 시험: `tests/test_bugimg_mem.py` B-1..B-14.
+
+## 11. 버그스샷 정리(나이) · 숨은 대시보드엔 안 보낸다 (#271, 2026-09-27 주인님 «쓸모없이 쌓인다» · «라이브 안 쓰는데»)
+- **정리** (업로드 때 그 pc_id + 30분마다 전체, 첫 판은 부팅 30분 뒤):
+  사고 증거 = 48시간 지나면 지움(최신 6장·40장 상한은 그대로) · 수확 재료(`plrowfull`·`plrowlist`·`profcardN`·`autorowN`·`plrowmissN`·`*_CAND`·`flyout`)
+  = (pc_id, 종류) 최신 6장 **나이 무관 영구** · 학습(`ocrlearn_`·`ocrdiff_`·`oddfail_`) = 120장 + 7일 · 이름에서 시각을 못 읽으면 나이로 안 지움.
+- 핀: `POST /bugs/pin/{fn}?on=1|0` (main 세션) → settings `bug_pins`, 정리가 절대 안 지운다. 핀을 못 읽으면 그 판은 안 지운다.
+- 미리보기: `GET /diag/bugs_prune` (main) — 지금 훑으면 지울 수·바이트(종류별). ★배포 직후 30분 안에 읽어 본다.★
+- **scouter.py 주의(프로그램 방)**: 새 스샷을 «개수 차이»로 고른다(`scouter.py:4034`) — 정리가 지우면 차이가 줄어 새 스샷을 놓친다(40장 상한에서 이미 그랬다). 이름 커서(마지막 본 이름보다 큰 것)로 바꿔야 한다.
+- **WS `/ws`**: 접속 주소에 `?h=1|0&e=1|0`(숨김·iframe). 화면은 숨음/보임이 바뀔 때 `{"t":"vis","h":0|1}` 을 보낸다
+  (`document.hidden` 또는 창 크기 0). 숨은 소켓엔 `state`·`state_diff`·`log`·`cmd_history`·`char_info`·`corridor_progress`·`nightmare_progress` 를 안 보내고
+  `alert`(소리)·`ping` 만 보낸다. 보이는 소켓이 하나도 없으면 상태를 만들지도 않는다. 보이게 되면 새 판을 만들어 보낸다.
+- `/diag/egress` `ws_clients`: 소켓마다 ip(첫 홉)·ua·origin·embedded·hidden·tx·age_s — 누가 붙어 있는지 여기서 본다.
+- 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-19 · W-1..W-11.

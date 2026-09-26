@@ -606,6 +606,9 @@ BROADCAST_WAIT_S = 0.5           # 방송을 부른 쪽이 기다리는 상한 �
 BROADCAST_BACKLOG_MAX = 8        # 한 소켓에 밀린 전송이 이만큼이면 그 소켓은 못 따라오는 것 — 끊는다
 
 
+WS_HIDDEN_OK = ("alert", "ping")   # #271 숨은 대시보드에도 보내는 방송 종류
+
+
 class ConnectionManager:
     def __init__(self):
         self.active: list["tuple[WebSocket, str]"] = []   # (대시보드 ws, 테넌트)
@@ -613,10 +616,36 @@ class ConnectionManager:
         self._backlog: dict = {}    # id(ws) → 아직 안 끝난 전송 수
         self._sent_ver: dict = {}   # id(ws) → 그 소켓에 마지막으로 보낸 상태 판 번호(_FEED ver)
         self._pump: dict = {}       # id(ws) → 상태 펌프 작업(소켓당 하나)
+        # ★#271 (2026-09-27 주인님 「라이브 안 쓰는데」)★ 소켓마다 누구인지 + 화면이 숨었는지.
+        #   숨은 화면(탭 뒤·창 최소화·크기 0 iframe)엔 상태·로그를 안 보낸다 — 보일 때 전량 한 번.
+        #   알림(alert, 소리로 읽는다)·ping 은 숨어도 보낸다(작다).
+        self.meta: dict = {}        # id(ws) → {"ip","ua","origin","embedded","hidden","at","tx"}
 
-    async def connect(self, ws: WebSocket, tenant: str = "main"):
+    async def connect(self, ws: WebSocket, tenant: str = "main", meta: Optional[dict] = None):
         await ws.accept()
         self.active.append((ws, tenant))
+        self.meta[id(ws)] = dict(meta or {}, at=time.time(), tx=0)
+
+    def hidden(self, ws: WebSocket) -> bool:
+        return bool((self.meta.get(id(ws)) or {}).get("hidden"))
+
+    def watching(self, tenant: str) -> bool:
+        """그 테넌트 화면 중 ★보이는 것★ 이 하나라도 있나 — 없으면 상태를 만들지도 않는다."""
+        return any(t == tenant and not self.hidden(ws) for ws, t in self.active)
+
+    def set_hidden(self, ws: WebSocket, hidden: bool) -> bool:
+        """바뀌었으면 True. 보이게 되면 부른 쪽이 새 판을 만든다 — 숨은 사이 판을 건너뛰었으면
+        _state_pump 가 판 번호로 알아서 전량을 보낸다(바로 다음 판일 때만 조각)."""
+        m = self.meta.get(id(ws))
+        if m is None or bool(m.get("hidden")) == hidden:
+            return False
+        m["hidden"] = hidden
+        return True
+
+    def _tx(self, ws: WebSocket, n: int) -> None:
+        m = self.meta.get(id(ws))
+        if m is not None:
+            m["tx"] = m.get("tx", 0) + n
 
     def disconnect(self, ws: WebSocket):
         self.active = [(c, t) for c, t in self.active if c is not ws]
@@ -624,6 +653,7 @@ class ConnectionManager:
         self._backlog.pop(id(ws), None)
         self._sent_ver.pop(id(ws), None)
         self._pump.pop(id(ws), None)
+        self.meta.pop(id(ws), None)
 
     def _is_active(self, ws: WebSocket) -> bool:
         return any(c is ws for c, _t in self.active)
@@ -652,6 +682,7 @@ class ConnectionManager:
                     return                                   # 기다리는 사이 이미 끊겼다
                 _t0 = time.monotonic()
                 await asyncio.wait_for(ws.send_text(msg), BROADCAST_SEND_TIMEOUT_S)
+                self._tx(ws, len(msg))
                 _note_slow_send(ws, (time.monotonic() - _t0) * 1000, len(msg), "event")
         except Exception:
             await self._drop(ws)
@@ -674,6 +705,7 @@ class ConnectionManager:
                         pass
             return
         msg = json.dumps(data, ensure_ascii=False)
+        _to_hidden = data.get("type") in WS_HIDDEN_OK          # 숨은 화면에도 가는 것(알림·ping)
         # ★느린 대시보드 하나가 전체를 붙잡지 않게 (2026-09-23 반응속도 실측)★
         #   예전엔 한 소켓씩 ★제한 없이★ 차례로 기다렸다 — 휴대폰·백그라운드 탭처럼 받는 쪽이
         #   느리면 그 await 가 끝날 때까지 다음 대시보드도, 이 방송을 부른 요청(매크로 보고)도
@@ -685,7 +717,7 @@ class ConnectionManager:
         # ★도는 동안엔 await 하지 않는다(2026-09-23 반증 #3)★ — 중간에 _drop 을 기다리면 그사이
         #   끊긴 다른 소켓의 밀림·자물쇠 기록을 다시 만들어 남겼다. 끊을 것은 모아 뒤에서 끊는다.
         for ws, t in list(self.active):
-            if t != tenant:
+            if t != tenant or (not _to_hidden and self.hidden(ws)):
                 continue
             k = id(ws)
             if self._backlog.get(k, 0) >= BROADCAST_BACKLOG_MAX:
@@ -709,7 +741,7 @@ class ConnectionManager:
             await self.broadcast({"type": "ping"}, tenant)   # 차단 소켓 닫기는 broadcast 한 곳에서
             return
         for ws, t in list(self.active):
-            if t != tenant:
+            if t != tenant or self.hidden(ws):
                 continue
             k = id(ws)
             task = self._pump.get(k)
@@ -743,6 +775,7 @@ class ConnectionManager:
                         return
                     _t0 = time.monotonic()
                     await asyncio.wait_for(ws.send_text(msg), BROADCAST_SEND_TIMEOUT_S)
+                    self._tx(ws, len(msg))
                     _ms = (time.monotonic() - _t0) * 1000
                     _perf_note("state_send", _ms)
                     _note_slow_send(ws, _ms, len(msg), "diff" if is_diff else "full")
@@ -1330,6 +1363,7 @@ async def lifespan(app: FastAPI):
     #   Railway healthcheckTimeout(10초)을 넘긴다. 나눠 지우고 사이사이 쉰다.
     maint_task = asyncio.create_task(_cmd_table_maint())
     abyss_task = asyncio.create_task(_abyss_saver())
+    bugsweep_task = asyncio.create_task(_bug_sweeper())     # #271 버그스샷 나이 정리
     try:
         yield
     finally:
@@ -1341,7 +1375,7 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task):
             if _t:
                 _t.cancel()
                 try:
@@ -2139,7 +2173,7 @@ async def push_state(tenant: str = "main"):
     #   게다가 보고마다(초당 ~1.7회) 72장 조립을 한 벌씩 새로 시작해 겹쳤다.
     #   → 「더러움」 표시만 하고 테넌트당 ★작업 하나★(_push_loop)가 모아서 방송한다.
     #     첫 변화는 바로(앞 방송에서 PUSH_MIN_GAP_S 가 지났으면), 이어지는 변화는 간격당 한 번.
-    if not any(_t == tenant for _w, _t in manager.active):
+    if not manager.watching(tenant):
         _perf_count("push_state_skipped")
         return
     st = _PUSH.setdefault(tenant, {"task": None, "dirty": False, "last": 0.0})
@@ -2263,7 +2297,7 @@ def _feed_update(tenant: str, statuses: list, retired: list, latest) -> bool:
 
 async def _push_state_now(tenant: str = "main"):
     """실제 조립 + 방송(예전 push_state 몸통). 보는 사람이 없으면 여기서도 안 만든다."""
-    if not any(_t == tenant for _w, _t in manager.active):
+    if not manager.watching(tenant):
         _perf_count("push_state_skipped")
         return
     # ★어느 길로 나가든 잰다 (2026-09-11)★ — 2026-09-10 에 _build_full_state 를
@@ -2690,7 +2724,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 #   읽기(GET, 세션)는 그대로 둔다. 새 서버 관리 키를 만들면 여기 더한다(시험 test_setting_reserved 가 set_setting 호출처와 대조).
 SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
-                         "rot_allow", "parsec_map"}
+                         "rot_allow", "parsec_map", "bug_pins"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
 _SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
 
 
@@ -2829,6 +2863,9 @@ async def diag_egress(request: Request):
             "route": _top(_EGRESS["route"], 30), "img": _top(_EGRESS["img"]),
             "img_ip_capped": _IMG_CAP_HITS, "check_offer": _top(_EGRESS["check_offer"]),
             "out": _top(_EGRESS["out"]),
+            "ws_clients": [dict(manager.meta.get(id(w)) or {}, tenant=t,
+                                age_s=int(time.time() - (manager.meta.get(id(w)) or {}).get("at", time.time())))
+                           for w, t in list(manager.active)],
             "note": "앱이 소켓에 넘긴 바이트(HTTP 는 gzip 뒤, WS 는 permessage-deflate 앞). Railway 청구와 ±."}
 
 
@@ -8046,11 +8083,16 @@ function applyStateMsg(msg, sock){
   return true;
 }
 
-let _ws=null, _wsLastMsg=0;
+let _ws=null, _wsLastMsg=0, _wsVisSent=false;
+// ★#271 (2026-09-27 주인님 「라이브 안 쓰는데」)★ 숨은 화면(탭 뒤·최소화·크기 0 iframe)은 서버에 알려
+//   상태·로그를 안 받는다. 보이게 되면 알리고 서버가 전량 한 번. 알림(소리)·ping 은 숨어도 온다.
+function _wsHid(){ return document.hidden || innerWidth===0 || innerHeight===0; }
+function _wsVis(){ const h=_wsHid(); if(_ws && _ws.readyState===1 && h!==_wsVisSent){ try{ _ws.send(JSON.stringify({t:'vis',h:h?1:0})); _wsVisSent=h; if(!h) _wsLastMsg=Date.now(); }catch(err){} } }
+window.addEventListener('resize',_wsVis); setInterval(_wsVis,5000);
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
-  const ws=new WebSocket(`${proto}://${location.host}/ws`);
-  _ws=ws; _wsLastMsg=Date.now();
+  const ws=new WebSocket(`${proto}://${location.host}/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}`);
+  _ws=ws; _wsLastMsg=Date.now(); _wsVisSent=_wsHid();
   // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
   //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
   STATE_VER = -1; _resyncAsked = false;
@@ -8075,7 +8117,7 @@ function connectWS() {
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);
+setInterval(()=>{ if(!_wsHid() && _ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);   // 숨은 동안은 원래 조용하다(#271)
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
@@ -10523,7 +10565,8 @@ function handleCharInfoMsg(msg) {
     if(!document.hidden){
       renderCards(); loadCharTable(); loadCmdHistory();
       if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} }
-    }
+      else _wsVis();
+    } else _wsVis();
   });
 })();
 </script>
@@ -10629,7 +10672,7 @@ def _strip_cmds(cmds: list, tenant: str) -> list:
 async def _push_cmd_history(tenant: str):
     # ★보는 사람이 없으면 만들지 않는다 (2026-09-10)★ - push_state 와 같은 이유.
     #   대시보드는 붙을 때 loadCmdHistory() 로 /commands/recent 를 직접 읽는다.
-    if not any(_t == tenant for _w, _t in manager.active):
+    if not manager.watching(tenant):
         _perf_count("push_cmd_history_skipped")
         return
     cmds = _strip_cmds(await get_recent_commands(20, ns_prefix=("" if tenant == "main" else tenant)), tenant)
@@ -11534,7 +11577,12 @@ async def websocket_endpoint(websocket: WebSocket):
     if not tenant or tenant_blocked(tenant):
         await websocket.close(code=1008)
         return
-    await manager.connect(websocket, tenant)
+    _qp = websocket.query_params
+    _hd = websocket.headers
+    await manager.connect(websocket, tenant, {
+        "ip": (_hd.get("x-forwarded-for") or (websocket.client.host if websocket.client else "") or "").split(",")[0].strip(),
+        "ua": (_hd.get("user-agent") or "")[:120], "origin": (_hd.get("origin") or "")[:80],
+        "embedded": _qp.get("e") == "1", "hidden": _qp.get("h") == "1"})
     _dash_t0 = time.monotonic()
     _dash_why = "?"
     # ══════════════════════════════════════════════════════════════════════
@@ -11557,6 +11605,16 @@ async def websocket_endpoint(websocket: WebSocket):
         _last_resync = 0.0
         while True:
             raw = await websocket.receive_text()
+            # ★#271★ 화면이 숨었다/보인다 — {"t":"vis","h":0|1}. 보이게 되면 새 판을 한 번 만들어 전량으로.
+            if raw and '"vis"' in raw[:24]:
+                try:
+                    _h = bool(json.loads(raw).get("h"))
+                except Exception:
+                    continue
+                if manager.set_hidden(websocket, _h) and not _h:
+                    _perf_count("ws_unhide")
+                    await push_state(tenant)
+                continue
             # 화면이 「판 번호가 안 맞는다」 고 하면 다음엔 전량 — 그 밖의 글은 무시(keep alive)
             if raw and "resync" in raw[:64]:
                 manager.resync(websocket, tenant)
@@ -12352,35 +12410,185 @@ BUG_KEEP_PER_PC = 40        # PC당 일반 스샷(사고 증거) 보관 수
 BUG_KEEP_LEARN  = 120       # PC당 학습 크롭(ocrlearn_/ocrdiff_) 보관 수
 
 
-def _prune_bugs(bdir: str, pc_id: str):
-    """그 PC 것만 오래된 순으로 지운다. 업로드 때마다 도니까 그 PC 폴더만 훑는다.
+# ── #271 (2026-09-27 주인님 「버그 이미지 쓸모없이 쌓인다」) — 개수만이 아니라 ★나이★ 로도 ──────────
+#   개수 상한(40/120)만 있으니 PC·접미사(b/c/d)마다 꽉 찬 채로 머물렀다(/health bug_files 730).
+#   ★무엇을 누가 여는지 잰 뒤 정했다(2026-09-27 ops 전수)★:
+#     · 사고 증거 — alarmshot 최신 6, bugpull 최신 12, bugshots 20. 48시간 지나면 지운다(최신 6장은 남김).
+#     · 수확 재료(plrowfull·profcardN·autorowN·plrowmissN·*_CAND·flyout) — plrow_harvest 최신 6,
+#       profcard_fill 은 계정마다 최신 한 장을 ★나이와 무관하게★ 찾는다 → (그 PC, 그 종류) 최신 6장은 영구.
+#     · 학습 크롭(ocrlearn_·ocrdiff_·oddfail_) — 120장 + 7일. (ocrdiff·oddfail 은 올라올 때 OCR 큐에 복사돼 따로 산다)
+#     · 핀(POST /bugs/pin/{fn}) 은 절대 안 지운다.
+#   ★이름 정렬 = 시간 정렬★ (서버가 붙인 {pc}_{YYYYMMDD}_{HHMMSS}_ — mtime 은 볼륨 이전 때 무너진다).
+BUG_INCIDENT_KEEP_S = 48 * 3600
+BUG_INCIDENT_MIN = 6               # 나이와 무관하게 남기는 최신 사고 증거 수(alarmshot --n 6)
+BUG_HARVEST_KEEP = 6               # (PC, 종류)마다 남기는 최신 수확 재료 수(plrow_harvest 최신 6)
+BUG_LEARN_KEEP_S = 7 * 86400
+BUG_SWEEP_S = 1800.0               # 전체 훑기 간격 — 첫 훑기는 부팅 뒤 이만큼 지나서(그 사이 /diag/bugs_prune 로 미리 본다)
+_BUG_TS_RE = re.compile(r"^.+?_(\d{8})_(\d{6})_")
+_BUG_HARVEST_RE = re.compile(r"(plrow_[A-Za-z0-9-]+_\d+_CAND|plrowfull|plrowlist|profcard\d*|autorow\d*|plrowmiss\d*"
+                             r"|pl2-flyout|switch-pl2|flyout)")
+_BUG_LEARN_RE = re.compile(r"(ocrlearn_|ocrdiff_|oddfail_)")
+_BUG_PINS: set = set()
+_BUG_PINS_LOADED = [False]
 
-    ★파일명이 {pc_id}_{YYYYMMDD}_{HHMMSS}_... 라 이름 정렬 = 시간 정렬이다★
-      (mtime을 쓰면 파일 복사·볼륨 이전 때 전부 같은 시각이 되어 순서가 무너진다.)
-    실패해도 업로드는 성공시킨다 — 정리하다 증거를 못 받는 게 더 나쁘다.
-    """
+
+def _bug_kind(fname: str) -> tuple:
+    """(무리, 묶음 열쇠) — 무리 = harvest | learn | incident."""
+    m = _BUG_HARVEST_RE.search(fname)
+    if m:
+        return "harvest", m.group(1)
+    if _BUG_LEARN_RE.search(fname):
+        return "learn", ""
+    return "incident", ""
+
+
+def _bug_age_s(fname: str, now: float):
+    """서버가 붙인 첫 시각(업로드 UTC)으로 잰 나이. 못 읽으면 None(= 지우지 않는다)."""
+    m = _BUG_TS_RE.match(fname)
+    if not m:
+        return None
     try:
-        # ★단순 startswith 금지(2026-07-30 리뷰)★ — clean_pc_id가 언더스코어를 허용하므로
-        #   'PC-01'의 접두사 매칭이 'PC-01_sub'의 파일까지 자기 그룹으로 집계한다.
-        #   두 그룹이 섞여 정렬되면 숫자가 문자보다 앞이라 PC-01의 ★최신★ 파일부터
-        #   지워진다(시간 역순 삭제). 목록 API와 같은 기준: pc_id 뒤에 곧장 타임스탬프.
-        pat = re.compile(r"^" + re.escape(pc_id) + r"_\d{8}_\d{6}_")
-        learn, other = [], []
-        for f in os.listdir(bdir):
-            if not pat.match(f) or not f.endswith(".png"):
-                continue
-            (learn if ("ocrlearn_" in f or "ocrdiff_" in f) else other).append(f)
-        for group, keep in ((learn, BUG_KEEP_LEARN), (other, BUG_KEEP_PER_PC)):
-            if len(group) <= keep:
-                continue
-            group.sort()                       # 이름순 = 오래된 것부터
-            for f in group[:len(group) - keep]:
-                try:
-                    os.remove(os.path.join(bdir, f))
-                except Exception:
-                    pass
+        t = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+    return now - t
+
+
+def _bug_prune_plan(files: list, now: float, pins=frozenset()) -> list:
+    """★한 PC(업로드 pc_id) 파일들★ → 지울 이름 목록. 순수 함수(시험이 가상 시계로 부른다)."""
+    groups: dict = {}
+    for f in files:
+        kind, key = _bug_kind(f)
+        groups.setdefault((kind, key), []).append(f)
+    out = []
+    for (kind, _key), fs in groups.items():
+        fs = sorted(fs)                                    # 이름순 = 오래된 것부터
+        if kind == "harvest":
+            drop = fs[:-BUG_HARVEST_KEEP]
+        elif kind == "learn":
+            head = fs[:-BUG_KEEP_LEARN] if len(fs) > BUG_KEEP_LEARN else []
+            drop = head + [f for f in fs[len(head):] if (_bug_age_s(f, now) or 0) > BUG_LEARN_KEEP_S]
+        else:
+            head = fs[:-BUG_KEEP_PER_PC] if len(fs) > BUG_KEEP_PER_PC else []
+            rest = fs[len(head):]
+            old = [f for f in rest[:-BUG_INCIDENT_MIN] if (_bug_age_s(f, now) or 0) > BUG_INCIDENT_KEEP_S]
+            drop = head + old
+        out.extend(f for f in drop if f not in pins)
+    return out
+
+
+def _bug_pc_groups(bdir: str) -> dict:
+    """폴더 → {업로드 pc_id: [파일]} (.png 만, 서버 이름 형식만)."""
+    out: dict = {}
+    for f in os.listdir(bdir):
+        if not f.endswith(".png"):
+            continue
+        m = re.match(r"^(.+?)_\d{8}_\d{6}_", f)
+        if m:
+            out.setdefault(m.group(1), []).append(f)
+    return out
+
+
+def _prune_bugs(bdir: str, pc_id: str, now: Optional[float] = None) -> int:
+    """그 PC 것만 정책대로 지운다(업로드 때마다). 지운 수를 돌려준다.
+    실패해도 업로드는 성공시킨다 — 정리하다 증거를 못 받는 게 더 나쁘다.
+    ★단순 startswith 금지(2026-07-30 리뷰)★ — 'PC-01' 이 'PC-01_sub' 파일을 자기 것으로 세면 최신부터 지워진다.
+      목록 API 와 같은 기준: pc_id 뒤에 곧장 타임스탬프."""
+    try:
+        files = _bug_pc_groups(bdir).get(pc_id, [])
+        n = 0
+        for f in _bug_prune_plan(files, now or time.time(), frozenset(_BUG_PINS)):
+            try:
+                os.remove(os.path.join(bdir, f))
+                n += 1
+            except Exception:
+                pass
+        return n
     except Exception as e:
         print(f"[bugs] prune 실패(무시): {e.__class__.__name__}: {e}")
+        return 0
+
+
+def _bug_sweep_all(dry: bool = False, now: Optional[float] = None) -> dict:
+    """모든 테넌트·모든 PC 를 정책대로. dry=True 면 지우지 않고 무엇을 지울지만 센다."""
+    now = now or time.time()
+    rep = {"deleted": 0, "bytes": 0, "kept": 0, "by_kind": {}}
+    for tenant in sorted(set(TENANTS) | {"main"}):
+        bdir = tenant_bugs_dir(tenant)
+        if not os.path.isdir(bdir):
+            continue
+        n_t = 0
+        for _pc, files in _bug_pc_groups(bdir).items():
+            drop = set(_bug_prune_plan(files, now, frozenset(_BUG_PINS)))
+            rep["kept"] += len(files) - len(drop)
+            for f in drop:
+                k = _bug_kind(f)[0]
+                p = os.path.join(bdir, f)
+                try:
+                    sz = os.path.getsize(p)
+                    if not dry:
+                        os.remove(p)
+                except Exception:
+                    continue
+                rep["deleted"] += 1
+                rep["bytes"] += sz
+                n_t += 1
+                d = rep["by_kind"].setdefault(k, {"n": 0, "bytes": 0})
+                d["n"] += 1
+                d["bytes"] += sz
+        if n_t and not dry:
+            _bug_cache_bust(tenant)
+    return rep
+
+
+async def _bug_pins_load() -> None:
+    """핀 목록을 한 번 읽는다. 못 읽으면 예외 — 부른 쪽은 그 판을 안 지운다(핀을 모르고 지우지 않는다)."""
+    if _BUG_PINS_LOADED[0]:
+        return
+    raw = await get_setting("bug_pins") or "[]"
+    _BUG_PINS.update(x for x in json.loads(raw) if isinstance(x, str))
+    _BUG_PINS_LOADED[0] = True
+
+
+async def _bug_sweeper() -> None:
+    """30분마다 전체 정리(첫 판은 부팅 30분 뒤)."""
+    while True:
+        try:
+            await asyncio.sleep(BUG_SWEEP_S)
+        except asyncio.CancelledError:
+            return
+        try:
+            await _bug_pins_load()
+            rep = await asyncio.to_thread(_bug_sweep_all)
+            if rep["deleted"]:
+                print(f"[bugs] 정리 {rep['deleted']}장 {rep['bytes'] >> 20}MB 남음 {rep['kept']} {rep['by_kind']}", flush=True)
+        except Exception as e:
+            print(f"[bugs] 정리 판 건너뜀: {e.__class__.__name__}", flush=True)
+
+
+@app.get("/diag/bugs_prune")
+async def diag_bugs_prune(request: Request):
+    """[진단] 지금 훑으면 무엇을 지울지(지우지 않는다)."""
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    await _bug_pins_load()
+    rep = await asyncio.to_thread(_bug_sweep_all, True)
+    rep["pins"] = sorted(_BUG_PINS)
+    return rep
+
+
+@app.post("/bugs/pin/{filename:path}")
+async def bug_pin(filename: str, request: Request, on: int = 1):
+    """손으로 핀 — 정리가 절대 안 지운다. on=0 이면 푼다. 핀 목록은 settings `bug_pins` (재배포에도 남는다)."""
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    fn = os.path.basename(filename)
+    if on and not os.path.exists(os.path.join(tenant_bugs_dir("main"), fn)):
+        raise HTTPException(status_code=404)
+    await _bug_pins_load()
+    (_BUG_PINS.add if on else _BUG_PINS.discard)(fn)
+    await set_setting("bug_pins", json.dumps(sorted(_BUG_PINS), ensure_ascii=False))
+    return {"ok": True, "pinned": fn in _BUG_PINS, "pins": len(_BUG_PINS)}
 
 
 @app.post("/bugs/{pc_id}")
@@ -12413,7 +12621,11 @@ async def upload_bug(pc_id: str, request: Request, file: UploadFile = File(...))
         f.write(content)
     # ★#125 (2026-09-24 아이온2)★ 로컬 OCR 불일치 크롭(ocrdiff_·oddfail_)은 곧바로 OCR 판별 큐에도(복사 — 정리와 무관, 실패 무시)
     await _ocr_label.seed_upload_hook(tenant, bdir, filename)
-    _prune_bugs(bdir, pc_id)
+    try:
+        await _bug_pins_load()
+        _prune_bugs(bdir, pc_id)
+    except Exception:
+        pass                                # 핀을 모르면 이번엔 안 지운다(다음 업로드·훑기가 한다)
     _bug_cache_bust(tenant)     # ★파일이 바뀌었다 - 개수 캐시를 버린다 (2026-09-10)★
     await push_state(tenant)
     return JSONResponse({"ok": True, "filename": filename})

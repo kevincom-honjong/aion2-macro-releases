@@ -3430,11 +3430,16 @@ function applyStateMsg(msg, sock){
   return true;
 }
 
-let _ws=null, _wsLastMsg=0;
+let _ws=null, _wsLastMsg=0, _wsVisSent=false;
+// ★#271 (2026-09-27 주인님 「라이브 안 쓰는데」)★ 숨은 화면(탭 뒤·최소화·크기 0 iframe)은 서버에 알려
+//   상태·로그를 안 받는다. 보이게 되면 알리고 서버가 전량 한 번. 알림(소리)·ping 은 숨어도 온다.
+function _wsHid(){ return document.hidden || innerWidth===0 || innerHeight===0; }
+function _wsVis(){ const h=_wsHid(); if(_ws && _ws.readyState===1 && h!==_wsVisSent){ try{ _ws.send(JSON.stringify({t:'vis',h:h?1:0})); _wsVisSent=h; if(!h) _wsLastMsg=Date.now(); }catch(err){} } }
+window.addEventListener('resize',_wsVis); setInterval(_wsVis,5000);
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
-  const ws=new WebSocket(`${proto}://${location.host}/ws`);
-  _ws=ws; _wsLastMsg=Date.now();
+  const ws=new WebSocket(`${proto}://${location.host}/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}`);
+  _ws=ws; _wsLastMsg=Date.now(); _wsVisSent=_wsHid();
   // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
   //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
   STATE_VER = -1; _resyncAsked = false;
@@ -3459,7 +3464,7 @@ function connectWS() {
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);
+setInterval(()=>{ if(!_wsHid() && _ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} } },15000);   // 숨은 동안은 원래 조용하다(#271)
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
@@ -5907,6 +5912,7 @@ function handleCharInfoMsg(msg) {
     if(!document.hidden){
       renderCards(); loadCharTable(); loadCmdHistory();
       if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} }
-    }
+      else _wsVis();
+    } else _wsVis();
   });
 })();
