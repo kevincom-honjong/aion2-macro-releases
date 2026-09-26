@@ -4841,7 +4841,7 @@ async function openBugsModal(pc_id) {
           <button data-f="${esc(b.filename)}" onclick="deleteBug(this.dataset.f)" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
         </div>
       </div>
-      <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${esc(b.filename)}" loading="lazy">
+      <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}?fmt=jpg&q=70&w=640" data-orig="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.dataset.orig,'_blank')" alt="${esc(b.filename)}" loading="lazy">
     </div>
   `).join('');
 }

@@ -2830,6 +2830,115 @@ async def diag_egress(request: Request):
             "note": "앱이 소켓에 넘긴 바이트(HTTP 는 gzip 뒤, WS 는 permessage-deflate 앞). Railway 청구와 ±."}
 
 
+# ==============================================================================
+# [진단] 메모리 (2026-09-27 Railway 청구 Memory ≈920MB 평균 · $9.24/월 — ★재기만 한다★)
+#   청구는 컨테이너 cgroup 사용량이라 ★파이썬 객체만이 아니다★ — 페이지 캐시(SQLite·버그 PNG·exe 를
+#   읽은 흔적)와 glibc 가 OS 에 안 돌려준 빈 칸(단편화)이 같이 잡힌다. 그래서 셋을 갈라 보여준다:
+#     cgroup(anon/file) · 프로세스 RSS · 큰 전역 캐시 크기.  ?types=1 은 객체 종류별 개수(느림 ~1초).
+#   MEM_TRACE=1 로 띄우면 tracemalloc 상위 줄도 준다(메모리 더 먹는다 — 잴 때만).
+#   POST /diag/mem/trim = malloc_trim(0) 전후 RSS — ★줄면 단편화, 안 줄면 진짜 들고 있는 것★.
+# ==============================================================================
+if os.environ.get("MEM_TRACE") == "1":
+    import tracemalloc as _tm
+    _tm.start(1)
+
+
+def _mem_proc() -> dict:
+    out = {}
+    try:
+        with open("/proc/self/status", encoding="ascii", errors="replace") as f:
+            for ln in f:
+                k, _, v = ln.partition(":")
+                if k in ("VmRSS", "VmHWM", "RssAnon", "RssFile", "VmSwap"):
+                    out[k] = int(v.split()[0]) * 1024
+    except Exception:
+        pass
+    for p, name in (("/sys/fs/cgroup/memory.current", "cg_current"), ("/sys/fs/cgroup/memory.peak", "cg_peak")):
+        try:
+            with open(p) as f:
+                out[name] = int(f.read().strip())
+        except Exception:
+            pass
+    try:
+        with open("/sys/fs/cgroup/memory.stat") as f:
+            for ln in f:
+                k, _, v = ln.partition(" ")
+                if k in ("anon", "file", "kernel", "sock", "shmem", "file_mapped", "inactive_file", "active_file"):
+                    out["cg_" + k] = int(v)
+    except Exception:
+        pass
+    return out
+
+
+def _mem_deep(obj, budget: int = 300_000) -> tuple:
+    """(대략 바이트, 다 셌나) — dict/list/tuple/set/bytes/str 만 따라간다. 너무 크면 budget 에서 멈춘다."""
+    seen, stack, total, n = set(), [obj], 0, 0
+    while stack:
+        o = stack.pop()
+        if id(o) in seen:
+            continue
+        seen.add(id(o))
+        n += 1
+        if n > budget:
+            return total, False
+        try:
+            total += sys.getsizeof(o)
+        except Exception:
+            continue
+        if isinstance(o, dict):
+            stack.extend(o.keys())
+            stack.extend(o.values())
+        elif isinstance(o, (list, tuple, set, frozenset)) or type(o).__name__ == "deque":
+            stack.extend(o)
+    return total, True
+
+
+@app.get("/diag/mem")
+async def diag_mem(request: Request, types: int = 0):
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    g = globals()
+    rows = []
+    for name, v in list(g.items()):
+        if not name.startswith("_") or not (isinstance(v, (dict, list, set)) or type(v).__name__ == "deque"):
+            continue
+        b, full = _mem_deep(v)
+        if b >= 64 << 10:
+            rows.append({"name": name, "len": len(v), "bytes": b, "complete": full})
+    rows.sort(key=lambda r: -r["bytes"])
+    out = {"proc": _mem_proc(), "globals_over_64k": rows[:30],
+           "note": "cg_* = Railway 가 재는 컨테이너(파일 캐시 포함) · RssAnon = 파이썬 힙 · globals = 우리가 쥔 것(대략)"}
+    try:
+        import gc
+        out["gc_counts"] = gc.get_count()
+        if types:
+            cnt: dict = {}
+            for o in gc.get_objects():
+                t = type(o).__name__
+                cnt[t] = cnt.get(t, 0) + 1
+            out["types_top"] = sorted(cnt.items(), key=lambda kv: -kv[1])[:25]
+    except Exception as e:
+        out["gc_err"] = str(e)[:80]
+    if os.environ.get("MEM_TRACE") == "1":
+        snap = _tm.take_snapshot()
+        out["tracemalloc_top"] = [{"at": str(s.traceback[0]), "bytes": s.size, "n": s.count}
+                                  for s in snap.statistics("lineno")[:25]]
+    return out
+
+
+@app.post("/diag/mem/trim")
+async def diag_mem_trim(request: Request):
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    before = _mem_proc()
+    try:
+        import ctypes
+        freed = ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception as e:
+        return {"ok": False, "why": f"malloc_trim 없음: {e.__class__.__name__}", "before": before}
+    return {"ok": True, "released": bool(freed), "before": before, "after": _mem_proc()}
+
+
 @app.get("/diag/perf")
 async def diag_perf(request: Request):
     """[진단] ★서버가 굳는가★ 를 보는 창구 (2026-09-10 주인님 지시).
@@ -9323,7 +9432,7 @@ async function openBugsModal(pc_id) {
           <button data-f="${esc(b.filename)}" onclick="deleteBug(this.dataset.f)" class="text-xs text-red-500 hover:text-red-400 transition-colors">🗑</button>
         </div>
       </div>
-      <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.src,'_blank')" alt="${esc(b.filename)}" loading="lazy">
+      <img src="/bugs/image/${esc(encodeURIComponent(b.filename))}?fmt=jpg&q=70&w=640" data-orig="/bugs/image/${esc(encodeURIComponent(b.filename))}" class="w-full rounded border border-gray-700 cursor-pointer hover:opacity-90 transition-opacity" onclick="window.open(this.dataset.orig,'_blank')" alt="${esc(b.filename)}" loading="lazy">
     </div>
   `).join('');
 }
@@ -12361,7 +12470,59 @@ async def serve_bug_image(filename: str, request: Request):
     path = os.path.join(tenant_bugs_dir(tenant), filename)
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
-    return FileResponse(path, media_type="image/png")
+    # ★나가는 바이트 (2026-09-27 /diag/egress 1위: 한 장 ≈1.1MB PNG)★
+    #   기본은 ★원본 PNG 그대로★ — bugpull·템플릿 수확은 무손실 픽셀이 필요하다(계정줄 크롭 등).
+    #   ?fmt=jpg[&q=40..90][&w=160..1280] 은 ★보기용★ JPEG(실측 1280x720: q80 ≈ 1/9, w640 q70 ≈ 1/33).
+    #   이름에 시각이 박혀 파일이 안 바뀐다 → 브라우저가 다시 안 받게 immutable.
+    cc = {"Cache-Control": "private, max-age=604800, immutable"}
+    fmt = (request.query_params.get("fmt") or "").lower()
+    if fmt in ("jpg", "jpeg"):
+        try:
+            q = min(90, max(40, int(request.query_params.get("q") or 80)))
+            w = int(request.query_params.get("w") or 0)
+            w = min(1280, max(160, w)) if w else 0
+        except ValueError:
+            raise HTTPException(status_code=400, detail="q·w 는 정수")
+        data = await asyncio.to_thread(_bug_jpeg, path, q, w)
+        if data is not None and len(data) < os.path.getsize(path):    # 작은 단색 크롭은 PNG 가 더 작다 → 원본
+            return Response(data, media_type="image/jpeg", headers=cc)
+        if data is None:
+            cc["X-Fmt-Fallback"] = "png"   # 변환 못 함(Pillow 없음·깨진 파일) → 원본을 준다
+    return FileResponse(path, media_type="image/png", headers=cc)
+
+
+BUG_JPEG_CACHE_MAX = 16 << 20                # 변환본 캐시 상한(바이트) — 같은 장을 여러 번 열 때만 쓸모
+_BUG_JPEG_CACHE: dict = {}                   # (path, mtime, q, w) → bytes (넣은 순서 = 오래된 순)
+
+
+def _bug_jpeg(path: str, q: int, w: int):
+    """★스레드에서★ PNG → JPEG. 실패하면 None(부르는 쪽이 원본으로)."""
+    try:
+        key = (path, os.path.getmtime(path), q, w)
+    except OSError:
+        return None
+    hit = _BUG_JPEG_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            if w and im.width > w:
+                im = im.resize((w, max(1, round(im.height * w / im.width))), Image.BILINEAR)
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=q, optimize=True)
+        data = buf.getvalue()
+    except Exception as e:
+        print(f"[bugs] JPEG 변환 실패(원본으로): {os.path.basename(path)}: {e.__class__.__name__}", flush=True)
+        return None
+    _BUG_JPEG_CACHE[key] = data
+    try:                                     # 스레드 여럿이 동시에 — 목록을 떠서 세고, 없으면 넘어간다
+        while _BUG_JPEG_CACHE and sum(len(v) for v in list(_BUG_JPEG_CACHE.values())) > BUG_JPEG_CACHE_MAX:
+            _BUG_JPEG_CACHE.pop(next(iter(list(_BUG_JPEG_CACHE))), None)
+    except (RuntimeError, StopIteration):
+        pass
+    return data
 
 
 @app.get("/tenants")

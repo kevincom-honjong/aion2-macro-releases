@@ -75,3 +75,11 @@
 - 순환 작업(`ROT_TASKS`)이 아니므로 `ROT_TASK_BUSY_ST` 에는 안 넣었다 — 작업 순환 중 표층이면 «딴 일»(20분 대기) 로 읽는 게 맞다.
 - 팜뷰가 할 일: 자기 «하는 중» 목록(`farmview/fvdash.py ACT_ST`)에 `surface` 를 `corridor` 옆에(FV_API «알아둘 것»).
 - 같이 고친 것: FV 명령표 파서가 줄 끝 `// 주석` 달린 `CMD_TRACK` 줄을 버려 `surface` 명령이 팜뷰 명령 목록에 없었다(S-15 가 키 수를 본다).
+
+## 10. `/bugs/image/{fn}` 보기용 JPEG (2026-09-27 Railway 나가는 바이트 1위 — 한 장 ≈1.1MB PNG)
+- **기본은 그대로** — 쿼리 없으면 원본 PNG 바이트(에이전트 `bugpull`·템플릿 수확은 무손실이 필요하다).
+- 새 선택: `?fmt=jpg[&q=40..90(기본 80)][&w=160..1280]` → `image/jpeg`. 실측 1280x720: q80 ≈ 1/9, w=640 q=70 ≈ 1/33.
+  JPEG 이 원본보다 크거나(작은 단색 크롭) 변환을 못 하면 원본 PNG(못 한 때만 `X-Fmt-Fallback: png`).
+- 모든 응답 `Cache-Control: private, max-age=604800, immutable` (파일명에 시각 — 안 바뀐다).
+- 대시보드 버그 패널 썸네일은 `?fmt=jpg&q=70&w=640`, 클릭은 원본. **보기만 하는 에이전트(alarmshot·bugshots)는 `?fmt=jpg` 를 붙이면 된다(프로그램 방).**
+- 지키는 시험: `tests/test_bugimg_mem.py` B-1..B-14.
