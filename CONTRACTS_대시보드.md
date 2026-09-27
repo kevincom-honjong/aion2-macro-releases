@@ -142,3 +142,10 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - 판매를 옮기면(`move_kina_adjust`) tid 가 카드를 따라간다.
 - 창구 쓰는 법: 판독 값에서 내 판매를 뺄 때, 그 tid 가 이 목록에 있으면 이미 빠진 값이다 — 또 빼지 않는다.
 - 시험: `tests/test_kina_move.py` KM-27~33.
+
+## 15. 🔭 스카우터 알람 — 서버 안 (주인님 #288, 2026-09-27)
+#270 에서 스카우터 프로세스를 폐기하며 끊긴 텔레그램(「🔭 스카우터: PC — 이유」)을 서버가 다시 보낸다. 새 엔드포인트 없음.
+- 조건·유예·재알림 = `server/scout_alarm.py`(순수) · 배선 = `main._scout_loop`(60초, 부팅 뒤 120초 대기, `SCOUT_ALARM=off` 로 끔).
+- 대상: main 테넌트만. 음소거·은퇴 PC 에는 텔레그램을 안 보낸다(카드 로그 `[스카우터] …` 는 남김). 알릴 때 대시보드 알람 이벤트도.
+- 장부: 설정 `scout_alerted`(서버 관리 — 일반 POST 금지). 재배포해도 같은 고장을 6시간 안에 다시 안 울린다.
+- 시험: `tests/test_scout_alarm.py`(가상 시계).

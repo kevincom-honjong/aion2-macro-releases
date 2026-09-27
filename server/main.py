@@ -1522,6 +1522,7 @@ async def lifespan(app: FastAPI):
     abyss_task = asyncio.create_task(_abyss_saver())
     bugsweep_task = asyncio.create_task(_bug_sweeper())     # #271 버그스샷 나이 정리
     ka_task = asyncio.create_task(_dash_keepalive())         # #271 숨은 대시보드 ping
+    scout_task = asyncio.create_task(_scout_loop())          # #288 🔭 스카우터 알람(서버 안)
     try:
         yield
     finally:
@@ -2899,7 +2900,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 #   읽기(GET, 세션)는 그대로 둔다. 새 서버 관리 키를 만들면 여기 더한다(시험 test_setting_reserved 가 set_setting 호출처와 대조).
 SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "banned_accts", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
-                         "rot_allow", "parsec_map", "bug_pins"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
+                         "rot_allow", "parsec_map", "bug_pins", "scout_alerted"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
 _SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
 
 
@@ -16352,6 +16353,90 @@ async def _eff_say(tenant: str, pc_id: str, text: str, tg_only: bool = False) ->
         except Exception:
             pass
     return _sent
+
+
+# ── 🔭 스카우터 알람 (주인님 #288, 2026-09-27) ────────────────────────────────────────────────────────
+#   #270 에서 스카우터 프로세스를 폐기하자 그 텔레그램도 같이 끊겼다(「알람 울렸던 것도 안 울리는 거는 뭐야」).
+#   조건·유예·재알림은 scout_alarm.py(순수, 가상 시계 시험) 한 곳. 여기는 배선만: 60초마다 이미 만드는 /status 카드를
+#   넘기고, 로그·버그 이름은 DB·디스크에서 ★알릴 후보일 때만★ 읽는다. 폴링·나가는 바이트 없음. 끄기: SCOUT_ALARM=off.
+import scout_alarm as _scout_mod
+
+SCOUT_TENANT = "main"                  # 주인님 함대만(렌탈 테넌트에는 안 보낸다)
+SCOUT_POLL_S = 60.0
+SCOUT_BOOT_GRACE_S = 120.0             # 부팅 직후 WS 재접속이 채워질 여유(재배포마다 offline 오탐 방지)
+_SCOUT = _scout_mod.Scout()
+_SCOUT_LOADED = [False]
+
+
+async def _scout_say(tenant: str, pc_id: str, text: str) -> "bool | None":
+    """🔭 한 통 — 옛 스카우터와 같은 글(「🔭 스카우터: PC — 이유」)·같은 규칙(음소거·은퇴 존중). 카드 이벤트도 남긴다."""
+    msg = f"🔭 스카우터: {pc_id} — {text}"
+    print(f"[스카우터] {msg}", flush=True)
+    try:
+        await insert_log(ns(tenant, pc_id), "warn", f"[스카우터] {text}")
+    except Exception:
+        pass
+    chat = tenant_chat_id(tenant)
+    if not (tg_enabled() and chat):
+        return None
+    if ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0:
+        return None
+    try:
+        mid = await tg_send_text(chat, f"{pc_id} | {msg}")
+    except Exception as e:
+        print(f"[스카우터] 텔레그램 실패: {e}", flush=True)
+        mid = None
+    try:
+        await _alarm_event(tenant, pc_id, msg, tg_failed=mid is None)
+    except Exception:
+        pass
+    return mid is not None
+
+
+async def _scout_logs(tenant: str, pc_id: str) -> list:
+    return [(x.get("created_at"), str(x.get("message") or "")) for x in await get_logs(ns(tenant, pc_id), 80)]
+
+
+async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
+    """한 틱 — 알린 것 [(pc, key, text)] 을 돌려준다(시험이 부른다)."""
+    if not _SCOUT_LOADED[0]:
+        try:
+            raw = await get_setting("scout_alerted")
+            d = json.loads(raw) if raw else {}
+            _SCOUT.alerted.update({k: float(v) for k, v in d.items() if isinstance(v, (int, float))})
+        except Exception as e:
+            print(f"[스카우터] 장부 복원 실패(빈손으로): {e}", flush=True)
+        _SCOUT_LOADED[0] = True
+    now = time.time() if now is None else now
+    pcs = await _build_full_state(tenant)
+    out = await _SCOUT.step(pcs, now, lambda p: _scout_logs(tenant, p),
+                            lambda bp: [x.get("filename") for x in _list_bug_files(tenant, bp)])
+    for pc_id, _key, text in out:
+        await _scout_say(tenant, pc_id, text)
+    if _SCOUT.dirty:
+        _SCOUT.dirty = False
+        keep = {k: v for k, v in _SCOUT.alerted.items() if now - v < 2 * _scout_mod.RENOTIFY}
+        _SCOUT.alerted.clear()
+        _SCOUT.alerted.update(keep)
+        try:
+            await set_setting("scout_alerted", json.dumps(keep))
+        except Exception as e:
+            print(f"[스카우터] 장부 저장 실패(무시): {e}", flush=True)
+    return out
+
+
+async def _scout_loop() -> None:
+    if (os.getenv("SCOUT_ALARM") or "").strip().lower() in ("off", "0", "false"):
+        print("[스카우터] SCOUT_ALARM=off — 서버 알람 꺼짐", flush=True)
+        return
+    await asyncio.sleep(SCOUT_BOOT_GRACE_S)
+    print("[스카우터] 서버 알람 시작 (#288)", flush=True)
+    while True:
+        try:
+            await _scout_tick(SCOUT_TENANT)
+        except Exception as e:
+            print(f"[스카우터] 틱 실패(계속): {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(SCOUT_POLL_S)
 
 
 async def _eff_watch() -> None:
