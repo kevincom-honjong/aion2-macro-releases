@@ -123,14 +123,13 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - FarmView side (farmview room): `fvdash.py` status label (~471, 519) → «정지(OUT)» when `banned`.
 - Server side once agreed: add the two keys in `_fv_pc_view`, update both FV_API.md copies in the same commit, and extend `tests/test_contracts.py` + `farmview/tests/test_integration_contracts.py`.
 
-## 13. `/api/fv/kina_adjust` — 매니아가 적은 카드 (2026-09-27 아이온2, 더하기만)
-사고: 거래 #07963787(1억9천, 글 2026092707905532 = 매니아 장부 PC-21c)을 팜뷰가 PC-02b 로 보내 PC-02b 가 215,319,919 → 25,319,919.
-★서버는 카드를 고르지 않는다★ — 본문 `pc_id` 그대로 뺀다(카드는 팜뷰 `mania.py h_psales_pick` 이 고른다).
-- **`why.booked_pc`**(선택, 글자) = 매니아 장부의 그 글 계정 카드. 있으면 `pc_id` 와 같아야 한다(대소문자 무관) — 다르거나 글자가 아니면
-  **409 `booked_mismatch:true`**, 빼지 않고 장부에도 안 적으며 그 카드 로그에 «창고 키나 차감 거절» 한 줄.
-- 없으면 지금은 예전대로 뺀다. **`FV_KINA_REQUIRE_BOOKED=True`** 로 바꾸면 없을 때도 409(«모르면 빼지 않는다») —
-  ★팜뷰가 `booked_pc` 를 보내기 시작한 뒤에만 켠다★(먼저 켜면 모든 차감이 409).
-- 데이터 복구: 부팅 때 `_kina_fix_moves`(`KINA_MOVES_20260927`)가 그 장부 줄을 PC-21c 로 옮기고(`database.move_kina_adjust`)
-  두 카드를 맞춘다 — 판독이 판매를 모르는 쪽만 더하고/뺀다. 같은 번호·금액이 두 줄이면 짐작해 옮기지 않는다. 멱등.
-  옮긴 뒤 팜뷰가 같은 tid 를 PC-21c 로 보내면 dup, PC-02b 로 보내면 409.
-- 시험: `tests/test_kina_move.py`(KM-0~21, 변이 5종 전부 죽음).
+## 13. `/api/fv/kina_adjust` — 고른 카드가 진실 (2026-09-27 아이온2, 더하기만)
+거래 #07963787(1억9천)의 매니아 글 계정은 PC-21c 였지만 ★주인님이 팜뷰에서 PC-02b 를 골랐다★(드롭다운 기본값은 PC-10b 였고,
+고르기 직전 PC-02 를 세 번 봤다) → 키나는 실제로 PC-02b 에서 나갔다. ★팜뷰가 보낸 `pc_id` = 넘긴 계정의 진실, 글 계정은 계획★.
+- 서버는 카드를 고르지 않는다 — 본문 `pc_id` 에서 뺀다.
+- **`why.booked_pc`**(선택) = 매니아 글 계정 카드. 달라도 ★막지 않는다★(200, `pc_id` 에서 뺌) — 그 카드 로그에 info 한 줄
+  «창고 키나 카드 다름» 만. 「모르면 막기」 스위치는 두지 않는다(지웠다).
+- `database.move_kina_adjust(tid, to_pc)` + 부팅 `_kina_fix_moves`(`KINA_MOVES_20260927`) = 장부 줄 한 줄을 다른 카드로 옮기는 길
+  (판독이 판매를 모르는 쪽만 고침 · 같은 번호·금액이 두 줄이면 안 옮김 · 멱등). 이 거래는 한 번 PC-21c 로 옮겼다가(boot 053ca0bc)
+  주인님 선택이 확인돼 같은 길로 PC-02b 로 되돌렸다. 한 방향 줄만 둔다(둘 다 두면 부팅마다 왔다 갔다).
+- 시험: `tests/test_kina_move.py`.

@@ -18008,7 +18008,9 @@ def _fv_kina_body(body) -> tuple:
 #   2026092707905532 는 매니아 장부상 PC-21c 계정인데 팜뷰가 PC-02b 카드로 보내 PC-02b 가 215,319,919 → 25,319,919 가 됐다.
 #   (from 카드, delta, tid 에 든 거래 번호, 매니아가 적은 카드). 부팅마다 보지만 멱등 — 행이 from 에 없으면 아무것도 안 한다.
 #   ★짐작 안 한다★: from 에서 그 번호·그 금액인 행이 정확히 한 줄일 때만 옮긴다.
-KINA_MOVES_20260927 = (("PC-02b", -190_000_000, "07963787", "PC-21c"),)
+#   ★되돌림 (아이온2 2026-09-27 GO)★ — PC-02b 는 주인님이 실제로 넘긴 계정이었다 → 같은 길로 반대 방향(PC-21c → PC-02b).
+#   앞 방향 줄은 지웠다(둘 다 두면 부팅마다 왔다 갔다 한다).
+KINA_MOVES_20260927 = (("PC-21c", -190_000_000, "07963787", "PC-02b"),)
 
 
 async def _kina_fix_moves() -> None:
@@ -18035,24 +18037,18 @@ async def _kina_fix_moves() -> None:
             print(f"[팜뷰] 판매 옮기기 실패(무시) {frm}→{to}: {type(e).__name__}: {e}", flush=True)
 
 
-# ★매니아가 적은 카드와 다르면 빼지 않는다 (2026-09-27 아이온2)★ — why.booked_pc(선택) = 매니아 장부의 그 글 계정 카드.
-#   다르면 409 booked_mismatch + 그 카드 로그줄(짐작해 빼지 않는다). 없을 때도 막으려면 True — 팜뷰가 booked_pc 를 보낼
-#   때까지는 False(켜면 지금 팜뷰의 모든 차감이 409). 합의는 CONTRACTS_대시보드 §13.
-FV_KINA_REQUIRE_BOOKED = False
-
-
+# ★매니아 글 계정과 다른 카드 — 알리기만 한다 (2026-09-27 아이온2)★ — why.booked_pc(선택) = 매니아 장부의 그 글 계정 카드.
+#   ★주인님이 팜뷰에서 고른 카드(pc_id)가 넘긴 계정의 진실★이고 글 계정은 계획일 뿐이다(#07963787: 드롭다운 기본값은 PC-10b 였는데
+#   주인님이 PC-02 를 세 번 보고 PC-02b 를 골랐다). 그래서 다르면 막지 않고 pc_id 에서 빼며 그 카드 로그에 info 한 줄만.
 def _fv_kina_booked(why: dict, pc_id: str) -> "str | None":
-    """오류문 또는 None. booked_pc 가 있으면 pc_id 와 같아야 한다 · 없으면 FV_KINA_REQUIRE_BOOKED 가 정한다."""
+    """booked_pc 가 pc_id 와 다르면 알림 문구, 아니면 None. 차감은 막지 않는다."""
     b = why.get("booked_pc")
     if b is None or (isinstance(b, str) and not b.strip()):
-        return ("why.booked_pc(매니아가 적은 카드)가 없습니다 — 어느 계정인지 모르면 빼지 않습니다"
-                if FV_KINA_REQUIRE_BOOKED else None)
-    if not isinstance(b, str):
-        return "why.booked_pc 는 카드 id 글자여야 합니다"
-    bc = clean_pc_id(b.strip())
-    if not bc or bc.lower() != pc_id.lower():
-        return f"매니아 장부의 카드는 {bc or b!r} 인데 {pc_id} 에서 빼려 했습니다 — 빼지 않았습니다(카드를 다시 고르십시오)"
-    return None
+        return None
+    bc = clean_pc_id(b.strip()) if isinstance(b, str) else ""
+    if bc and bc.lower() == pc_id.lower():
+        return None
+    return f"매니아 글 계정 카드는 {bc or repr(b)[:40]} 인데 주인님이 고른 {pc_id} 에서 뺍니다(고른 카드가 진실)"
 
 
 @app.post("/api/fv/kina_adjust")
@@ -18073,11 +18069,9 @@ async def fv_kina_adjust(request: Request):
     _bk = _fv_kina_booked(why, pc_id)
     if _bk:
         try:
-            await insert_log(nspc, "warn", f"[팜뷰] 창고 키나 차감 거절 (tid {tid}, {delta:+,}): {_bk}")
+            await insert_log(nspc, "info", f"[팜뷰] 창고 키나 카드 다름 (tid {tid}, {delta:+,}): {_bk}")
         except Exception as e:
-            print(f"[fv] kina_adjust 거절 로그줄 실패 {pc_id} tid {tid}: {e}", flush=True)
-        return JSONResponse({"ok": False, "error": _bk, "err": _bk, "code": 409, "booked_mismatch": True},
-                            status_code=409)
+            print(f"[fv] kina_adjust 카드 다름 로그줄 실패 {pc_id} tid {tid}: {e}", flush=True)
     try:
         res = await adjust_char_kina(nspc, tid, delta, why)
     except (sqlite3.Error, OSError, asyncio.TimeoutError) as e:

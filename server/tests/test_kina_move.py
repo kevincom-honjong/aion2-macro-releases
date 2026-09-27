@@ -166,30 +166,26 @@ async def t_ambiguous_no_guess():
        await _kina("PC-KA1") == 98_000_000 and await _kina("PC-KA2") == 100_000_000, str(await _kina("PC-KA2")))
 
 
-async def t_booked_guard():
+async def t_booked_info_only():
+    # 아이온2 2026-09-27 — 주인님이 고른 카드(pc_id)가 진실. booked_pc 가 달라도 막지 않고 pc_id 에서 뺀다, 로그는 info 한 줄.
     await _read("PC-KB1", 500_000_000, _utc(-7200), 1)
     st, j = await _sell("PC-KB1", -100_000_000, "kb-mis", booked_pc="PC-KB2")
-    ok("KM-16 ★booked_pc 가 다른 카드면 409, 빼지 않는다★", st == 409 and j.get("booked_mismatch") is True
-       and await _kina("PC-KB1") == 500_000_000 and await _row("kb-mis") is None, str(j))
-    logs = [x.get("message") for x in await db.get_logs(main.ns("main", "PC-KB1"), 5)]
-    ok("KM-17 거절이 그 카드 로그에 남는다(flag)", any("차감 거절" in str(m) and "kb-mis" in str(m) for m in logs), str(logs[:1]))
+    ok("KM-16 ★booked_pc 가 달라도 200 · pc_id 에서 뺀다★", st == 200 and j.get("ok") is True
+       and await _kina("PC-KB1") == 400_000_000 and (await _row("kb-mis"))["pc_id"] == main.ns("main", "PC-KB1"), str(j))
+    logs = [x for x in await db.get_logs(main.ns("main", "PC-KB1"), 5)]
+    ok("KM-17 다름은 그 카드 로그에 info 로만", any("카드 다름" in str(x.get("message")) and "kb-mis" in str(x.get("message"))
+       and x.get("level") == "info" for x in logs), str([(x.get("level"), x.get("message")) for x in logs][:2]))
     st, j = await _sell("PC-KB1", -100_000_000, "kb-ok", booked_pc="pc-kb1")
-    ok("KM-18 booked_pc 가 같은 카드(대소문자 무관)면 뺀다", st == 200 and await _kina("PC-KB1") == 400_000_000, str(j))
+    ok("KM-18 같은 카드면 알림 없이 뺀다", st == 200 and await _kina("PC-KB1") == 300_000_000, str(j))
     st, j = await _sell("PC-KB1", -1, "kb-bad", booked_pc=7)
-    ok("KM-19 booked_pc 가 글자가 아니면 409(빼지 않음)", st == 409 and await _kina("PC-KB1") == 400_000_000, str(j))
+    ok("KM-19 booked_pc 가 글자가 아니어도 막지 않는다", st == 200 and await _kina("PC-KB1") == 299_999_999, str(j))
     st, j = await _sell("PC-KB1", -1_000_000, "kb-none")
-    ok("KM-20 booked_pc 없음 + 강제 꺼짐(지금 팜뷰) → 예전대로 뺀다", st == 200 and await _kina("PC-KB1") == 399_000_000, str(j))
-    main.FV_KINA_REQUIRE_BOOKED = True
-    try:
-        st, j = await _sell("PC-KB1", -1_000_000, "kb-none2")
-    finally:
-        main.FV_KINA_REQUIRE_BOOKED = False
-    ok("KM-21 강제 켜짐이면 booked_pc 없을 때 409 — 모르면 빼지 않는다", st == 409 and
-       await _kina("PC-KB1") == 399_000_000 and await _row("kb-none2") is None, str(j))
+    ok("KM-20 booked_pc 없음 → 그대로 뺀다", st == 200 and await _kina("PC-KB1") == 298_999_999, str(j))
+    ok("KM-21 «모르면 막기» 스위치는 없다(영구 삭제)", not hasattr(main, "FV_KINA_REQUIRE_BOOKED"))
 
 
 def test_all():
-    run_all([t_prod_case, t_undo, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_guard])
+    run_all([t_prod_case, t_undo, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_info_only])
     finish("test_kina_move", MIN_CHECKS)
 
 
