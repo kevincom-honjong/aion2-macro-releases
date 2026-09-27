@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from _harness import main, db, ok, run_all, finish   # noqa: E402
 import scout_alarm as S
 
-MIN_CHECKS = 45
+MIN_CHECKS = 51
 T0 = 1_790_000_000.0
 
 
@@ -311,13 +311,69 @@ async def t_wiring():
     ok("SC-44 서버가 쓰는 [스카우터] 줄은 「흐른다」 머리 목록에", "[스카우터]" in S.SERVER_LINE_HEADS)
 
 
+async def t_round2():
+    """아이온2 반증 2차(ad410e9) — HIGH 1 + LOW 3."""
+    pcs = [f"PC-7{i}" for i in range(10)]
+    sc, w = S.Scout(), World()
+    await run(sc, w, [card(p) for p in pcs], T0)
+    await run(sc, w, [card(p, "offline") for p in pcs], T0 + 10)
+    o = await run(sc, w, [card(p, "offline") for p in pcs], T0 + 200)
+    ok("SC-46 ★한 틱에 10대 사망 → 함대 알람 정확히 1통, 한 대씩은 0(2차 HIGH)★",
+       keys(o) == [(S.FLEET_ID, "mass")] and all(p in o[0][2] for p in pcs), str(keys(o)))
+    sc, w = S.Scout(), World()
+    await run(sc, w, [card(p) for p in pcs], T0)
+    await run(sc, w, [card(p, "offline") for p in pcs], T0 + 10)
+    w.fail = True
+    fails = [await run(sc, w, [card(p, "offline") for p in pcs], T0 + t) for t in (200, 260, 320)]
+    w.fail = False
+    sent = await run(sc, w, [card(p, "offline") for p in pcs], T0 + 380)
+    sent += await run(sc, w, [card(p, "offline") for p in pcs], T0 + 440)
+    ok("SC-47 ★텔레그램 3틱 실패 → 틱마다 후보 1개 · 복구 뒤 보낸 것 정확히 1통(쌓였다 쏟아지지 않음)★",
+       [len(f) for f in fails] == [1, 1, 1] and keys(sent) == [(S.FLEET_ID, "mass")], str([keys(f) for f in fails] + [keys(sent)]))
+    # LOW1 — 서버 줄은 시각·[텔레그램] 중계 머리에 싸여 온다
+    sc, w = S.Scout(), World()
+    await run(sc, w, [card("PC-80")], T0)
+    w.logs["PC-80"] = [(iso(T0 + 230), f"[2026-09-27 12:00:00] [텔레그램] 중계 전송: PC-80 | [순환] 다음 계정 대기")]
+    await run(sc, w, [card("PC-80", "offline", T0)], T0 + 10)
+    o = await run(sc, w, [card("PC-80", "offline", T0)], T0 + 241)
+    ok("SC-48 ★시각·중계 머리에 싸인 서버 줄은 「로그 흐름」이 아니다 → 죽은 PC 는 운다(2차 LOW1)★",
+       keys(o) == [("PC-80", "dead")], str(o))
+    ok("SC-49 매크로가 쓴 중계 줄(머리 뒤가 서버 머리 아님)은 서버 줄이 아니다",
+       not S.is_server_line("[2026-09-27 12:00:00] [텔레그램] 중계 전송: PC-80 | 🛑 사냥 정지")
+       and S.is_server_line("[알람] PC-80 | x") and not S.is_server_line("사냥 중"))
+    # LOW2 — 버그 알람은 보낸 뒤에만 「봤다」
+    sc, w = S.Scout(), World()
+    await run(sc, w, [card("PC-81"), card("PC-82")], T0)
+    w.bugs = ["PC-81_20260927_101000_captcha.png"]
+    w.fail = True
+    f1 = await run(sc, w, [card("PC-81"), card("PC-82")], T0 + 60)
+    w.bugs.append("PC-82_20260927_101000_stuck_map.png")
+    await run(sc, w, [card("PC-81"), card("PC-82", "idle")], T0 + 70)
+    f2 = await run(sc, w, [card("PC-81"), card("PC-82", "idle")], T0 + 700)
+    w.fail = False
+    o = await run(sc, w, [card("PC-81"), card("PC-82", "idle")], T0 + 760)
+    o2 = await run(sc, w, [card("PC-81"), card("PC-82", "idle")], T0 + 820)
+    ok("SC-50 ★버그 알람 전송 실패 → 복구 뒤 다시 보낸다(즉시·유예 둘 다) · 그다음은 조용(2차 LOW2)★",
+       keys(f1) == [("PC-81", "bug:captcha")] and ("PC-82", "bug:stuck_map") in keys(f2)
+       and sorted(keys(o)) == [("PC-81", "bug:captcha"), ("PC-82", "bug:stuck_map")] and o2 == [] and not sc.bug_pending,
+       str([keys(f1), keys(f2), keys(o), keys(o2)]))
+    # LOW3 — 전환 실패 알람만 error 와 겹친다
+    sc, w = S.Scout(), World()
+    await run(sc, w, [card("PC-83"), card("PC-84")], T0)
+    w.logs["PC-83"] = [(iso(T0 + 50), "[알람] PC-83 | 🧊 큐브 꽉참 5분 안 재발")]
+    w.logs["PC-84"] = [(iso(T0 + 50), "[알람] PC-84 | ⚠️ 본컴 런처 전환 실패 — 4/12단계")]
+    o = await run(sc, w, [card("PC-83", "error"), card("PC-84", "error")], T0 + 60)
+    ok("SC-51 ★다른 매크로 알람은 error 를 삼키지 않는다 · 전환 실패 알람만 겹침 처리(2차 LOW3)★",
+       keys(o) == [("PC-83", "error")], str(o))
+
+
 async def _rows(x):
     return x
 
 
 def test_all():
     run_all([t_offline, t_alive_exit_park, t_wsdead_and_merge, t_all_done_and_today, t_done_slot, t_error_and_bad_rows,
-             t_bugs, t_mass, t_mark_only_on_send, t_wiring])
+             t_bugs, t_mass, t_mark_only_on_send, t_wiring, t_round2])
     finish("test_scout_alarm", MIN_CHECKS)
 
 

@@ -55,6 +55,14 @@ PARK_MARKS = EXIT_MARKS + ("[원격명령] 매크로 정지", "stop 명령(사�
 PARK_CANCEL_MARKS = BOOT_MARKS + ("금지 해제", "일시정지 해제", "[원격명령] 수신: start", "[원격명령] 수신: restart")
 SERVER_LINE_HEADS = ("[순환]", "[효율]", "[스카우터]", "[팜뷰]", "[알람]", "[정지]")
 ALARM_HEAD = "[알람]"
+# 서버가 쓰는 줄은 «[YYYY-MM-DD HH:MM:SS] [텔레그램] 중계 …: PC | [순환] …» 처럼 시각·중계 머리에 싸여 온다(main._rot_say·_eff_say)
+_SERVER_WRAP = re.compile(r"^\s*(?:\[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\]\s*)?(?:\[텔레그램\][^|]*\|\s*)?")
+# 매크로가 스스로 운 「전환 실패」 알람 — 이것만 error 알람과 겹친다고 본다(반증 2차 LOW3: 아무 [알람] 이나 삼키지 않게)
+SWITCH_FAIL_RE = re.compile(r"전환 실패|뒷단계 실패")
+
+
+def is_server_line(m) -> bool:
+    return _SERVER_WRAP.sub("", str(m), count=1).startswith(SERVER_LINE_HEADS)
 
 
 def base_pc(pc_id) -> str:
@@ -192,6 +200,7 @@ class Scout:
         self.mass_died = {}
         self.mass_said = 0.0
         self.mass_last = []
+        self.bug_hold = {}                    # (물리 PC, key) -> 이번 틱 후보를 낸 새 이름들 — ★보낸 뒤에만★ 본 것으로
         self.first = True
         self.dirty = False
 
@@ -209,6 +218,12 @@ class Scout:
             return
         self.alerted[f"{pid}:{key}"] = now
         self.dirty = True
+        if key.startswith("bug:"):                # 버그 알람은 보낸 뒤에만 「봤다」·유예 끝 (반증 2차 LOW2)
+            if self.bug_seen is not None:
+                self.bug_seen |= set(self.bug_hold.pop((pid, key), []))
+            p = self.bug_pending.get(pid)
+            if p and p.get("key") == key:
+                self.bug_pending.pop(pid, None)
 
     def _cand(self, pid, key, why, now, window=RENOTIFY, again=False):
         if not self.due(pid, key, now, window):
@@ -220,10 +235,14 @@ class Scout:
             self.dirty = True
 
     def _mass(self, pid, dead, now, countable=True):
+        """기록만 한다 — 회선 알람은 틱 끝에 ★한 번★ 판정(_mass_cand). 반증 2차 HIGH: 카드마다 판정하면
+        3대째 뒤로 죽는 PC 마다 같은 알람이 한 틱에 또 나왔다(10대→8통)."""
         if dead and countable:
             self.mass_died.setdefault(pid, now)
         elif not dead:
             self.mass_died.pop(pid, None)
+
+    def _mass_cand(self, now):
         fresh = sorted(k for k, t in self.mass_died.items() if now - t <= MASS_WINDOW)
         if len(fresh) < MASS_N or now - self.mass_said < MASS_COOLDOWN:
             return None
@@ -253,7 +272,7 @@ class Scout:
 
         async def logs_flowing(pid):
             for t, m in reversed(await lines(pid) or []):
-                if str(m).lstrip().startswith(SERVER_LINE_HEADS):
+                if is_server_line(m):
                     continue                  # 서버가 쓴 줄은 매크로가 살아 있다는 증거가 아니다
                 a = age_s(t, now)
                 return a is not None and a < LOG_FRESH_S
@@ -261,7 +280,7 @@ class Scout:
 
         async def macro_alarmed(pid):
             for t, m in reversed(await lines(pid) or []):
-                if str(m).startswith(ALARM_HEAD) and "🔭" not in str(m):
+                if str(m).startswith(ALARM_HEAD) and "🔭" not in str(m) and SWITCH_FAIL_RE.search(str(m)):
                     a = age_s(t, now)
                     return a is not None and a < MACRO_ALARM_WINDOW
             return False
@@ -269,7 +288,8 @@ class Scout:
         # 7 새 버그스샷 이름 — 기준선은 첫 틱
         names = {str(n) for n in (bug_names or []) if n}
         new = [] if self.bug_seen is None else sorted(names - self.bug_seen, key=_shot_key)
-        self.bug_seen = names
+        self.bug_seen = set(names)
+        self.bug_hold = {}
         bases = {base_pc(r.get("pc_id")) for r in rows}
         by_base = {}
         for n in new:
@@ -282,7 +302,10 @@ class Scout:
                 for n, why in ([(hard[-1], "늘 깨우는 종류: 캡차·계정 혼입·예외")] if hard else
                                [(sw[-1], "전환 실패 = 유예 없이 바로")] if sw else []):
                     a = self._cand(bp, "bug:" + bug_kind(n), f"버그스샷 {bug_kind(n)} ({why})", now, EVENT_WINDOW)
-                    out += [a] if a else []
+                    if a:
+                        out.append(a)
+                        self.bug_hold[(bp, a[1])] = list(ns_)
+                        self.bug_seen -= set(ns_)     # 못 보내면 다음 틱에 다시 「새 이름」
                 if defer and not hard and not sw:
                     p = self.bug_pending.setdefault(bp, {"t0": now, "names": []})
                     p["t"] = now
@@ -313,19 +336,24 @@ class Scout:
                     continue
                 if not stopped and now - p["t0"] < BUG_TOTAL_CAP_S:
                     continue
-                self.bug_pending.pop(bp)
                 if muted_fn(bp) or (cards and all([bool(park_reason(await msgs(str(r.get("pc_id"))))) for r in cards])):
+                    self.bug_pending.pop(bp)
                     continue
                 k = bug_kind(p["names"][-1])
                 a = self._cand(bp, "bug:" + k, f"버그스샷 {k} → 첫 감지 {_fmt_min(now - p['t0'])} 뒤에도 멈춰 있음 "
                                                f"(자가복구 안 됨)", now, BUG_DEFER_WINDOW)
-                out += [a] if a else []
+                if a:
+                    out.append(a)
+                    p["key"] = a[1]           # 보낸 뒤 mark() 가 뺀다 — 실패하면 다음 틱에 다시
+                else:
+                    self.bug_pending.pop(bp)
             except Exception as e:
                 self.bug_pending.pop(bp, None)
                 print(f"[스카우터] {bp} 버그 유예 판정 실패(뺌): {type(e).__name__}: {e}", flush=True)
-        if any(k == "mass" for _p, k, _t in out):
+        m = self._mass_cand(now)
+        if m:
             # 이 틱에 회선 알람이 났으면 그 이름들의 한 대씩 알람은 뺀다(scouter: 집단이면 한 대 얘기를 안 한다)
-            out = [c for c in out if not (c[1] == "dead" and c[0] in self.mass_last)]
+            out = [c for c in out if not (c[1] == "dead" and c[0] in self.mass_last)] + [m]
         live = {str(r.get("pc_id")) for r in rows}
         for k in [k for k in self.since if k.split(":")[0] not in live]:
             self.since.pop(k, None)
@@ -384,10 +412,7 @@ class Scout:
                 self.since.pop(k, None)
                 continue
             if key == "dead":
-                m = self._mass(pid, True, now, countable)
-                if m:
-                    out.append(m)
-                    continue
+                self._mass(pid, True, now, countable)
             if muted:
                 continue
             dur = max(held, sil or 0) if kind == "offline" else held
