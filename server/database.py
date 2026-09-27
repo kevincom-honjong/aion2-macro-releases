@@ -1776,6 +1776,74 @@ async def kina_adjust_row(tid: str) -> dict | None:
     return d
 
 
+async def _kina_sale_known(db, pc_id: str, at: str, why_json) -> bool:
+    """이 카드의 ★지금 저장값★ 이 판매(at·why.hand_at)를 판독으로 이미 반영했나 — _kina_after_read 와 같은 규칙.
+    판독 시각 표식이 없으면(옛 매크로) 모른다 → False(장부 차감이 저장값에 들어간 쪽으로 본다)."""
+    async with db.execute("SELECT read_at FROM kina_read WHERE pc_id=?", (pc_id,)) as cur:
+        r = await cur.fetchone()
+    read_at = r[0] if r else None
+    if not read_at:
+        return False
+    hs = _hand_srv(why_json)
+    return (hs if hs is not None else at) <= read_at
+
+
+async def find_kina_adjust_tids(pc_id: str, delta: int, needle: str) -> list:
+    """그 카드·그 금액이면서 tid 에 needle 이 든 장부 줄의 tid 목록(판매 옮기기가 짐작 없이 한 줄을 고르는 데)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT tid FROM kina_adjust WHERE pc_id=? AND delta=? AND instr(tid, ?) > 0",
+                              (pc_id, int(delta), needle)) as cur:
+            return [r[0] for r in await cur.fetchall()]
+
+
+async def move_kina_adjust(tid: str, to_pc: str, note: str = "") -> dict:
+    """★매니아 판매를 다른 카드로 옮긴다 (2026-09-27 아이온2 — 1억9천이 PC-02b 에서 빠졌는데 팔린 건 PC-21c)★
+    장부 한 줄(tid)을 to_pc 로 옮기고 두 카드 저장값을 맞춘다. 한 트랜잭션.
+    · 옛 카드: 판독이 판매를 모르면(= 저장값이 이 차감을 뺀 채) 되돌린다 — 판매 뒤 새 판독이면 그 값이 진실이라 그대로.
+    · 새 카드: 판독이 판매를 ★모르면★ 뺀다(max 0) — 판매 뒤 판독이면 이미 반영된 값이라 안 뺀다.
+    · 행은 새 카드의 before/after 로 다시 적는다 → 그 뒤 판독 사다리(_kina_after_read)가 새 카드에서 옳게 돈다
+      (옛 카드에 행이 남으면 판매 전 판독이 재전송될 때 또 빠진다).
+    반환 {tid, from, to, from_before, from_after, to_before, to_after} · 없으면 {"missing": True} ·
+    이미 그 카드면 {"same": True} · 새 카드 행이 없으면 {"no_card": to_pc}(아무것도 안 바꿈)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute("SELECT pc_id, delta, why, at FROM kina_adjust WHERE tid=?", (tid,)) as cur:
+            row = await cur.fetchone()
+        if not row:
+            await db.execute("ROLLBACK")
+            return {"tid": tid, "missing": True}
+        frm, delta, why_json, at = row[0], int(row[1]), row[2], row[3]
+        if frm == to_pc:
+            await db.execute("ROLLBACK")
+            return {"tid": tid, "same": True, "to": to_pc}
+        async with db.execute("SELECT total_kina FROM char_info WHERE pc_id=?", (to_pc,)) as cur:
+            tr = await cur.fetchone()
+        if not tr:
+            await db.execute("ROLLBACK")
+            return {"tid": tid, "no_card": to_pc}
+        to_before = int(tr[0] or 0)
+        to_after = to_before if await _kina_sale_known(db, to_pc, at, why_json) else max(0, to_before + delta)
+        async with db.execute("SELECT total_kina FROM char_info WHERE pc_id=?", (frm,)) as cur:
+            fr = await cur.fetchone()
+        from_before = int(fr[0] or 0) if fr else None
+        from_after = from_before
+        if fr is not None and not await _kina_sale_known(db, frm, at, why_json):
+            from_after = min(KINA_MAX, from_before - delta)
+            await db.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (from_after, frm))
+        try:
+            w = json.loads(why_json or "{}") or {}
+        except Exception:
+            w = {}
+        w["moved"] = {"from": frm, "at": _now(), "note": note[:200]}
+        await db.execute("UPDATE kina_adjust SET pc_id=?, before=?, after=?, why=? WHERE tid=?",
+                         (to_pc, to_before, to_after, json.dumps(w, ensure_ascii=False), tid))
+        await db.execute("UPDATE char_info SET total_kina=? WHERE pc_id=?", (to_after, to_pc))
+        await db.commit()
+        _char_info_bump()
+    return {"tid": tid, "from": frm, "to": to_pc, "from_before": from_before, "from_after": from_after,
+            "to_before": to_before, "to_after": to_after}
+
+
 async def log_has(pc_id: str, needle: str) -> bool:
     """그 PC 로그에 needle 글자가 든 줄이 있나(instr — LIKE 의 %·_ 이스케이프가 필요 없다). 없으면 False."""
     async with aiosqlite.connect(DB_PATH) as db:

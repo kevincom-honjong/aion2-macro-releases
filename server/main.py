@@ -27,7 +27,7 @@ from database import (
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
     claim_updater_command_for_fv, finish_updater_command_fv, updater_command_for_fv_id, supersede_updater_command,
-    open_fv_claims, maintain_command_tables, heal_reverted_kina, sweep_fv_claims,
+    open_fv_claims, maintain_command_tables, heal_reverted_kina, sweep_fv_claims, move_kina_adjust, find_kina_adjust_tids,
     release_updater_command_from_fv, updater_command_status,
     recent_updater_commands,
     pc_clock_get, pc_clock_put, mark_updater_handed,
@@ -1482,6 +1482,7 @@ async def lifespan(app: FastAPI):
                              f"(tid {', '.join(_h['tids'])})")
     except Exception as _he:
         print(f"[팜뷰] 창고 키나 부팅 복구 실패(무시): {_he}")
+    await _kina_fix_moves()            # 엉뚱한 카드에서 뺀 매니아 판매 옮기기(2026-09-27)
     # 렌탈 킬스위치 복원(2026-08-06) — 볼륨 DB의 설정을 부팅 시 메모리로
     try:
         KILLED_TENANTS.update(_parse_killed(await get_setting(ns("main", "rental_kill")) or ""))
@@ -18003,6 +18004,57 @@ def _fv_kina_body(body) -> tuple:
     return pc_id, delta, why, tid
 
 
+# ★엉뚱한 카드에서 뺀 매니아 판매 (2026-09-27 아이온2)★ — 거래 #07963787(15:23 KST, 1억9천)의 글
+#   2026092707905532 는 매니아 장부상 PC-21c 계정인데 팜뷰가 PC-02b 카드로 보내 PC-02b 가 215,319,919 → 25,319,919 가 됐다.
+#   (from 카드, delta, tid 에 든 거래 번호, 매니아가 적은 카드). 부팅마다 보지만 멱등 — 행이 from 에 없으면 아무것도 안 한다.
+#   ★짐작 안 한다★: from 에서 그 번호·그 금액인 행이 정확히 한 줄일 때만 옮긴다.
+KINA_MOVES_20260927 = (("PC-02b", -190_000_000, "07963787", "PC-21c"),)
+
+
+async def _kina_fix_moves() -> None:
+    for frm, delta, tail, to in KINA_MOVES_20260927:
+        try:
+            nf, nt = ns(FV_TENANT, frm), ns(FV_TENANT, to)
+            tids = await find_kina_adjust_tids(nf, delta, tail)
+            if len(tids) != 1:
+                if tids:
+                    print(f"[팜뷰] 판매 옮기기 건너뜀 — {frm} tid*{tail} 가 {len(tids)}줄(짐작 안 함): {tids}", flush=True)
+                continue
+            r = await move_kina_adjust(tids[0], nt, note=f"매니아 장부 계정 {to} (아이온2 2026-09-27)")
+            if r.get("from") is None:
+                print(f"[팜뷰] 판매 옮기기 안 함 {frm}→{to} tid {tids[0]}: {r}", flush=True)
+                continue
+            _t = r["tid"]
+            print(f"[팜뷰] 판매 옮김 tid {_t} {frm} {r['from_before']}→{r['from_after']} · "
+                  f"{to} {r['to_before']:,}→{r['to_after']:,}", flush=True)
+            await insert_log(nf, "info", f"[팜뷰] 창고 키나 되돌림 {r['from_before']} → {r['from_after']} "
+                                         f"(tid {_t} 는 {to} 의 판매 — 매니아 장부, 잘못 빠졌던 것)")
+            await insert_log(nt, "info", f"[팜뷰] 창고 키나 {delta:+,} (tid {_t}, {frm} 에서 옮겨 옴 — 매니아 장부 계정) "
+                                         f"{r['to_before']:,} → {r['to_after']:,}")
+        except Exception as e:
+            print(f"[팜뷰] 판매 옮기기 실패(무시) {frm}→{to}: {type(e).__name__}: {e}", flush=True)
+
+
+# ★매니아가 적은 카드와 다르면 빼지 않는다 (2026-09-27 아이온2)★ — why.booked_pc(선택) = 매니아 장부의 그 글 계정 카드.
+#   다르면 409 booked_mismatch + 그 카드 로그줄(짐작해 빼지 않는다). 없을 때도 막으려면 True — 팜뷰가 booked_pc 를 보낼
+#   때까지는 False(켜면 지금 팜뷰의 모든 차감이 409). 합의는 CONTRACTS_대시보드 §13.
+FV_KINA_REQUIRE_BOOKED = False
+
+
+def _fv_kina_booked(why: dict, pc_id: str) -> "str | None":
+    """오류문 또는 None. booked_pc 가 있으면 pc_id 와 같아야 한다 · 없으면 FV_KINA_REQUIRE_BOOKED 가 정한다."""
+    b = why.get("booked_pc")
+    if b is None or b == "":
+        return ("why.booked_pc(매니아가 적은 카드)가 없습니다 — 어느 계정인지 모르면 빼지 않습니다"
+                if FV_KINA_REQUIRE_BOOKED else None)
+    if not isinstance(b, str):
+        return "why.booked_pc 는 카드 id 글자여야 합니다"
+    bc = clean_pc_id(b.strip())
+    if not bc or bc.lower() != pc_id.lower():
+        return f"매니아 장부의 카드는 {bc or b!r} 인데 {pc_id} 에서 빼려 했습니다 — 빼지 않았습니다(카드를 다시 고르십시오)"
+    return None
+
+
 @app.post("/api/fv/kina_adjust")
 async def fv_kina_adjust(request: Request):
     """팜뷰 «팔린 만큼 줄인다»(주인님 2026-09-13, CONTRACTS_팜뷰): 매니아에서 팔린 만큼 창고 키나를 뺀다.
@@ -18018,6 +18070,14 @@ async def fv_kina_adjust(request: Request):
     if pc_id is None:
         return _fv_err(400, delta)
     nspc = ns(FV_TENANT, pc_id)
+    _bk = _fv_kina_booked(why, pc_id)
+    if _bk:
+        try:
+            await insert_log(nspc, "warn", f"[팜뷰] 창고 키나 차감 거절 (tid {tid}, {delta:+,}): {_bk}")
+        except Exception as e:
+            print(f"[fv] kina_adjust 거절 로그줄 실패 {pc_id} tid {tid}: {e}", flush=True)
+        return JSONResponse({"ok": False, "error": _bk, "err": _bk, "code": 409, "booked_mismatch": True},
+                            status_code=409)
     try:
         res = await adjust_char_kina(nspc, tid, delta, why)
     except (sqlite3.Error, OSError, asyncio.TimeoutError) as e:
