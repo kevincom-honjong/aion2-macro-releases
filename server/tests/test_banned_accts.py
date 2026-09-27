@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, db, ok, run_all, finish, HTTPException   # noqa: E402
 
-MIN_CHECKS = 50
+MIN_CHECKS = 56
 C = TestClient(main.app, raise_server_exceptions=False)
 M = main
 IDS = {"1": "id1", "2": "id2", "3": "id3"}
@@ -146,6 +146,50 @@ async def t_rotation():
         ok("R-6 거부된 순환 송신은 명령 큐에 행을 안 만든다", before == after, "%s → %s" % (before, after))
 
 
+async def t_rot_guard():
+    said, stopped = [], []
+    o_say, o_stop, o_save = M._rot_say, M._rot_stop, M._rot_save
+
+    async def _say(t, pc, text, **kw):
+        said.append(text)
+
+    async def _stop(t, base, msg, st=None):
+        stopped.append(msg)
+
+    async def _save(force=False):
+        pass
+    M._rot_say, M._rot_stop, M._rot_save = _say, _stop, _save
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        for stage in ("hunting", "tasking", "switching"):
+            stopped.clear()
+            st = {"stage": stage, "since": M._rot_now(), "armed_at": M._rot_now() - 9999, "day": M._kst_today_key(),
+                  "full": False, "hops": 0, "visits": {}, "sent_at": M._rot_now()}
+            if stage == "tasking":
+                st["task"] = "corridor"
+            key = M.ns("main", "PC-20")
+            M._ROT[key] = st
+            M._ROT_STEP_CUR.update(key=key, st=st)
+            pcs = [{"pc_id": "PC-20", "status": "idle", "last_active": now_iso, "acct_ids": IDS,
+                    "acct_names": NAMES, "daily_progress": [], "banned": True}]
+            try:
+                await M._rot_step_pc("main", "PC-20", st, pcs)
+            except Exception as e:                   # noqa: BLE001
+                stopped.append("EXC " + str(e))
+            finally:
+                M._ROT_STEP_CUR.update(key=None, st=None)
+                M._ROT.pop(key, None)
+            hit = any("정지(OUT)" in m for m in stopped)
+            if stage == "switching":
+                ok("RG-3 전환 중(switching)엔 가드가 안 끼어든다(정지 카드에서 떠나는 중일 수 있다)", not hit, str(stopped))
+            else:
+                ok("RG-%s %s 단계에서 매크로가 정지 슬롯에 있으면 ★조용히 멈추지 않고★ 세우고 알린다" %
+                   ("1" if stage == "hunting" else "2", stage), hit, str(stopped))
+    finally:
+        M._rot_say, M._rot_stop, M._rot_save = o_say, o_stop, o_save
+
+
 async def t_guard():
     with _Keep():
         M.BANNED_ACCTS.update({M.ns("main", "PC-20b"), M.ns("main", "PC-20")})
@@ -161,9 +205,14 @@ async def t_guard():
         ok("G-2c 목표 번호 없는 전환(acct_index 만)은 정지 슬롯이 있는 PC 에선 거부 · 없는 PC 에선 통과",
            bool(g("main", "PC-20", "switch_launcher", {"acct_index": 1})[1])
            and g("main", "PC-33", "switch_launcher", {"acct_index": 1})[1] == "")
-        a, why = g("main", "PC-20", "find_host", {"adopt": True})
-        ok("G-2d find_host 도 정지 슬롯을 뺀 accounts 를 명시(로그인 순회·adopt 가 정지 계정으로 안 간다)",
+        a, why = g("main", "PC-20c", "find_host", {"adopt": True})
+        ok("G-2d find_host(목록 없음)는 ★지금 계정 먼저★ + 정지 슬롯 뺀 나머지(계정3 에서 → [3,4,5])",
            why == "" and a.get("accounts") == [3, 4, 5] and a.get("adopt") is True, str(a))
+        a, why = g("main", "PC-20", "find_host", {})
+        ok("G-2e 지금 계정이 정지 슬롯이어도 맨 앞(이미 로그인 = 로그인 0회) · 다른 정지 슬롯은 뺀다([1,3,4,5])",
+           why == "" and a.get("accounts") == [1, 3, 4, 5], str(a))
+        a, why = g("main", "PC-20c", "find_host", {"accounts": [2, 3]})
+        ok("G-2f find_host 에 목록이 오면 그 목록에서만 정지 슬롯을 뺀다([2,3] → [3])", a.get("accounts") == [3], str(a))
         a, why = g("main", "PC-20", "switch_launcher", {"acct_no": 3, "chrome_label": "c"})
         ok("G-3 정지 아닌 계정3 으로는 그대로 간다", why == "" and a == {"acct_no": 3, "chrome_label": "c"})
         a, why = g("main", "PC-20", "acct_tour", {"accounts": [1, 2, 3], "task": "collect"})
@@ -266,7 +315,7 @@ console.log(JSON.stringify({
 
 
 def test_all():
-    run_all([t_names, t_seed, t_cards, t_rotation, t_guard, t_endpoints, t_js])
+    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_endpoints, t_js])
     finish("test_banned_accts", MIN_CHECKS)
 
 

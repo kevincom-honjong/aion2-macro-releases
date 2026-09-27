@@ -267,11 +267,20 @@ def _ban_check_cmd(tenant: str, pc_id: str, command: str, args: dict) -> tuple:
         return args, ""
     if command in ("acct_tour", "find_host"):   # find_host 도 accounts 를 차례로 로그인한다(반증 #276-6)
         raw = (args or {}).get("accounts")
-        seq = list(raw) if isinstance(raw, (list, tuple)) and raw else list(range(1, MAX_ACCT + 1))
+        given = isinstance(raw, (list, tuple)) and bool(raw)
+        cur = _rot_acct_no(clean_pc_id(pc_id or ""))
+        if given:
+            seq = list(raw)
+        elif command == "find_host":
+            # (재반증 #276-c) 기본 find_host 는 ★지금 계정부터★ 본다(이미 로그인 = 로그인 0회, host_probe._labels).
+            #   1부터 채우면 로그인 탐색이 계정1부터 차례로 로그인한다(반복 로그인 = 정지 위험). 지금 계정을 맨 앞에.
+            seq = [cur] + [n for n in range(1, MAX_ACCT + 1) if n != cur]
+        else:
+            seq = list(range(1, MAX_ACCT + 1))
         keep = []
         for x in seq:
             n = _cmd_target_acct({"label": str(x)})
-            if not (n and n in slots):
+            if not (n and n in slots) or (command == "find_host" and not given and n == cur):
                 keep.append(x)
         if not keep:
             return args, f"{base} 순회할 계정이 전부 {BANNED_LABEL}(#276)"
@@ -15478,6 +15487,14 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
 
     # ── ★무장 수명 [C6-②] 는 없앴다 (2026-09-09 주인님 지시)★ ────────────
     #   상수 자리 묘비에 이유와 ★남는 위험★ 을 적어뒀다. 다시 만들지 마라.
+
+    # ★#276 가드★ 매크로가 지금 정지(OUT) 슬롯에 있으면 순환이 할 일이 없다 — 정지 계정은 완주(daily_progress)가
+    #   비워져 ① 이 영원히 기다리고(상한 없음, 사고 611) 작업 순환은 정지 계정에 일을 보낸다. 조용히 멈추지 않고 세운다.
+    if stage in ("hunting", "tasking") and active and active.get("banned"):
+        await _rot_stop(tenant, base,
+                        f"⛔ 순환 정지 — 지금 계정{_rot_acct_no(active.get('pc_id'))} 은 {BANNED_LABEL}(#276)입니다. "
+                        f"다른 계정으로 전환한 뒤 ▶시작을 다시 눌러주세요")
+        return
 
     # ── ⑤ 작업 순환: 이 계정에서 작업이 끝나기를 기다린다 (2026-08-23) ──────
     #   ★'보냈다' 와 '했다' 는 다르다 (§A2)★ — 명령을 큐에 넣은 것만으로 넘어가면
