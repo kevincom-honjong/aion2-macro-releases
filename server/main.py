@@ -16368,29 +16368,39 @@ _SCOUT = _scout_mod.Scout()
 _SCOUT_LOADED = [False]
 
 
-async def _scout_say(tenant: str, pc_id: str, text: str) -> "bool | None":
-    """🔭 한 통 — 옛 스카우터와 같은 글(「🔭 스카우터: PC — 이유」)·같은 규칙(음소거·은퇴 존중). 카드 이벤트도 남긴다."""
-    msg = f"🔭 스카우터: {pc_id} — {text}"
-    print(f"[스카우터] {msg}", flush=True)
+def _scout_muted(tenant: str, pc_id: str) -> bool:
+    """음소거·은퇴 — 이런 PC 는 후보도 안 만들고 집단 사망 셈에도 안 넣는다(반증 MED-6)."""
     try:
-        await insert_log(ns(tenant, pc_id), "warn", f"[스카우터] {text}")
+        return ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0
     except Exception:
-        pass
+        return False
+
+
+async def _scout_say(tenant: str, pc_id: str, text: str) -> bool:
+    """🔭 한 통 — 옛 스카우터와 같은 글(「🔭 스카우터: PC — 이유」). ★실제로 텔레그램이 나갔을 때만 True★(그때만 장부에 적는다).
+    함대 알람(FLEET_ID)은 PC 음소거를 안 탄다(한 대가 음소거라고 회선 알람이 삼켜지지 않게 — 반증 MED-6)."""
+    msg = f"🔭 스카우터: {pc_id} — {text}"
+    fleet = pc_id == _scout_mod.FLEET_ID
     chat = tenant_chat_id(tenant)
     if not (tg_enabled() and chat):
-        return None
-    if ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0:
-        return None
+        return False
+    if not fleet and _scout_muted(tenant, pc_id):
+        return False
     try:
         mid = await tg_send_text(chat, f"{pc_id} | {msg}")
     except Exception as e:
         print(f"[스카우터] 텔레그램 실패: {e}", flush=True)
         mid = None
-    try:
-        await _alarm_event(tenant, pc_id, msg, tg_failed=mid is None)
-    except Exception:
-        pass
-    return mid is not None
+    print(f"[스카우터] {msg}{'' if mid else ' (텔레그램 실패 — 다음 틱에 다시)'}", flush=True)
+    if mid is None:
+        return False
+    if not fleet:
+        try:
+            await insert_log(ns(tenant, pc_id), "warn", f"[스카우터] {text}")
+            await _alarm_event(tenant, pc_id, msg)
+        except Exception:
+            pass
+    return True
 
 
 async def _scout_logs(tenant: str, pc_id: str) -> list:
@@ -16398,7 +16408,7 @@ async def _scout_logs(tenant: str, pc_id: str) -> list:
 
 
 async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
-    """한 틱 — 알린 것 [(pc, key, text)] 을 돌려준다(시험이 부른다)."""
+    """한 틱 — ★보낸★ 것 [(pc, key, text)] 을 돌려준다(시험이 부른다)."""
     if not _SCOUT_LOADED[0]:
         try:
             raw = await get_setting("scout_alerted")
@@ -16409,10 +16419,14 @@ async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
         _SCOUT_LOADED[0] = True
     now = time.time() if now is None else now
     pcs = await _build_full_state(tenant)
-    out = await _SCOUT.step(pcs, now, lambda p: _scout_logs(tenant, p),
-                            lambda bp: [x.get("filename") for x in _list_bug_files(tenant, bp)])
-    for pc_id, _key, text in out:
-        await _scout_say(tenant, pc_id, text)
+    names = [x.get("filename") for x in _list_bug_files(tenant)]      # _bug_scan 캐시(엔드포인트와 같은 부름 — 스레드 안 씀)
+    cands = await _SCOUT.step(pcs, now, lambda p: _scout_logs(tenant, p), names,
+                              lambda p: _scout_muted(tenant, p))
+    sent = []
+    for pc_id, key, text in cands:
+        if await _scout_say(tenant, pc_id, text):
+            _SCOUT.mark(pc_id, key, now)
+            sent.append((pc_id, key, text))
     if _SCOUT.dirty:
         _SCOUT.dirty = False
         keep = {k: v for k, v in _SCOUT.alerted.items() if now - v < 2 * _scout_mod.RENOTIFY}
@@ -16422,7 +16436,7 @@ async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
             await set_setting("scout_alerted", json.dumps(keep))
         except Exception as e:
             print(f"[스카우터] 장부 저장 실패(무시): {e}", flush=True)
-    return out
+    return sent
 
 
 async def _scout_loop() -> None:
