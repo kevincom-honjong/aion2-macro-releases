@@ -133,3 +133,12 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
   (판독이 판매를 모르는 쪽만 고침 · 같은 번호·금액이 두 줄이면 안 옮김 · 멱등). 이 거래는 한 번 PC-21c 로 옮겼다가(boot 053ca0bc)
   주인님 선택이 확인돼 같은 길로 PC-02b 로 되돌렸다. 한 방향 줄만 둔다(둘 다 두면 부팅마다 왔다 갔다).
 - 시험: `tests/test_kina_move.py`.
+
+## 14. `/status` 카드 `_kina_adj_tids` (2026-09-27 아이온2 — 매니아 창구가 판매를 두 번 빼지 않게, 더하기만)
+- 모든 카드에 ★늘★ 목록(`list[str]`, 없으면 `[]`): 지금 `_total_kina` 에 ★`_kina_read_at` 판독 뒤★ 들어간 `kina_adjust` 차감의 tid, 기록 순.
+- 규칙은 서버 차감 규칙(`database._kina_after_read`)과 같다: 기록 시각 > 판독 이고, `why.hand_at`(인계)이 있으면 인계도 > 판독.
+  판독 시각 = `kina_read.read_srv`(= `_kina_read_at`), 없는 옛 매크로 카드는 `collected_at`.
+- 새 게임 판독이 그 카드를 바꾸면 저절로 빈다. `_kina_read_at` 은 ★움직이지 않는다★(게임 판독 시각 그대로).
+- 판매를 옮기면(`move_kina_adjust`) tid 가 카드를 따라간다.
+- 창구 쓰는 법: 판독 값에서 내 판매를 뺄 때, 그 tid 가 이 목록에 있으면 이미 빠진 값이다 — 또 빼지 않는다.
+- 시험: `tests/test_kina_move.py` KM-27~33.

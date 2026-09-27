@@ -1902,6 +1902,8 @@ def _attach_char_info(card: dict, ci: dict | None) -> None:
     """char_info 한 행을 카드에 붙인다 — 이름 목록·창고키나·수집 시각.
     (2026-09-12 정리: _build_full_state 안에 똑같은 블록이 두 번 있었다 — base 카드용과
      매크로가 죽어 pc_status 가 없는 업데이터 전용 카드용. 규칙은 하나여야 한다, §A12)"""
+    # ★_kina_adj_tids (2026-09-27 아이온2, CONTRACTS_대시보드 §14)★ — 이 카드 창고키나에 판독(_kina_read_at) 뒤 들어간 차감 tid. 늘 목록.
+    card["_kina_adj_tids"] = list((ci or {}).get("kina_adj_tids") or [])
     if not ci:
         return
     if ci.get("chars"):

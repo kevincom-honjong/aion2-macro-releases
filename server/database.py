@@ -1682,6 +1682,18 @@ async def get_all_char_info() -> list[dict]:
             "FROM char_info c LEFT JOIN kina_read r ON r.pc_id = c.pc_id ORDER BY c.pc_id"
         ) as cur:
             rows = await cur.fetchall()
+        # ★kina_adj_tids (2026-09-27 아이온2 — 매니아 창구가 판매를 두 번 빼지 않게)★ — 지금 저장값에 ★판독 뒤★ 들어간 차감 tid.
+        #   판독 = kina_read.read_srv(= /status _kina_read_at), 없으면(옛 매크로) collected_at. 규칙은 _kina_after_read 와 같다
+        #   (인계 시각 hand_at 이 판독 전이면 판독이 이미 안다 → 빼지 않는다). 새 판독이 오면 저절로 빈다.
+        async with db.execute(
+            "SELECT k.pc_id, k.tid, k.why, k.at, COALESCE(r.read_srv, c.collected_at) AS rd FROM kina_adjust k "
+            "JOIN char_info c ON c.pc_id = k.pc_id LEFT JOIN kina_read r ON r.pc_id = k.pc_id "
+            "WHERE k.at > COALESCE(r.read_srv, c.collected_at, '') ORDER BY k.at, k.rowid"
+        ) as cur:
+            adj = {}
+            for r in await cur.fetchall():
+                if not _kina_known_by(r["rd"], r["at"], r["why"]):
+                    adj.setdefault(r["pc_id"], []).append(r["tid"])
     result = []
     for row in rows:
         try:
@@ -1695,6 +1707,7 @@ async def get_all_char_info() -> list[dict]:
             "collected_at": row["collected_at"],
             "kina_ledger": bool(row["kina_ledger"]),
             "kina_read_at": row["kina_read_srv"],
+            "kina_adj_tids": adj.get(row["pc_id"], []),
         })
     return result
 
@@ -1783,6 +1796,11 @@ async def _kina_sale_known(db, pc_id: str, at: str, why_json) -> bool:
     async with db.execute("SELECT COALESCE(read_srv, read_at) FROM kina_read WHERE pc_id=?", (pc_id,)) as cur:
         r = await cur.fetchone()
     read = r[0] if r else None
+    return _kina_known_by(read, at, why_json)
+
+
+def _kina_known_by(read, at: str, why_json) -> bool:
+    """판독 시각 read(서버 시계)가 이 차감(at·why.hand_at)을 이미 반영했나 — _kina_after_read 와 같은 규칙. read 가 없으면 False."""
     if not read:
         return False
     if at <= read:

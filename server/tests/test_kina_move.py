@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 27
+MIN_CHECKS = 34
 TOK = "fvsecret-km"
 H = {"X-FV-Token": TOK}
 
@@ -184,8 +184,46 @@ async def t_booked_info_only():
     ok("KM-21 «모르면 막기» 스위치는 없다(영구 삭제)", not hasattr(main, "FV_KINA_REQUIRE_BOOKED"))
 
 
+async def _tids(pc):
+    ci = {r["pc_id"]: r for r in await db.get_all_char_info()}.get(main.ns("main", pc))
+    card = {}
+    main._attach_char_info(card, ci)
+    return card.get("_kina_adj_tids"), card.get("_kina_read_at")
+
+
+async def t_adj_tids():
+    # 아이온2 2026-09-27 — /status 카드 _kina_adj_tids: 판독(_kina_read_at) 뒤에 이 카드에서 뺀 차감 tid(창구가 두 번 안 빼게)
+    ra = _utc(-7200)
+    await _read("PC-T1", 500_000_000, ra, 1)
+    await _read("PC-T2", 300_000_000, _utc(-7200), 1)
+    t, r0 = await _tids("PC-T1")
+    ok("KM-27 판독만 있으면 빈 목록(늘 목록)", t == [], str(t))
+    await _sell("PC-T1", -100_000_000, "tt-1", hand_at=_epoch(-60))
+    await _sell("PC-T1", -1_000_000, "tt-2")
+    t, r1 = await _tids("PC-T1")
+    ok("KM-28 ★차감 → tid 가 판독 뒤 순서대로★ · _kina_read_at 은 그대로(판독 시각)", t == ["tt-1", "tt-2"] and r1 == r0, "%s %s %s" % (t, r0, r1))
+    await db.move_kina_adjust("tt-1", main.ns("main", "PC-T2"))
+    ok("KM-29 ★옮기면 tid 가 카드를 따라간다★", (await _tids("PC-T1"))[0] == ["tt-2"] and (await _tids("PC-T2"))[0] == ["tt-1"],
+       "%s %s" % ((await _tids("PC-T1"))[0], (await _tids("PC-T2"))[0]))
+    await db.move_kina_adjust("tt-1", main.ns("main", "PC-T1"))
+    ok("KM-30 되돌리면 다시 원래 카드로", (await _tids("PC-T1"))[0] == ["tt-1", "tt-2"] and (await _tids("PC-T2"))[0] == [],
+       str((await _tids("PC-T1"))[0]))
+    await _read("PC-T1", 399_000_000, _utc(+2), 2)
+    t, r2 = await _tids("PC-T1")
+    ok("KM-31 ★새 판독이 오면 빈다★(판독 시각도 새것)", t == [] and r2 and r2 != r0, "%s %s" % (t, r2))
+    # 판독 전에 인계된 판매가 판독 뒤에 기록되면 판독이 이미 안다 → 목록에 없다
+    await _read("PC-T3", 100_000_000, _utc(-600), 1)
+    await _sell("PC-T3", -1_000, "tt-3", hand_at=_epoch(-7300))     # 기록은 판독 뒤, 인계는 판독 전
+    await _sell("PC-T3", -2_000, "tt-4", hand_at=_epoch(-60))       # 인계도 판독 뒤
+    ok("KM-32 인계가 판독 전이면 목록에 없다(_kina_after_read 와 같은 규칙)", (await _tids("PC-T3"))[0] == ["tt-4"],
+       str((await _tids("PC-T3"))[0]))
+    card = {}
+    main._attach_char_info(card, None)
+    ok("KM-33 char_info 없는 카드도 빈 목록", card.get("_kina_adj_tids") == [], str(card))
+
+
 def test_all():
-    run_all([t_prod_case, t_undo, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_info_only])
+    run_all([t_prod_case, t_undo, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_info_only, t_adj_tids])
     finish("test_kina_move", MIN_CHECKS)
 
 
