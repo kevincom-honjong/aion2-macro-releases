@@ -44,6 +44,8 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
       "silent_s": 1,
       "ws_live": false,
       "macro_version": "1.1.926",
+      "banned": false,
+      "banned_slots": [],
       "doing": {
         "status": "hunting",
         "switch_step": "15 게임 실행",
@@ -823,3 +825,21 @@ asyncio.run(main())
 - 중복 막기·감사 장부는 서버 표 `fv_notify(key PK, pc_id, text, status, n, first_at, last_at, sent_at, message_id)` — 재배포에도 남는다(볼륨). `status` = `sent`|`dup`|`limited`|`send_failed`|`disabled`(마지막 결과, 단 `sent` 는 뒤 결과가 안 덮는다), `n` = 장부에 닿은 요청 수 — ★이미 보낸 key 의 dup 은 서버 기억으로 답하고 장부를 안 쓴다★(상한이 없는 dup 이 DB 를 두드리지 않게; 재시작 뒤 첫 dup 만 한 번 센다). 30일 지난 key 는 지운다(그 뒤 같은 key 는 새 알림).
 - `GET /api/fv/notify?limit=50`(1~200) → `{ok:true, items:[행…]}` 새것부터 — 감사용 읽기.
 - 상한·«지금 보내는 중»·보낸 key 기억은 서버 프로세스 안이다(재배포 때 비워진다 — 보낸 key 는 장부 표가 계속 막는다; 워커 하나 전제 — 여러 워커면 서버가 시작할 때 크게 경고한다).
+
+
+## 2026-09-27 추가 — `banned` · `banned_slots` 정지 계정 슬롯 (#276, 대시보드 세션 · 더하기만)
+주인님 #276: 운영정책 이용 제한을 받은 ★계정 슬롯★ 을 「정지(OUT)」로 뺀다(대시보드 카드·순환·전환 거부는 `CONTRACTS_대시보드.md` §12).
+팜뷰 합의(§12-b) 조건 그대로:
+- ★snapshot `pcs` 의 모든 카드★(계정 카드 `PC-22`·`PC-22b`… 각각)와 `/api/fv/pc/<id>` 에 ★항상★ 싣는다 — 아니면 `false` / `[]`.
+- `banned` : `bool`. ★`true` 만★ 정지 — 이 카드(= 이 계정 슬롯)가 정지다. 그 밖(`false`·없음·다른 값)은 정지 아님.
+- `banned_slots` : `list[int]` — 같은 물리 PC 의 정지 계정 번호(`1` = 본계정 = 접미사 없는 카드, `2` = `b` …), 오름차순, 없으면 `[]`.
+  카드가 아직 없는 계정(보고한 적 없는 슬롯)도 여기로 알 수 있다.
+- `status` 값은 그대로다: 정지 카드는 `no_account`(계정 칸·진행도는 비움), 단 ★매크로가 지금 그 슬롯에 있으면 실제 status★ 를 둔다(전환해 나갈 수 있게).
+  그러니 화면 라벨은 `banned === true` 를 status 보다 먼저 본다 → 「정지(OUT)」.
+- `global.totals` 는 정지 슬롯을 이미 뺀다(은퇴·계정없음과 같은 규칙 `_fv_pc_excluded`).
+- 예:
+```json
+"PC-04":  {"pc_id": "PC-04",  "status": "no_account", "banned": true,  "banned_slots": [1], "…": "…"},
+"PC-04b": {"pc_id": "PC-04b", "status": "hunting",    "banned": false, "banned_slots": [1], "…": "…"},
+"PC-05":  {"pc_id": "PC-05",  "status": "hunting",    "banned": false, "banned_slots": [],  "…": "…"}
+```

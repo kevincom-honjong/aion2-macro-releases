@@ -10,13 +10,14 @@
   I6 순환 정보수집 상한이 6캐릭 28.5분(PC-07 실측)을 넘긴다          (SHARED_ISSUES_아이온2 #1)
   I7 팜뷰 ocr.py 가 부르는 /api/fv/ocr/* 가 서버에 전부 있다(메서드까지) (FV_API «밤 › D» · 2026-09-24 #125)
   I8 대시보드 목소리 번호 읽기(ttsText) = 팜뷰 화면 JS = 팜뷰 alarmvoice.speak_text  (#172 후속 · 2026-09-24)
+  I9 FV banned(bool)·banned_slots(list[int]) 가 snapshot 의 ★모든 카드★ 에 항상 (#276 · CONTRACTS_대시보드 §12-b 팜뷰 합의)
 """
 import os
 import sys
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 29
+MIN_CHECKS = 35
 
 
 async def t_ack_cancelled():
@@ -251,5 +252,39 @@ def t_tts_same_answer():
     ok("I8 대시보드에서 말하는 자리(SpeechSynthesisUtterance·Audio)는 speak·speakLocal 안에만", owners == {"speak", "speakLocal"}, str(owners))
 
 
-run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap, t_fv_ocr_paths, t_tts_same_answer])
+async def t_fv_banned():
+    import json as _j
+    main.FV_TOKEN = "fvsecret"
+    H = {"X-FV-Token": "fvsecret"}
+    for p, st in (("PC-I9", "idle"), ("PC-I9b", "idle"), ("PC-I8", "idle")):
+        await db.upsert_status(p, {"pc_id": p, "status": st})
+    old = set(main.BANNED_ACCTS)
+    main.BANNED_ACCTS.clear()
+    main.BANNED_ACCTS.add(main.ns("main", "PC-I9"))
+    try:
+        main._fv_snap["body"] = None
+        r = await main.fv_snapshot(Req(api_key=None, headers=H))
+        pcs = _j.loads(bytes(r.body))["pcs"]
+    finally:
+        main.BANNED_ACCTS.clear()
+        main.BANNED_ACCTS.update(old)
+        main._fv_snap["body"] = None
+    ok("I9 모든 카드에 banned(bool)·banned_slots(list[int]) 가 항상 있다",
+       bool(pcs) and all(isinstance(v.get("banned"), bool) and isinstance(v.get("banned_slots"), list)
+                         and all(type(n) is int for n in v["banned_slots"]) for v in pcs.values()),
+       str({k: (v.get("banned"), v.get("banned_slots")) for k, v in pcs.items()})[:300])
+    a, b, c = pcs.get("PC-I9") or {}, pcs.get("PC-I9b") or {}, pcs.get("PC-I8") or {}
+    ok("I9 정지 슬롯 카드(계정1) = banned true · [1]", a.get("banned") is True and a.get("banned_slots") == [1], str(a)[:160])
+    ok("I9 같은 PC 형제 카드 = banned false · [1]", b.get("banned") is False and b.get("banned_slots") == [1], str(b)[:160])
+    ok("I9 정지 없는 PC = false · []", c.get("banned") is False and c.get("banned_slots") == [], str(c)[:160])
+    v = main._fv_pc_view({"pc_id": "PC-X", "status": "idle", "banned": "yes", "banned_slots": [2, True, "3", 9, 1]})
+    ok("I9 bool true 만 정지 · 목록은 1~MAX_ACCT 정수만(오름차순)", v["banned"] is False and v["banned_slots"] == [1, 2], str(v["banned_slots"]))
+    here = os.path.dirname(os.path.abspath(__file__))
+    doc = open(os.path.join(here, "..", "..", "FV_API.md"), encoding="utf-8").read()
+    ok("I9 FV_API.md(정본)에 두 칸이 적혀 있다", "`banned` · `banned_slots`" in doc and '"banned_slots": [],' in doc)
+    for p in ("PC-I9", "PC-I9b", "PC-I8"):
+        await db.delete_status(p)
+
+
+run_all([t_ack_cancelled, t_fv_ints, t_fv_raw, t_fv_all, t_parsec_token, t_collect_cap, t_fv_ocr_paths, t_tts_same_answer, t_fv_banned])
 finish("test_integration_contracts", MIN_CHECKS)

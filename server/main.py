@@ -17528,6 +17528,11 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
         "silent_s":    _fv_int(row.get("_macro_silent_s")),   # 항상 정수(통합 2026-09-12)
         "ws_live":     row.get("_ws_live"),
         "macro_version": row.get("macro_version"),
+        # ★#276 정지 슬롯 (2026-09-27, 팜뷰 합의 CONTRACTS_대시보드 §12-b)★ — 모든 카드에 ★항상★ 싣는다.
+        #   banned 는 bool true 만 정지(그 카드 = 정지 슬롯) · banned_slots 는 같은 물리 PC 의 정지 계정 번호(1=본계정), 없으면 [].
+        "banned":       row.get("banned") is True,
+        "banned_slots": sorted({int(n) for n in (row.get("banned_slots") or [])
+                                if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= MAX_ACCT}),
         "doing": {
             "status":       st,
             "switch_step":  row.get("switch_step"),
