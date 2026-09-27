@@ -1534,7 +1534,7 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task):
             if _t:
                 _t.cancel()
                 try:
