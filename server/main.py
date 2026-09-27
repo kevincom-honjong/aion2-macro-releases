@@ -173,6 +173,9 @@ def _no_account_list(tenant: str) -> list:
 #   설정 `banned_accts` = 콤마 목록(ns 키). 푸는 손잡이 = DELETE /admin/banned_accts/{acct}.
 BANNED_ACCTS: set = set()
 BANNED_LABEL = "정지(OUT)"
+# ★목록이 진짜인가★(프로그램 방 SHARED_ISSUES_아이온2) — 설정 읽기가 실패하면 BANNED_ACCTS 는 빈 집합인데 그건
+#   「정지 없음」이 아니라 「모름」이다. 매크로에 loaded=false 로 알려 캐시를 지키게 한다.
+_BANNED_LOADED = [False]
 # 주인님 #276 원문 대상 10슬롯 — 설정이 ★한 번도 안 쓰였을 때만★ 이 값으로 심는다(한 번 쓰이면 설정이 정본).
 BANNED_SEED_276 = ("PC-01b", "PC-04", "PC-10c", "PC-12b", "PC-15", "PC-16", "PC-17b",
                    "PC-22", "PC-22b", "PC-22c")
@@ -288,7 +291,7 @@ def _ban_check_cmd(tenant: str, pc_id: str, command: str, args: dict) -> tuple:
     return args, ""
 
 
-async def _banned_restore() -> None:
+async def _banned_restore() -> bool:
     """부팅 복원(#276). 설정이 ★한 번도 안 쓰였으면(None)★ 주인님 #276 대상으로 한 번 심고 저장한다 —
     그 뒤로는 설정이 정본(해제해서 빈 값 "" 이 되면 다시 심지 않는다)."""
     try:
@@ -301,8 +304,10 @@ async def _banned_restore() -> None:
             BANNED_ACCTS.update(_parse_no_account(_ba))
             if BANNED_ACCTS:
                 print(f"[정지] 목록 복원: {sorted(BANNED_ACCTS)}")
+        _BANNED_LOADED[0] = True
     except Exception as e:
-        print(f"[정지] banned_accts 로드 실패(무시): {e}")
+        print(f"[정지] banned_accts 로드 실패(무시 — loaded=false 로 알린다): {e}")
+    return _BANNED_LOADED[0]
 
 
 def _blank_acct_fields(_pc: dict) -> None:
@@ -11575,8 +11580,13 @@ async def banned_for_pc(pc_id: str, request: Request):
     if not tenant:
         raise HTTPException(status_code=401)
     base = _base_pc(clean_pc_id(pc_id))
+    if not _BANNED_LOADED[0]:
+        await _banned_restore()         # 부팅 때 실패했으면 한 번 더(DB 한 줄)
+    if not _BANNED_LOADED[0]:
+        # ★빈 목록을 주지 않는다★ — 「정지 없음」으로 읽히면 매크로가 캐시를 버린다
+        return JSONResponse({"pc": base, "loaded": False, "slots": None, "labels": None, "label": BANNED_LABEL})
     sl = _banned_slots(tenant, base)
-    return JSONResponse({"pc": base, "slots": sl, "labels": [ACCT_LABELS[n - 1] for n in sl],
+    return JSONResponse({"pc": base, "loaded": True, "slots": sl, "labels": [ACCT_LABELS[n - 1] for n in sl],
                          "label": BANNED_LABEL})
 
 
@@ -11598,6 +11608,8 @@ async def admin_banned_add(request: Request):
     raw = body.get("accts") if isinstance(body, dict) else None
     if not isinstance(raw, list) or not raw or len(raw) > 200:
         raise HTTPException(status_code=400, detail='{"accts": [...]} 가 필요합니다')
+    if not _BANNED_LOADED[0] and not await _banned_restore():
+        raise HTTPException(status_code=503, detail="정지 목록을 못 읽었습니다 — 덮어쓰면 저장본이 지워집니다. 잠시 뒤 다시")
     ids = [_ban_card_id(x) for x in raw]
     bad = [str(x) for x, c in zip(raw, ids) if not c]
     if bad:
@@ -11613,6 +11625,8 @@ async def admin_banned_add(request: Request):
 async def admin_banned_del(acct: str, request: Request):
     """#276 정지 해제(푸는 손잡이) — acct 는 「PC-01b」 또는 「PC-01#2」(URL 에선 %23)."""
     tenant = _require_session(request)
+    if not _BANNED_LOADED[0] and not await _banned_restore():
+        raise HTTPException(status_code=503, detail="정지 목록을 못 읽었습니다 — 덮어쓰면 저장본이 지워집니다. 잠시 뒤 다시")
     c = _ban_card_id(acct)
     if not c:
         raise HTTPException(status_code=400, detail="계정 슬롯을 못 읽었습니다")

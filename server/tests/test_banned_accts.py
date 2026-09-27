@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, db, ok, run_all, finish, HTTPException   # noqa: E402
 
-MIN_CHECKS = 61
+MIN_CHECKS = 66
 C = TestClient(main.app, raise_server_exceptions=False)
 M = main
 IDS = {"1": "id1", "2": "id2", "3": "id3"}
@@ -259,6 +259,36 @@ async def t_delivery():
            "if await _drop_undeliverable(tenant, pc_id, _p):" in src and src.count("await _drop_undeliverable(") >= 3)
 
 
+async def t_loaded():
+    """L  설정 읽기 실패 = 「모름」(loaded:false) — 빈 목록(「정지 없음」)으로 주지 않는다."""
+    with _Keep():
+        o_get, o_flag = M.get_setting, M._BANNED_LOADED[0]
+
+        async def _boom(k):
+            raise RuntimeError("db locked (시험)")
+        M.get_setting = _boom
+        M._BANNED_LOADED[0] = False
+        try:
+            ok("L-1 부팅 복원 실패 → loaded False 로 남는다", (await M._banned_restore()) is False and M._BANNED_LOADED[0] is False)
+            r = C.get("/banned_accts/PC-30", headers={"X-Api-Key": "testkey"})
+            j = r.json()
+            ok("L-2 못 읽었으면 loaded:false · slots 는 빈 목록이 아니라 null", r.status_code == 200 and j.get("loaded") is False
+               and j.get("slots") is None and j.get("labels") is None, str(j))
+            r = _sess("POST", "/admin/banned_accts", json={"accts": ["PC-30#2"]})
+            ok("L-3 못 읽은 채 등록하면 503(저장본을 덮어 지우지 않는다) · 메모리도 그대로", r.status_code == 503 and M._banned_list("main") == [],
+               "%s %s" % (r.status_code, r.text[:100]))
+            ok("L-4 해제도 503", _sess("DELETE", "/admin/banned_accts/PC-30b").status_code == 503)
+        finally:
+            M.get_setting = o_get
+        await db.set_setting("banned_accts", "PC-30b")
+        r = C.get("/banned_accts/PC-30", headers={"X-Api-Key": "testkey"})
+        j = r.json()
+        ok("L-5 DB 가 돌아오면 다음 물음에서 다시 읽어 loaded:true · 진짜 목록", j.get("loaded") is True and j.get("slots") == [2]
+           and M._BANNED_LOADED[0] is True, str(j))
+        await db.set_setting("banned_accts", "")
+        M._BANNED_LOADED[0] = o_flag or M._BANNED_LOADED[0]
+
+
 async def t_endpoints():
     with _Keep():
         r = C.post("/admin/banned_accts", json={"accts": ["PC-30#2"]})
@@ -271,8 +301,9 @@ async def t_endpoints():
         ok("E-4 설정에 저장(서버 재시작에도 남는다)",
            sorted((await db.get_setting("banned_accts") or "").split(",")) == ["PC-30", "PC-30b", "PC-31c"])
         r = C.get("/banned_accts/PC-30b", headers={"X-Api-Key": "testkey"})
-        ok("E-5 매크로(X-Api-Key)가 묻는 곳 — 물리 PC 기준 slots·labels",
-           r.status_code == 200 and r.json() == {"pc": "PC-30", "slots": [1, 2], "labels": ["a", "b"], "label": "정지(OUT)"},
+        ok("E-5 매크로(X-Api-Key)가 묻는 곳 — 물리 PC 기준 slots·labels · loaded true",
+           r.status_code == 200 and r.json() == {"pc": "PC-30", "loaded": True, "slots": [1, 2], "labels": ["a", "b"],
+                                                 "label": "정지(OUT)"},
            r.text[:160])
         ok("E-6 키 없이 묻기는 401", C.get("/banned_accts/PC-30").status_code == 401)
         r = _sess("GET", "/rotate")
@@ -340,7 +371,7 @@ console.log(JSON.stringify({
 
 
 def test_all():
-    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_delivery, t_endpoints, t_js])
+    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_delivery, t_loaded, t_endpoints, t_js])
     finish("test_banned_accts", MIN_CHECKS)
 
 
