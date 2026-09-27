@@ -109,4 +109,16 @@
 - Card: banned slot → `banned:true`, `status_label:"정지(OUT)"`, account fields emptied; status forced `no_account` unless the macro is live on that slot (then status kept so it can be commanded/switched away). Siblings carry `banned_slots:[n]`. Totals (`_fv_pc_excluded`, JS `isExcludedPc`) exclude it.
 - Rotation (`_rot_acct_excluded`) never picks it. `_dispatch_macro_command` (409) and `_rot_send` refuse switch_launcher/switch_account if any of acct_no/label/chrome_label/acct_label targets a banned slot, or if no target on a PC with bans; acct_tour/find_host get `accounts` = non-banned list.
 - Macro read: `GET /banned_accts/{pc}` (X-Api-Key) → `{pc, slots, labels, label}`. Admin: GET/POST `/admin/banned_accts`, DELETE `/admin/banned_accts/{acct}`; `/rotate` GET has `banned`.
-- Not covered server-side: commands queued before a ban (poll/WS replay), and macro-local switches (acct_tour.json resume etc.) — macro must read the endpoint above. FV `_fv_pc_view` does not expose `banned` yet (FarmView shows «계정 없음»).
+- Delivery gate: poll `GET /command/{pc}` and WS reconnect drain call `_drop_undeliverable` (pin_reset version gate + `_drop_banned_cmd`). A queued switch_launcher/switch_account into a banned slot (queued before the ban) is cancelled with a `warning` log line «[명령] #id … 배달 안 함(취소) — … (#276)» on that PC; queued acct_tour/find_host have banned slots stripped at delivery (`enrich_cmd_args`). set_account is not gated (card declaration only).
+- Not covered server-side: macro-local switches (acct_tour.json resume, recovery replay, etc.) — the macro must read `GET /banned_accts/{pc}`.
+
+### 12-b. FV proposal (NOT applied — waiting on the FarmView side via 아이온2)
+FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.py) builds an explicit field list. Proposed change to `FV_API.md` (canonical) + `farmview/docs/FV_API.md` (copy), pc object:
+```
+"banned":       bool     # #276 운영정책 이용 제한 슬롯. true 면 status 보다 먼저 「정지(OUT)」로 그린다
+"banned_slots": [int]    # 같은 물리 PC 의 정지 계정 번호(1=본계정). 없으면 []
+```
+- Additive only; `status` values unchanged (banned card: `no_account`, or the real status if the macro is live on that slot).
+- Totals: banned slots are already excluded (`_fv_pc_excluded`), so `global.totals` needs no change; the §excluded-cards paragraph (~FV_API.md 642–655) would list 「정지(#276)」 next to 은퇴·계정없음.
+- FarmView side (farmview room): `fvdash.py` status label (~471, 519) → «정지(OUT)» when `banned`.
+- Server side once agreed: add the two keys in `_fv_pc_view`, update both FV_API.md copies in the same commit, and extend `tests/test_contracts.py` + `farmview/tests/test_integration_contracts.py`.

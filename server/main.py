@@ -11138,6 +11138,8 @@ async def enrich_cmd_args(tenant: str, pc_id: str, command: str, args: dict) -> 
     필요 없지만, adopt=true 로 보내면 찾은 계정으로 ★정식 전환★(switch_account)까지
     이어진다. 그때 peer_id 가 없으면 본컴이 안 바뀌어 반쪽이 된다.
     """
+    if command in ("acct_tour", "find_host"):
+        args, _bw = _ban_check_cmd(tenant, pc_id, command, dict(args or {}))   # #276 배달 때도 정지 슬롯을 뺀다
     if command == "set_info":
         # ★★마스킹본이 info.txt 의 진짜 비번을 '***' 로 덮는다 (2026-08-20 감사)★★
         #   DB 에는 비번을 '***' 로 마스킹해 저장한다(이력 평문 방지). 그런데 WS 재접속·
@@ -11276,6 +11278,32 @@ async def _drop_stale_pin_reset(tenant: str, pc_id: str, cmd) -> bool:
     except Exception as e:
         print(f"[pin_reset] 사유 기록 실패(무시): {e}")
     return True
+
+
+async def _drop_banned_cmd(tenant: str, pc_id: str, cmd) -> bool:
+    """★#276 배달 때 다시 본다★ — 정지 등록 ★전에★ 큐에 들어간 전환(폴링·WS 재접속으로 나중에 배달)이 정지 슬롯으로
+    가면 취소하고 True(배달하지 말 것). 사유는 그 PC 로그에(pin_reset 배달 문과 같은 자리). 규칙은 _ban_check_cmd 한 곳."""
+    if not cmd:
+        return False
+    _a, why = _ban_check_cmd(tenant, pc_id, str(cmd.get("command") or ""), dict(cmd.get("args") or {}))
+    if not why:
+        return False
+    try:
+        await cancel_command(int(cmd["id"]))
+    except Exception as e:
+        print(f"[정지] 배달 전 취소 실패 {pc_id} #{cmd.get('id')}: {e}")
+    _why = f"[명령] #{cmd.get('id')} {cmd.get('command')} 배달 안 함(취소) — {why}"
+    print(f"[정지] {ns(tenant, pc_id)} {_why}")
+    try:
+        await insert_log(ns(tenant, pc_id), "warning", _why)
+    except Exception as e:
+        print(f"[정지] 사유 기록 실패(무시): {e}")
+    return True
+
+
+async def _drop_undeliverable(tenant: str, pc_id: str, cmd) -> bool:
+    """배달 문 두 개(pin_reset 버전 · #276 정지 슬롯) — 폴링·WS 재접속 두 길이 같은 함수를 부른다."""
+    return (await _drop_stale_pin_reset(tenant, pc_id, cmd)) or (await _drop_banned_cmd(tenant, pc_id, cmd))
 
 
 async def _dispatch_macro_command(tenant: str, pc_id: str,
@@ -11715,7 +11743,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             if not _pending:
                 break
             for _p in _pending:
-                if await _drop_stale_pin_reset(tenant, pc_id, _p):   # ★pin_reset 배달 문★ — 취소됨, 안 보낸다
+                if await _drop_undeliverable(tenant, pc_id, _p):   # ★배달 문★(pin_reset·#276 정지) — 취소됨, 안 보낸다
                     _last_id = max(_last_id, int(_p["id"]))
                     continue
                 _pargs = await enrich_cmd_args(tenant, pc_id,
@@ -12288,11 +12316,11 @@ async def poll_command(pc_id: str, request: Request):
     tenant = _require_api_key(request)
     mark_seen(ns(tenant, pc_id))   # ★어떤 요청이든 = 그 PC 프로세스가 살아있다는 증거★
     cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
-    for _ in range(5):              # ★pin_reset 배달 문★ — 못 넘으면 취소하고 다음 것(한 요청에 최대 5건 건너뜀)
-        if not await _drop_stale_pin_reset(tenant, pc_id, cmd):
+    for _ in range(5):              # ★배달 문★(pin_reset·#276 정지) — 못 넘으면 취소하고 다음 것(한 요청에 최대 5건 건너뜀)
+        if not await _drop_undeliverable(tenant, pc_id, cmd):
             break
         cmd = await get_pending_command(ns(tenant, pc_id), all_key=ns(tenant, "all"))
-    if cmd and cmd.get("command") == "pin_reset" and await _drop_stale_pin_reset(tenant, pc_id, cmd):
+    if cmd and await _drop_undeliverable(tenant, pc_id, cmd):
         cmd = None                  # 5건 넘게 밀려 있으면 이번엔 안 준다(다음 폴링에서 이어서 거른다)
     if cmd:
         # ★WS 가 끊겨 폴링으로 받아가는 경로★ — DB 는 마스킹돼 있으므로 여기서 다시 채운다

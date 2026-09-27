@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, db, ok, run_all, finish, HTTPException   # noqa: E402
 
-MIN_CHECKS = 56
+MIN_CHECKS = 61
 C = TestClient(main.app, raise_server_exceptions=False)
 M = main
 IDS = {"1": "id1", "2": "id2", "3": "id3"}
@@ -234,6 +234,31 @@ async def t_guard():
         ok("G-9 대시보드 /command 도 409(정지 계정1)", r.status_code == 409, "%s %s" % (r.status_code, r.text[:160]))
 
 
+async def t_delivery():
+    """D  정지 등록 ★전에★ 큐에 든 명령 — 배달(폴링) 때 다시 본다."""
+    with _Keep():
+        nspc = M.ns("main", "PC-50c")
+        i1 = await db.insert_command(nspc, "switch_launcher", {"acct_no": 2, "chrome_label": "b"})
+        i2 = await db.insert_command(nspc, "acct_tour", {"accounts": [1, 2, 3], "task": "collect"})
+        M.BANNED_ACCTS.add(M.ns("main", "PC-50b"))
+        r = C.get("/command/PC-50c", headers={"X-Api-Key": "testkey"})
+        j = r.json() if r.status_code == 200 else {}
+        ok("D-1 정지 전에 큐에 든 계정2 전환은 배달 안 함 — 다음 명령(acct_tour)이 나온다",
+           j.get("id") == i2 and j.get("command") == "acct_tour", str(j)[:200])
+        ok("D-2 acct_tour 는 배달 때도 정지 슬롯을 뺀다([1,2,3] → [1,3])", (j.get("args") or {}).get("accounts") == [1, 3],
+           str(j.get("args"))[:160])
+        async with db.aiosqlite.connect(db.DB_PATH) as c:
+            async with c.execute("SELECT status FROM commands WHERE id=?", (i1,)) as cur:
+                row = await cur.fetchone()
+        ok("D-3 배달 안 한 명령은 큐에서 취소(다시 안 나온다)", row is not None and row[0] != "pending", str(row))
+        logs = await db.get_logs(nspc, limit=20)
+        ok("D-4 사유는 그 PC 로그에(#276)", any("#276" in str(l.get("message")) and str(i1) in str(l.get("message")) for l in logs),
+           str([l.get("message") for l in logs][-2:])[:200])
+        src = open(M.__file__, encoding="utf-8").read()
+        ok("D-5 WS 재접속 드레인도 같은 배달 문(_drop_undeliverable)을 부른다",
+           "if await _drop_undeliverable(tenant, pc_id, _p):" in src and src.count("await _drop_undeliverable(") >= 3)
+
+
 async def t_endpoints():
     with _Keep():
         r = C.post("/admin/banned_accts", json={"accts": ["PC-30#2"]})
@@ -315,7 +340,7 @@ console.log(JSON.stringify({
 
 
 def test_all():
-    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_endpoints, t_js])
+    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_delivery, t_endpoints, t_js])
     finish("test_banned_accts", MIN_CHECKS)
 
 
