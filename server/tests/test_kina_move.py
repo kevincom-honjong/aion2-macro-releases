@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 23
+MIN_CHECKS = 27
 TOK = "fvsecret-km"
 H = {"X-FV-Token": TOK}
 
@@ -60,7 +60,7 @@ async def t_prod_case():
     await _read("PC-21c", 190_184_667, _utc(-9000), 1)
     st, j = await _sell("PC-02b", -190_000_000, "07963787", hand_at=_epoch(-60))
     ok("KM-0 재현: 팜뷰가 PC-02b 로 보내면 PC-02b 가 25,319,919", st == 200 and await _kina("PC-02b") == 25_319_919, str(j))
-    await main._kina_fix_moves()
+    await _fix(FWD)
     ok("KM-1 ★PC-02b 215,319,919 로 되돌림★", await _kina("PC-02b") == 215_319_919, str(await _kina("PC-02b")))
     ok("KM-2 ★PC-21c 190,184,667 − 1억9천 = 184,667★", await _kina("PC-21c") == 184_667, str(await _kina("PC-21c")))
     r = await _row("07963787")
@@ -71,7 +71,7 @@ async def t_prod_case():
     l21 = [x.get("message") for x in await db.get_logs(main.ns("main", "PC-21c"), 5)]
     ok("KM-4 두 카드 로그줄(A2 증거)", any("되돌림" in str(m) and "07963787" in str(m) for m in l2)
        and any("옮겨 옴" in str(m) and "07963787" in str(m) for m in l21), "%s %s" % (l2[:1], l21[:1]))
-    await main._kina_fix_moves()
+    await _fix(FWD)
     ok("KM-5 부팅마다 돌아도 멱등", await _kina("PC-02b") == 215_319_919 and await _kina("PC-21c") == 184_667)
     # 그 뒤 판독 사다리가 새 카드에서 옳게 돈다
     v = await _read("PC-02b", 215_319_919, _utc(-3600), 2, resend=True)
@@ -85,6 +85,37 @@ async def t_prod_case():
        and await _kina("PC-21c") == 184_667, str(j))
     st, j = await _sell("PC-02b", -190_000_000, "07963787", hand_at=_epoch(-60))
     ok("KM-10 PC-02b 로 다시 보내면 409(다른 카드에서 뺐다)", st == 409 and await _kina("PC-02b") == 215_319_919, str(j))
+
+
+async def t_undo():
+    # 아이온2 2026-09-27 HOLD — PC-02b 가 주인님의 진짜 선택이었으면 되돌린다(같은 길로, 반대 방향). 옮긴 직후 상태에서.
+    for pc, v, ra in (("PC-U02b", 215_319_919, -7200), ("PC-U21c", 190_184_667, -9000)):
+        await _read(pc, v, _utc(ra), 1)
+    await _sell("PC-U02b", -190_000_000, "u2026092707963787", hand_at=_epoch(-60))
+    await _fix((("PC-U02b", -190_000_000, "07963787", "PC-U21c"),))
+    ok("KM-23 (준비) 옮긴 상태 184,667 / 215,319,919",
+       await _kina("PC-U21c") == 184_667 and await _kina("PC-U02b") == 215_319_919)
+    await _fix((("PC-U21c", -190_000_000, "07963787", "PC-U02b"),))
+    ok("KM-24 ★되돌리기: PC-02b 25,319,919 · PC-21c 190,184,667★",
+       await _kina("PC-U02b") == 25_319_919 and await _kina("PC-U21c") == 190_184_667,
+       "%s %s" % (await _kina("PC-U02b"), await _kina("PC-U21c")))
+    r = await _row("u2026092707963787")
+    ok("KM-25 장부 줄도 PC-02b 로 돌아온다(before 215,319,919 → after 25,319,919)",
+       r["pc_id"] == main.ns("main", "PC-U02b") and r["before"] == 215_319_919 and r["after"] == 25_319_919, str(r))
+    await _fix((("PC-U21c", -190_000_000, "07963787", "PC-U02b"),))
+    ok("KM-26 되돌리기도 멱등", await _kina("PC-U02b") == 25_319_919 and await _kina("PC-U21c") == 190_184_667)
+
+
+FWD = (("PC-02b", -190_000_000, "07963787", "PC-21c"),)
+
+
+async def _fix(moves):
+    real = main.KINA_MOVES_20260927
+    main.KINA_MOVES_20260927 = moves
+    try:
+        await main._kina_fix_moves()
+    finally:
+        main.KINA_MOVES_20260927 = real
 
 
 async def t_known_reads():
@@ -158,7 +189,7 @@ async def t_booked_guard():
 
 
 def test_all():
-    run_all([t_prod_case, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_guard])
+    run_all([t_prod_case, t_undo, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_guard])
     finish("test_kina_move", MIN_CHECKS)
 
 
