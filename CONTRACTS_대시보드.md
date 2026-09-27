@@ -103,3 +103,10 @@
   `alert`(소리)·`ping` 만 보낸다. 보이는 소켓이 하나도 없으면 상태를 만들지도 않는다. 보이게 되면 새 판을 만들어 보낸다.
 - `/diag/egress` `ws_clients`: 소켓마다 ip(첫 홉)·ua·origin·embedded·hidden·tx·age_s — 누가 붙어 있는지 여기서 본다.
 - 지키는 시험: `tests/test_bug_retention_ws.py` R-1..R-22 · W-1..W-13 · `tests/test_bug_kinds_mirror.py` K-1..K-4 · `tests/test_bugimg_mem.py` B-15..B-17 · M-10..M-12 · R-23.
+
+## 12. Banned account slots (#276, 2026-09-27)
+- Setting `banned_accts` (server-managed; card ids, account 1 = no suffix). Seeded once with the owner's 10 slots only if never written.
+- Card: banned slot → `banned:true`, `status_label:"정지(OUT)"`, account fields emptied; status forced `no_account` unless the macro is live on that slot (then status kept so it can be commanded/switched away). Siblings carry `banned_slots:[n]`. Totals (`_fv_pc_excluded`, JS `isExcludedPc`) exclude it.
+- Rotation (`_rot_acct_excluded`) never picks it. `_dispatch_macro_command` (409) and `_rot_send` refuse switch_launcher/switch_account if any of acct_no/label/chrome_label/acct_label targets a banned slot, or if no target on a PC with bans; acct_tour/find_host get `accounts` = non-banned list.
+- Macro read: `GET /banned_accts/{pc}` (X-Api-Key) → `{pc, slots, labels, label}`. Admin: GET/POST `/admin/banned_accts`, DELETE `/admin/banned_accts/{acct}`; `/rotate` GET has `banned`.
+- Not covered server-side: commands queued before a ban (poll/WS replay), and macro-local switches (acct_tour.json resume etc.) — macro must read the endpoint above. FV `_fv_pc_view` does not expose `banned` yet (FarmView shows «계정 없음»).

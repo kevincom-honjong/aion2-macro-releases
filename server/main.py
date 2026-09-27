@@ -166,6 +166,147 @@ def _no_account_list(tenant: str) -> list:
     return sorted(raw for k in NO_ACCOUNT_PCS for t, raw in [split_ns(k)] if t == tenant)
 
 
+# ─── 정지 계정 (#276, 2026-09-27 주인님 지시) — 운영정책 이용 제한을 받은 ★계정 슬롯★ ───
+#   계정없음(NO_ACCOUNT_PCS)과 같은 자리(카드 id = PC + 계정 접미사, 계정1 은 접미사 없음)에 같은 방식으로
+#   덮어쓰되(순환·집계에서 빠지는 status 는 no_account 그대로) 카드 라벨은 「정지(OUT)」 이고,
+#   ★사람이 보낸 전환 명령도 그 슬롯으로는 안 나간다★(_ban_check_cmd — 대시보드·FV·순환 세 길 전부).
+#   설정 `banned_accts` = 콤마 목록(ns 키). 푸는 손잡이 = DELETE /admin/banned_accts/{acct}.
+BANNED_ACCTS: set = set()
+BANNED_LABEL = "정지(OUT)"
+# 주인님 #276 원문 대상 10슬롯 — 설정이 ★한 번도 안 쓰였을 때만★ 이 값으로 심는다(한 번 쓰이면 설정이 정본).
+BANNED_SEED_276 = ("PC-01b", "PC-04", "PC-10c", "PC-12b", "PC-15", "PC-16", "PC-17b",
+                   "PC-22", "PC-22b", "PC-22c")
+
+
+def _ban_card_id(raw) -> str:
+    """「PC-01#2」·「PC-01b」 → 카드 id 「PC-01b」. 못 읽으면 ""."""
+    t = str(raw or "").strip()
+    n = 1
+    if "#" in t:
+        t, _, k = t.partition("#")
+        if not k.strip().isdecimal():
+            return ""
+        n = int(k.strip())
+        if not 1 <= n <= MAX_ACCT:
+            return ""
+        t = _base_pc(clean_pc_id(t))
+    else:
+        t = clean_pc_id(t)
+        n = _rot_acct_no(t)
+        t = _base_pc(t)
+    if not re.fullmatch(r"PC-\d{2,}", t or ""):     # PC-1 처럼 카드에 없는 모양은 받지 않는다(반증 minor)
+        return ""
+    return t + ("" if n == 1 else ACCT_LABELS[n - 1])
+
+
+def _banned_list(tenant: str) -> list:
+    return sorted(raw for k in BANNED_ACCTS for t, raw in [split_ns(k)] if t == tenant)
+
+
+def _is_banned(tenant: str, base: str, n: int) -> bool:
+    if not base or not 1 <= int(n or 0) <= MAX_ACCT:
+        return False
+    return ns(tenant, base + ("" if n == 1 else ACCT_LABELS[n - 1])) in BANNED_ACCTS
+
+
+def _banned_slots(tenant: str, base: str) -> list:
+    return [n for n in range(1, MAX_ACCT + 1) if _is_banned(tenant, base, n)]
+
+
+def _cmd_target_acct(args: dict) -> int:
+    """전환 명령이 가려는 계정 번호 — 매크로 loot._swl_restricted 와 같은 순서(chrome_label → label → acct_label, 숫자 라벨도) · 없으면 acct_no. 모르면 0."""
+    a = args or {}
+    for k in ("chrome_label", "label", "acct_label"):
+        v = str(a.get(k) or "").strip().lower()
+        if v.startswith("계정"):
+            v = v[2:].strip()
+        if v.isdecimal() and 1 <= int(v) <= MAX_ACCT:
+            return int(v)
+        if len(v) == 1 and v in ACCT_LABELS:
+            return ACCT_LABELS.index(v) + 1
+    try:
+        n = int(a.get("acct_no") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n if 1 <= n <= MAX_ACCT else 0
+
+
+BAN_SWITCH_CMDS = ("switch_launcher", "switch_account")   # set_account 는 「카드가 어느 계정인가」 선언뿐이라 막지 않는다(반증 #276-9)
+
+
+def _cmd_target_accts(args: dict) -> set:
+    """전환 명령이 가리키는 계정 번호 ★전부★ — acct_no 와 라벨이 어긋나도(매크로 run_switch 는 acct_no 먼저,
+    _swl_restricted 는 라벨 먼저) 어느 하나라도 정지면 거부해야 해서(반증 #276-5)."""
+    a = args or {}
+    out = set()
+    for k in ("chrome_label", "label", "acct_label"):
+        n = _cmd_target_acct({k: a.get(k)})
+        if n:
+            out.add(n)
+    n = _cmd_target_acct({"acct_no": a.get("acct_no")})
+    if n:
+        out.add(n)
+    return out
+
+
+def _ban_check_cmd(tenant: str, pc_id: str, command: str, args: dict) -> tuple:
+    """(보낼 args, 거부 사유). 사유가 "" 가 아니면 보내지 않는다.
+    전환 3종은 목표 슬롯이 정지면 거부. acct_tour 는 정지 슬롯을 ★빼고★ 보낸다 — accounts 가 없으면
+    매크로가 1~MAX_ACCT 전부를 도므로(loot.py acct_tour 기본값) 정지 슬롯을 뺀 목록을 명시해 보낸다."""
+    base = _base_pc(clean_pc_id(pc_id or ""))
+    slots = _banned_slots(tenant, base)
+    if not slots:
+        return args, ""
+    if command in BAN_SWITCH_CMDS:
+        tg = _cmd_target_accts(args)
+        hit = sorted(tg & set(slots))
+        if hit:
+            return args, f"{base} 계정{hit[0]} 은 {BANNED_LABEL} — 전환하지 않습니다(#276)"
+        if not tg:      # acct_index 만 온 옛 모양 — 드롭다운 k번째 줄이 정지 계정일 수 있다
+            return args, f"{base} 에 {BANNED_LABEL} 계정이 있어 목표 계정 번호(acct_no) 없는 전환은 보내지 않습니다(#276)"
+        return args, ""
+    if command in ("acct_tour", "find_host"):   # find_host 도 accounts 를 차례로 로그인한다(반증 #276-6)
+        raw = (args or {}).get("accounts")
+        seq = list(raw) if isinstance(raw, (list, tuple)) and raw else list(range(1, MAX_ACCT + 1))
+        keep = []
+        for x in seq:
+            n = _cmd_target_acct({"label": str(x)})
+            if not (n and n in slots):
+                keep.append(x)
+        if not keep:
+            return args, f"{base} 순회할 계정이 전부 {BANNED_LABEL}(#276)"
+        return {**dict(args or {}), "accounts": keep}, ""
+    return args, ""
+
+
+async def _banned_restore() -> None:
+    """부팅 복원(#276). 설정이 ★한 번도 안 쓰였으면(None)★ 주인님 #276 대상으로 한 번 심고 저장한다 —
+    그 뒤로는 설정이 정본(해제해서 빈 값 "" 이 되면 다시 심지 않는다)."""
+    try:
+        _ba = await get_setting("banned_accts")
+        if _ba is None:
+            BANNED_ACCTS.update(ns("main", c) for c in BANNED_SEED_276)
+            await set_setting("banned_accts", ",".join(sorted(BANNED_ACCTS)))
+            print(f"[정지] #276 첫 심기: {sorted(BANNED_ACCTS)}")
+        else:
+            BANNED_ACCTS.update(_parse_no_account(_ba))
+            if BANNED_ACCTS:
+                print(f"[정지] 목록 복원: {sorted(BANNED_ACCTS)}")
+    except Exception as e:
+        print(f"[정지] banned_accts 로드 실패(무시): {e}")
+
+
+def _blank_acct_fields(_pc: dict) -> None:
+    """계정 칸만 비운다(컴퓨터·업데이터 정보는 그대로) — 계정없음·정지 공용."""
+    _pc["status"] = "no_account"
+    _pc["character"] = ""; _pc["class"] = ""; _pc["chars"] = []
+    _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
+    _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
+    _pc["hunt_progress"] = 0.0
+    _pc["_total_kina"] = 0
+    _pc["dungeon_done_at"] = ""
+
+
 NS_SEP = "::"
 TENANTS: dict = {}
 PW_TO_TENANT: dict = {}
@@ -1348,6 +1489,7 @@ async def lifespan(app: FastAPI):
             print(f"[계정없음] 목록 복원: {sorted(NO_ACCOUNT_PCS)}")
     except Exception as e:
         print(f"[계정없음] no_account_pcs 로드 실패(무시): {e}")
+    await _banned_restore()            # 정지 계정(#276)
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
     await _abyss_restore()             # 어비스 수익 오늘 합계 복원(2026-09-23 장부 #104)
@@ -2060,18 +2202,33 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
     if NO_ACCOUNT_PCS:
         for _pc in statuses:
             if ns(tenant, _pc.get("pc_id") or "") in NO_ACCOUNT_PCS:
-                _pc["status"] = "no_account"
-                _pc["character"] = ""; _pc["class"] = ""; _pc["chars"] = []
-                _pc["acct_id"] = ""; _pc["acct_num"] = 0; _pc["acct_server"] = ""
-                _pc["map"] = ""; _pc["map_name"] = ""; _pc["daily_progress"] = []
-                _pc["hunt_progress"] = 0.0
+                _blank_acct_fields(_pc)
                 # ★2026-09-23 주인님 — 「24번이 구독으로 표시돼서 구독 자료 자체를 흐린다」★
                 #   위 필드는 pc_status 쪽이라 여기서 비워지는데, 이 둘은 ★다른 표(char_info)★
                 #   에서 위 _attach_char_info 가 이미 붙여놨다(계정 없어져도 char_info 행은
                 #   안 지운다 — 업데이터 생존은 살려야 하니까). 전광판 합계(창고키나·완주 PC 수)
                 #   가 이 옛 값을 그대로 더해 숫자를 흐렸다. 여기서 같이 비운다.
-                _pc["_total_kina"] = 0
-                _pc["dungeon_done_at"] = ""
+                #   (그 두 칸도 _blank_acct_fields 가 같이 비운다)
+    # ★정지 계정(#276)★ — 같은 덮어쓰기 + banned 표식. 같은 PC 의 모든 카드에 banned_slots 를 실어
+    #   카드가 아직 없는 계정 탭(보고한 적 없는 슬롯)도 「정지」로 그린다.
+    if BANNED_ACCTS:
+        for _pc in statuses:
+            _id = str(_pc.get("pc_id") or "")
+            _sl = _banned_slots(tenant, _base_pc(_id))
+            if not _sl:
+                continue
+            _pc["banned_slots"] = _sl
+            if ns(tenant, _id) in BANNED_ACCTS:
+                # (반증 #276-1·2) 매크로가 ★지금 이 정지 슬롯에 있으면★(살아 있는 status) status 를 그대로 둔다 —
+                #   no_account 로 덮으면 대시보드 sendCmd 가 「도는 매크로가 없다」로 막혀 다른 계정으로 전환조차 못 했고,
+                #   순환은 _rot_active=None 으로 영원히 멈췄다. 계정 칸·합계 재료는 어느 쪽이든 비운다.
+                _live = str(_pc.get("status") or "") not in ("other_account", "offline", "no_account", "")
+                _st = _pc.get("status")
+                _blank_acct_fields(_pc)
+                if _live:
+                    _pc["status"] = _st
+                _pc["banned"] = True
+                _pc["status_label"] = BANNED_LABEL
     return statuses
 
 
@@ -2723,7 +2880,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 #   저장본만 잘려 ★다음 재시작에 은퇴 PC 가 되살아났다★(콤마 목록 중간 절단). 순환 상태·텔레그램 오프셋도 같다.
 #   rot_allow(카나리아 게이트)·parsec_map 은 /rotate/allow·파섹 지도 엔드포인트가 검증하고 쓴다 — /setting 은 그 검증을 건너뛴다.
 #   읽기(GET, 세션)는 그대로 둔다. 새 서버 관리 키를 만들면 여기 더한다(시험 test_setting_reserved 가 set_setting 호출처와 대조).
-SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
+SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "banned_accts", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
                          "rot_allow", "parsec_map", "bug_pins"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
 _SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
@@ -3258,6 +3415,9 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
   .acct-tab-none{opacity:.38;cursor:not-allowed}
   .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
+  /* #276 정지 계정 — 번호에 줄을 긋고 빨간 OUT */
+  .acct-tab-out{color:#f87171;text-decoration:line-through}
+  .acct-tab .tout{font-style:normal;font-weight:900;font-size:9px;line-height:1;color:#f87171;text-decoration:none}
   /* ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님 그림 + 정정)★★ 탭 줄 ★오른쪽 끝★.
      margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
      탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */
@@ -5119,7 +5279,12 @@ const STATUS_CFG = {
   //   계정은 없다고 표시해놔」. other_account 와 같은 처지(순환 제외·집계 제외)지만
   //   라벨이 달라야 한다("다른 계정" 이 아니라 "계정 없음") — 그래서 항목을 따로 둔다.
   no_account:   {label:'계정 없음', vi:'Không có tài khoản', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-gray-700', text:'text-gray-400', online:false},
+  // ★정지 계정(#276, 2026-09-27 주인님)★ — 서버가 status 는 no_account(순환·집계 제외 그대로)로 두고
+  //   banned:true 를 싣는다. 모양만 여기서 고른다(cardCfg).
+  banned:       {label:'정지(OUT)', vi:'Bị khóa (OUT)', bg:'bg-red-950/40', border:'border-red-900', badge:'bg-red-800', text:'text-red-400', online:false},
 };
+// #276 카드 모양 한 곳 — 정지 표식이 있으면 status 보다 먼저
+function cardCfg(p){ return ((p||{}).banned && STATUS_CFG.banned) || STATUS_CFG[(p||{}).status||'offline'] || STATUS_CFG.offline; }
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
 // ★커맨드 덱(2026-08-16)★ — 카드 윗면에서 상태색이 새어 나온다.
@@ -6084,7 +6249,7 @@ function abyssCardLine(pc){
 
 function buildCard(pc) {
   const st = pc.status||'offline';
-  const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
+  const cfg = cardCfg(pc);
   const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
   // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
   //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
@@ -6459,24 +6624,25 @@ function buildStack(s){
     const gid = (g && g.acct_id) || maps.ids[k] || '';
     const plat = (maps.plats||{})[k] || '';
     const idTxt = (String(plat).indexOf('구글') >= 0) ? '구글' : gid;
-    const stTxt = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).label || '') : '';
+    const out = (s.top.banned_slots||[]).includes(k);   // #276 정지 슬롯(카드가 없어도)
+    const stTxt = out ? STATUS_CFG.banned.label : (g ? (cardCfg(g).label || '') : '');
     const rot = g ? (g._rot || '') : '';
     const tip = g
       ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${rot?' · 🔁 순환중':''}`
         + (cur ? ' (지금 보는 계정)' : ' — 누르면 이 계정 카드를 봅니다')
-      : `계정 ${k}${idTxt?' · '+idTxt:''} — 아직 카드가 없습니다(자격증명만 등록됨)`;
+      : `계정 ${k}${idTxt?' · '+idTxt:''}${out?' · '+stTxt:' — 아직 카드가 없습니다(자격증명만 등록됨)'}`;
     // ★★사냥 다 끝난 계정은 탭에 ★초록 ✓★ (2026-08-29 주인님)★★
     //   원문: "계정이 사냥이 다끝나면 … 카드위에 숫자 1 V 이런식으로 초록색 체크"
     //   판정은 카드의 🏹 뱃지와 ★같은 함수★(isHuntDone) — 두 곳이 다르게 말하면 안 된다.
     //   ★카드가 없는 계정(acct-tab-none)은 판정 자체가 불가★ 라 아무 표시도 안 한다.
     const hdone = !!(g && isHuntDone(g.daily_progress));
     const cls = 'acct-tab' + (cur ? ' acct-tab-on' : '') + (g ? '' : ' acct-tab-none')
-              + (hdone ? ' acct-tab-done' : '');
+              + (hdone ? ' acct-tab-done' : '') + (out ? ' acct-tab-out' : '');
     const dot = on ? `<i class="tdot${rot?' tdot-rot':''}"></i>` : '';
     const chk = hdone ? `<i class="tchk">✓</i>` : '';
     const click = (g && !cur)
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
-    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${chk}${dot}</button>`;
+    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${out?'<i class="tout">OUT</i>':''}${chk}${dot}</button>`;
   }
   // ══════════════════════════════════════════════════════════════════════
   // ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님)★★
@@ -7723,7 +7889,7 @@ function openCardMenu(pc_id, e) {
   menuPcId=pc_id;
   // 헤더에 실시간 상태 + 매크로 버전 표시 (메뉴 v2 — 열 때마다 state에서 스냅샷)
   const pc=state[pc_id]||{};
-  const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
+  const cfg=cardCfg(pc);
   const ver=pc.macro_version?`v${esc(pc.macro_version)}`:'';   // ★B-JS3 (2026-09-23)★ 매크로 보고값 → esc
   const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${esc(acctNumOf(pc_id))}</span>` : '';
   document.getElementById('menu-pc-label').innerHTML=
@@ -9636,6 +9802,7 @@ function isExcludedPc(pc_id){
   //   _fv_pc_excluded 와 같은 규칙. 빠져 있으면 /summary 가 낡아 폴백으로 떨어질 때마다
   //   거래키나·각성전·회랑 타일이 가짜 PC 몫만큼 튀었다(서버 K10 vs 폴백 K5010).
   if (isFakePc(pc_id)) return true;
+  if ((state[pc_id]||{}).banned) return true;              // #276 정지 슬롯(살아 있어도) — 서버 _fv_pc_excluded 와 같은 규칙
   return (state[pc_id]||{}).status === 'no_account';
 }
 
@@ -11108,6 +11275,10 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
     args = dict(args or {})
     nspc = ns(tenant, pc_id)
     _rot_result: dict = {}          # ▶시작이면 무장 결과를 응답에 실어 화면에 알린다
+    args, _ban_why = _ban_check_cmd(tenant, pc_id, command, args)   # #276 정지 계정으로는 안 간다
+    if _ban_why:
+        print(f"[정지] {pc_id} ▶ {command} 거부: {_ban_why}")
+        raise HTTPException(status_code=409, detail=_ban_why)
     if command == "pin_reset":      # ★버전 문★ — 옛 매크로는 도는 작업을 끊고 알람을 낸다(위 _PIN_RESET_MIN_VER 주석)
         _ok, _mv = await _pin_reset_ok(tenant, pc_id)
         if not _ok:
@@ -11357,6 +11528,62 @@ async def admin_unset_no_account(pc_id: str, request: Request):
     await push_state(tenant)
     print(f"[계정없음] {nspc} 해제")
     return JSONResponse({"ok": True, "no_account": False, "pc_id": pc_id})
+
+
+@app.get("/banned_accts/{pc_id}")
+async def banned_for_pc(pc_id: str, request: Request):
+    """#276 매크로가 묻는 곳 — 이 PC 의 정지 슬롯. 매크로(X-Api-Key)·세션 둘 다.
+    {"pc": base, "slots": [1,3], "labels": ["a","c"], "label": "정지(OUT)"} — 전환·순회 전에 이 슬롯이면 skip."""
+    tenant = check_api_key(request) or check_session(request)
+    if not tenant:
+        raise HTTPException(status_code=401)
+    base = _base_pc(clean_pc_id(pc_id))
+    sl = _banned_slots(tenant, base)
+    return JSONResponse({"pc": base, "slots": sl, "labels": [ACCT_LABELS[n - 1] for n in sl],
+                         "label": BANNED_LABEL})
+
+
+@app.get("/admin/banned_accts")
+async def admin_banned_list(request: Request):
+    """#276 정지 계정 슬롯 목록(카드 id — 계정1 은 접미사 없음)."""
+    tenant = _require_session(request)
+    return JSONResponse({"banned": _banned_list(tenant), "label": BANNED_LABEL})
+
+
+@app.post("/admin/banned_accts")
+async def admin_banned_add(request: Request):
+    """#276 정지 등록 — body {"accts": ["PC-01#2", "PC-04#1", "PC-22c", ...]}. 못 읽는 항목이 하나라도 있으면 아무것도 안 바꾼다."""
+    tenant = _require_session(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw = body.get("accts") if isinstance(body, dict) else None
+    if not isinstance(raw, list) or not raw or len(raw) > 200:
+        raise HTTPException(status_code=400, detail='{"accts": [...]} 가 필요합니다')
+    ids = [_ban_card_id(x) for x in raw]
+    bad = [str(x) for x, c in zip(raw, ids) if not c]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"못 읽은 항목: {bad[:10]}")
+    BANNED_ACCTS.update(ns(tenant, c) for c in ids)
+    await set_setting("banned_accts", ",".join(sorted(BANNED_ACCTS)))
+    await push_state(tenant)
+    print(f"[정지] {tenant} 등록 {sorted(set(ids))}")
+    return JSONResponse({"ok": True, "banned": _banned_list(tenant)})
+
+
+@app.delete("/admin/banned_accts/{acct}")
+async def admin_banned_del(acct: str, request: Request):
+    """#276 정지 해제(푸는 손잡이) — acct 는 「PC-01b」 또는 「PC-01#2」(URL 에선 %23)."""
+    tenant = _require_session(request)
+    c = _ban_card_id(acct)
+    if not c:
+        raise HTTPException(status_code=400, detail="계정 슬롯을 못 읽었습니다")
+    BANNED_ACCTS.discard(ns(tenant, c))
+    await set_setting("banned_accts", ",".join(sorted(BANNED_ACCTS)))
+    await push_state(tenant)
+    print(f"[정지] {tenant} 해제 {c}")
+    return JSONResponse({"ok": True, "banned": _banned_list(tenant)})
 
 
 @app.websocket("/ws/macro/{pc_id}")
@@ -14633,6 +14860,10 @@ async def _rot_send(tenant: str, pc_id: str, command: str, args: dict | None = N
     if nspc in RETIRED_PCS:
         print(f"[은퇴] {nspc} ▶ {command} 거부(은퇴 목록)")
         return False
+    args, _ban_why = _ban_check_cmd(tenant, pc_id, command, args)   # #276 — 순환이 골랐어도 한 번 더
+    if _ban_why:
+        print(f"[정지] {pc_id} ▶ {command} 거부(순환): {_ban_why}")
+        return False
     try:
         send_args = await enrich_cmd_args(tenant, pc_id, command, args)
         db_args = args
@@ -14976,7 +15207,7 @@ def _rot_acct_excluded(tenant: str, active: dict, n: int, cards: list | None = N
         if not base or n < 1 or n > len(ACCT_LABELS):
             return False
         k = ns(tenant, base + ("" if n == 1 else ACCT_LABELS[n - 1]))
-        if k in RETIRED_PCS or k in NO_ACCOUNT_PCS:
+        if k in RETIRED_PCS or k in NO_ACCOUNT_PCS or k in BANNED_ACCTS:   # #276 정지 계정
             return True
         # 카드 status 「no_account」 는 NO_ACCOUNT_PCS 가 덮어쓴 값이다 — 같은 뜻으로 본다
         return any(str(c.get("status")) == "no_account" and _rot_acct_no(c.get("pc_id")) == n
@@ -16293,7 +16524,8 @@ async def rotate_list(request: Request):
             out[raw] = {"stage": st.get("stage"), "target": st.get("target"),
                         "hops": st.get("hops"), "visits": st.get("visits"),
                         "age_s": int(_rot_now() - float(st.get("since") or 0))}
-    return JSONResponse({"rotating": out, "allow": sorted(await _rot_allow(tenant))})
+    return JSONResponse({"rotating": out, "allow": sorted(await _rot_allow(tenant)),
+                         "banned": _banned_list(tenant)})      # #276 순환이 절대 안 고르는 슬롯
 
 
 @app.post("/rotate/allow")
@@ -16778,7 +17010,7 @@ def _fv_pc_excluded(tenant: str, pid: str) -> bool:
        서버 합계는 안 빼서 「구독 모름」이 +1 이었다. 화면은 카드로도 안 그리므로 합계 전부에서 뺀다."""
     pid = split_ns(str(pid or ""))[1]
     nspc = ns(tenant, pid)
-    if nspc in RETIRED_PCS or nspc in NO_ACCOUNT_PCS:
+    if nspc in RETIRED_PCS or nspc in NO_ACCOUNT_PCS or nspc in BANNED_ACCTS:   # #276 정지 슬롯
         return True
     return _is_fake_pc(pid)
 

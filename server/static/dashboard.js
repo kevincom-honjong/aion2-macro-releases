@@ -446,7 +446,12 @@ const STATUS_CFG = {
   //   계정은 없다고 표시해놔」. other_account 와 같은 처지(순환 제외·집계 제외)지만
   //   라벨이 달라야 한다("다른 계정" 이 아니라 "계정 없음") — 그래서 항목을 따로 둔다.
   no_account:   {label:'계정 없음', vi:'Không có tài khoản', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-gray-700', text:'text-gray-400', online:false},
+  // ★정지 계정(#276, 2026-09-27 주인님)★ — 서버가 status 는 no_account(순환·집계 제외 그대로)로 두고
+  //   banned:true 를 싣는다. 모양만 여기서 고른다(cardCfg).
+  banned:       {label:'정지(OUT)', vi:'Bị khóa (OUT)', bg:'bg-red-950/40', border:'border-red-900', badge:'bg-red-800', text:'text-red-400', online:false},
 };
+// #276 카드 모양 한 곳 — 정지 표식이 있으면 status 보다 먼저
+function cardCfg(p){ return ((p||{}).banned && STATUS_CFG.banned) || STATUS_CFG[(p||{}).status||'offline'] || STATUS_CFG.offline; }
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
 // ★커맨드 덱(2026-08-16)★ — 카드 윗면에서 상태색이 새어 나온다.
@@ -1411,7 +1416,7 @@ function abyssCardLine(pc){
 
 function buildCard(pc) {
   const st = pc.status||'offline';
-  const cfg = STATUS_CFG[st]||STATUS_CFG.offline;
+  const cfg = cardCfg(pc);
   const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
   // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
   //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
@@ -1786,24 +1791,25 @@ function buildStack(s){
     const gid = (g && g.acct_id) || maps.ids[k] || '';
     const plat = (maps.plats||{})[k] || '';
     const idTxt = (String(plat).indexOf('구글') >= 0) ? '구글' : gid;
-    const stTxt = g ? ((STATUS_CFG[g.status||'offline']||STATUS_CFG.offline).label || '') : '';
+    const out = (s.top.banned_slots||[]).includes(k);   // #276 정지 슬롯(카드가 없어도)
+    const stTxt = out ? STATUS_CFG.banned.label : (g ? (cardCfg(g).label || '') : '');
     const rot = g ? (g._rot || '') : '';
     const tip = g
       ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${rot?' · 🔁 순환중':''}`
         + (cur ? ' (지금 보는 계정)' : ' — 누르면 이 계정 카드를 봅니다')
-      : `계정 ${k}${idTxt?' · '+idTxt:''} — 아직 카드가 없습니다(자격증명만 등록됨)`;
+      : `계정 ${k}${idTxt?' · '+idTxt:''}${out?' · '+stTxt:' — 아직 카드가 없습니다(자격증명만 등록됨)'}`;
     // ★★사냥 다 끝난 계정은 탭에 ★초록 ✓★ (2026-08-29 주인님)★★
     //   원문: "계정이 사냥이 다끝나면 … 카드위에 숫자 1 V 이런식으로 초록색 체크"
     //   판정은 카드의 🏹 뱃지와 ★같은 함수★(isHuntDone) — 두 곳이 다르게 말하면 안 된다.
     //   ★카드가 없는 계정(acct-tab-none)은 판정 자체가 불가★ 라 아무 표시도 안 한다.
     const hdone = !!(g && isHuntDone(g.daily_progress));
     const cls = 'acct-tab' + (cur ? ' acct-tab-on' : '') + (g ? '' : ' acct-tab-none')
-              + (hdone ? ' acct-tab-done' : '');
+              + (hdone ? ' acct-tab-done' : '') + (out ? ' acct-tab-out' : '');
     const dot = on ? `<i class="tdot${rot?' tdot-rot':''}"></i>` : '';
     const chk = hdone ? `<i class="tchk">✓</i>` : '';
     const click = (g && !cur)
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
-    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${chk}${dot}</button>`;
+    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${out?'<i class="tout">OUT</i>':''}${chk}${dot}</button>`;
   }
   // ══════════════════════════════════════════════════════════════════════
   // ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님)★★
@@ -3050,7 +3056,7 @@ function openCardMenu(pc_id, e) {
   menuPcId=pc_id;
   // 헤더에 실시간 상태 + 매크로 버전 표시 (메뉴 v2 — 열 때마다 state에서 스냅샷)
   const pc=state[pc_id]||{};
-  const cfg=STATUS_CFG[pc.status]||STATUS_CFG.offline;
+  const cfg=cardCfg(pc);
   const ver=pc.macro_version?`v${esc(pc.macro_version)}`:'';   // ★B-JS3 (2026-09-23)★ 매크로 보고값 → esc
   const _mAcct = isMultiAcct(pc_id) ? ` <span class="text-purple-300" style="font-size:11px">계정 ${esc(acctNumOf(pc_id))}</span>` : '';
   document.getElementById('menu-pc-label').innerHTML=
@@ -4963,6 +4969,7 @@ function isExcludedPc(pc_id){
   //   _fv_pc_excluded 와 같은 규칙. 빠져 있으면 /summary 가 낡아 폴백으로 떨어질 때마다
   //   거래키나·각성전·회랑 타일이 가짜 PC 몫만큼 튀었다(서버 K10 vs 폴백 K5010).
   if (isFakePc(pc_id)) return true;
+  if ((state[pc_id]||{}).banned) return true;              // #276 정지 슬롯(살아 있어도) — 서버 _fv_pc_excluded 와 같은 규칙
   return (state[pc_id]||{}).status === 'no_account';
 }
 

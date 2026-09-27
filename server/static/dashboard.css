@@ -72,6 +72,9 @@
   /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
   .acct-tab-none{opacity:.38;cursor:not-allowed}
   .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
+  /* #276 정지 계정 — 번호에 줄을 긋고 빨간 OUT */
+  .acct-tab-out{color:#f87171;text-decoration:line-through}
+  .acct-tab .tout{font-style:normal;font-weight:900;font-size:9px;line-height:1;color:#f87171;text-decoration:none}
   /* ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님 그림 + 정정)★★ 탭 줄 ★오른쪽 끝★.
      margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
      탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */

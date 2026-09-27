@@ -215,6 +215,7 @@ acct-tab-on
 acct-tab-on.acct-tab-done
 acct-tab-on.acct-tab-done:hover
 acct-tab-on:hover
+acct-tab-out
 acct-tab:hover
 acct-table
 acct-tabs
@@ -415,6 +416,8 @@ background:var
 bad
 badge
 balance
+banned
+banned:true
 bar
 base
 base:b
@@ -506,6 +509,7 @@ bg-red-500/20
 bg-red-700
 bg-red-700/70
 bg-red-700/80
+bg-red-800
 bg-red-800/60
 bg-red-800/85
 bg-red-900/30
@@ -622,6 +626,7 @@ border-red-600
 border-red-700
 border-red-800
 border-red-800/70
+border-red-900
 border-red-900/60
 border-right:0!important
 border-right:1px
@@ -2619,6 +2624,7 @@ text-cyan-400
 text-cyan-600
 text-decoration-color:var
 text-decoration:line-through
+text-decoration:none
 text-emerald-100
 text-emerald-300
 text-emerald-300/80
@@ -2764,6 +2770,7 @@ total:v.total
 total_kina
 tour
 tour_seq
+tout
 tpl
 tr
 tr.bg-gray-700

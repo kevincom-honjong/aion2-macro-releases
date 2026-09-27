@@ -342,7 +342,7 @@ def t_js3_inject():
     src = main.HTML_DASHBOARD
     try:
         fns = _grab(src, ("esc", "escAttr", "isAcctSuf", "acctNoOfSuf", "baseId", "acctNumOf", "isMultiAcct",
-                          "acctTagSpread", "acctRow", "buildDailyProgress", "openCardMenu"))
+                          "acctTagSpread", "acctRow", "buildDailyProgress", "cardCfg", "openCardMenu"))   # #276 cardCfg
         consts = "\n".join(_line(src, p) for p in ("const MAX_ACCT", "const ACCT_LABELS", "const ACCT_SUFFIX"))
     except Exception as e:
         ok("JS3 함수를 잘라낸다", False, str(e))
