@@ -1779,13 +1779,18 @@ async def kina_adjust_row(tid: str) -> dict | None:
 async def _kina_sale_known(db, pc_id: str, at: str, why_json) -> bool:
     """이 카드의 ★지금 저장값★ 이 판매(at·why.hand_at)를 판독으로 이미 반영했나 — _kina_after_read 와 같은 규칙.
     판독 시각 표식이 없으면(옛 매크로) 모른다 → False(장부 차감이 저장값에 들어간 쪽으로 본다)."""
-    async with db.execute("SELECT read_at FROM kina_read WHERE pc_id=?", (pc_id,)) as cur:
+    # ★read_srv(서버 시계로 고친 판독 시각)★ — read_at 은 PC 시계라 늦은 PC 에서 판매 뒤 판독을 «판매 전» 으로 읽는다(반증 MED)
+    async with db.execute("SELECT COALESCE(read_srv, read_at) FROM kina_read WHERE pc_id=?", (pc_id,)) as cur:
         r = await cur.fetchone()
-    read_at = r[0] if r else None
-    if not read_at:
+    read = r[0] if r else None
+    if not read:
         return False
+    if at <= read:
+        return True                            # _kina_after_read 는 at > 판독 인 줄만 본다
     hs = _hand_srv(why_json)
-    return (hs if hs is not None else at) <= read_at
+    if hs is not None:
+        return hs <= read
+    return not KINA_UNKNOWN_HAND_DEDUCT
 
 
 async def find_kina_adjust_tids(pc_id: str, delta: int, needle: str) -> list:

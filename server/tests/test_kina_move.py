@@ -12,7 +12,7 @@ import json
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 22
+MIN_CHECKS = 23
 TOK = "fvsecret-km"
 H = {"X-FV-Token": TOK}
 
@@ -28,10 +28,11 @@ def _epoch(delta_s):
 
 
 async def _read(pc, total, read_at, seq, resend=False):
-    body = {"characters": [{"slot": 1, "name": "러닝"}], "total_kina": total, "collected_at": read_at,
+    # 새 전송의 collected_at = 보내는 순간(PC 시계) — 서버는 그것으로 PC 시계를 고쳐 read_srv 를 만든다(test_kina_ledger L-28)
+    body = {"characters": [{"slot": 1, "name": "러닝"}], "total_kina": total, "collected_at": _utc(0),
             "kina_read_at": read_at, "kina_seq": seq}
     if resend:
-        body["resend"] = True          # 늦게 도착한 판독(매크로 재전송 — 옛 collected_at 그대로)
+        body.update(resend=True, collected_at=read_at)   # 늦게 도착한 판독(매크로 재전송 — 옛 collected_at 그대로)
     r = await main.receive_char_info(pc, Req(body))
     assert r.status_code == 200, r.body
     return await _kina(pc)
@@ -103,6 +104,22 @@ async def t_known_reads():
        (await _row("km-known"))["pc_id"] == main.ns("main", "PC-KM2"), str(r))
 
 
+async def t_slow_pc_clock():
+    # 반증 MED — PC 시계가 늦으면 read_at(PC 시계)이 판매보다 앞이어도 read_srv(서버 시계)는 판매 뒤다 → 또 빼면 안 된다
+    import aiosqlite
+    await _read("PC-KS1", 10_000_000, _utc(-7200), 1)
+    await _read("PC-KS2", 190_184_667, _utc(-7200), 1)
+    await _sell("PC-KS1", -190_000_000 // 100, "ks-slow")
+    await _read("PC-KS2", 188_284_667, _utc(+2), 2)            # 판매 뒤 판독(이미 반영)
+    async with aiosqlite.connect(db.DB_PATH) as c:
+        await c.execute("UPDATE kina_read SET read_at=?, read_srv=? WHERE pc_id=?",
+                        (_utc(-10800), _utc(+2), main.ns("main", "PC-KS2")))
+        await c.commit()
+    await db.move_kina_adjust("ks-slow", main.ns("main", "PC-KS2"))
+    ok("KM-22 ★늦은 PC 시계: read_srv 가 판매 뒤면 새 카드에서 또 안 뺀다★", await _kina("PC-KS2") == 188_284_667,
+       str(await _kina("PC-KS2")))
+
+
 async def t_ambiguous_no_guess():
     await _read("PC-KA1", 100_000_000, _utc(-7200), 1)
     await _read("PC-KA2", 100_000_000, _utc(-7200), 1)
@@ -141,7 +158,7 @@ async def t_booked_guard():
 
 
 def test_all():
-    run_all([t_prod_case, t_known_reads, t_ambiguous_no_guess, t_booked_guard])
+    run_all([t_prod_case, t_known_reads, t_slow_pc_clock, t_ambiguous_no_guess, t_booked_guard])
     finish("test_kina_move", MIN_CHECKS)
 
 

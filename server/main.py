@@ -18044,7 +18044,7 @@ FV_KINA_REQUIRE_BOOKED = False
 def _fv_kina_booked(why: dict, pc_id: str) -> "str | None":
     """오류문 또는 None. booked_pc 가 있으면 pc_id 와 같아야 한다 · 없으면 FV_KINA_REQUIRE_BOOKED 가 정한다."""
     b = why.get("booked_pc")
-    if b is None or b == "":
+    if b is None or (isinstance(b, str) and not b.strip()):
         return ("why.booked_pc(매니아가 적은 카드)가 없습니다 — 어느 계정인지 모르면 빼지 않습니다"
                 if FV_KINA_REQUIRE_BOOKED else None)
     if not isinstance(b, str):
