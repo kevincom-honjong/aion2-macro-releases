@@ -3,13 +3,17 @@
 
     cd updater/server && python -X utf8 tests/test_scout_alarm.py
 """
+import asyncio
 import json
 from datetime import datetime, timedelta
 
 from _harness import main, db, ok, run_all, finish   # noqa: E402
 import scout_alarm as S
+from fastapi.testclient import TestClient
 
-MIN_CHECKS = 51
+C = TestClient(main.app, raise_server_exceptions=False)
+
+MIN_CHECKS = 55
 T0 = 1_790_000_000.0
 
 
@@ -278,6 +282,7 @@ async def t_wiring():
     main.tg_enabled, main.tenant_chat_id = (lambda: True), (lambda t: "123")
     main._list_bug_files = lambda tenant, pc_id=None: list(files)        # 실물처럼 ★동기★
     main._tg_muted = lambda tenant, pc: 60.0 if pc in muted else 0.0
+    hb0 = dict(main._SCOUT_HB)
     try:
         main._SCOUT.__init__()
         main._SCOUT_LOADED[0] = False
@@ -295,6 +300,26 @@ async def t_wiring():
         main.tg_send_text = fail_tg
         main._build_full_state = lambda tenant: _rows([card("PC-64", "error", T0)])
         o4 = await main._scout_tick("main", now=T0 + 180)
+        hb = dict(main._SCOUT_HB)
+        h = C.get("/health").json().get("scout") or {}
+        # 카드 하나가 터지면 틱은 살고 last_err 에 남는다
+        main._build_full_state = lambda tenant: _rows([card("PC-65", "hunting", T0, daily_progress=_BoomList([1]))])
+        await main._scout_tick("main", now=T0 + 240)
+        hb_row = dict(main._SCOUT_HB)
+
+        # 틱 전체가 터지면 루프는 살고 last_err 에 «tick:» 으로 남는다
+        async def boom_state(tenant):
+            raise RuntimeError("state down")
+        main._build_full_state = boom_state
+        g = (main.SCOUT_BOOT_GRACE_S, main.SCOUT_POLL_S)
+        main.SCOUT_BOOT_GRACE_S, main.SCOUT_POLL_S = 0, 0.01
+        try:
+            await asyncio.wait_for(main._scout_loop(), 0.2)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            main.SCOUT_BOOT_GRACE_S, main.SCOUT_POLL_S = g
+        hb_loop = dict(main._SCOUT_HB)
     finally:
         (main._build_full_state, main.tg_send_text, main.tg_enabled, main.tenant_chat_id, main._list_bug_files,
          main._tg_muted) = real
@@ -306,6 +331,15 @@ async def t_wiring():
     ok("SC-41 음소거 PC 는 텔레그램도 장부도 없음", o3 == [] and "PC-63:error" not in main._SCOUT.alerted, str(o3))
     ok("SC-45 ★텔레그램 전송 실패면 장부에 안 적는다 — 다음 틱에 다시(MED-6)★",
        o4 == [] and "PC-64:error" not in main._SCOUT.alerted, str(o4))
+    ok("SC-52 ★/health scout 심장박동: 틱 4번 = ticks+4 · 판정 카드 수 · 후보 수 · 보낸 것만 합계(교차검증 #288)★",
+       hb["ticks"] == hb0["ticks"] + 4 and hb["pcs_judged"] == 1 and hb["candidates_last"] == 1
+       and hb["sent_total"] == hb0["sent_total"] + 2 and hb["last_tick_at"] == iso(T0 + 180) + "Z", str(hb))
+    ok("SC-53 무인증 /health 에 scout 가 실린다(ticks·pcs_judged·sent_total·on)",
+       h.get("ticks") == hb["ticks"] and h.get("pcs_judged") == 1 and h.get("on") is True and "last_err" in h, str(h))
+    ok("SC-54 ★카드 판정 예외 → 틱은 계속(ticks+1) · last_err 에 PC 와 예외★",
+       hb_row["ticks"] == hb["ticks"] + 1 and "PC-65" in str(hb_row["last_err"]) and hb_row["last_err_at"], str(hb_row))
+    ok("SC-55 ★틱 전체 예외 → 루프는 살아 있고 last_err 가 «tick: RuntimeError»★",
+       str(hb_loop["last_err"]).startswith("tick: RuntimeError") and hb_loop["ticks"] == hb_row["ticks"], str(hb_loop))
     ok("SC-42 함대 알람은 음소거를 안 탄다(FLEET_ID)", main._scout_muted("main", "PC-63") is False)   # muted 해제 뒤
     ok("SC-43 scout_alerted 는 서버 관리 설정(일반 POST 금지)", "scout_alerted" in main.SERVER_MANAGED_SETTINGS)
     ok("SC-44 서버가 쓰는 [스카우터] 줄은 「흐른다」 머리 목록에", "[스카우터]" in S.SERVER_LINE_HEADS)

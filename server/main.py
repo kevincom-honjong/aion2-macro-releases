@@ -3309,6 +3309,8 @@ async def health(request: Request):
                         if isinstance(_version_cache.get("data"), dict) else None),
         "version_cache_age_s": (round(time.time() - float(_version_cache.get("ts") or 0), 1)
                                 if _version_cache.get("ts") else None),
+        # ★#288 🔭 스카우터 심장박동★ — ticks 가 늘고 pcs_judged>0 이면 루프가 산 것(알람 0통과 구별)
+        "scout": _scout_health(),
     }
     if _detail:
         out.update({
@@ -16366,6 +16368,20 @@ SCOUT_POLL_S = 60.0
 SCOUT_BOOT_GRACE_S = 120.0             # 부팅 직후 WS 재접속이 채워질 여유(재배포마다 offline 오탐 방지)
 _SCOUT = _scout_mod.Scout()
 _SCOUT_LOADED = [False]
+# ★/health 심장박동 (아이온2 #288 교차검증)★ — 알람 0통은 「조용함」과 「루프가 죽음」이 똑같아 보였다.
+_SCOUT_HB = {"ticks": 0, "last_tick_at": None, "last_err": None, "last_err_at": None,
+             "pcs_judged": 0, "candidates_last": 0, "sent_total": 0}
+
+
+def _scout_hb_err(msg: str) -> None:
+    _SCOUT_HB["last_err"] = str(msg)[:200]
+    _SCOUT_HB["last_err_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _scout_health() -> dict:
+    d = dict(_SCOUT_HB)
+    d["on"] = (os.getenv("SCOUT_ALARM") or "").strip().lower() not in ("off", "0", "false")
+    return d
 
 
 def _scout_muted(tenant: str, pc_id: str) -> bool:
@@ -16427,6 +16443,14 @@ async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
         if await _scout_say(tenant, pc_id, text):
             _SCOUT.mark(pc_id, key, now)
             sent.append((pc_id, key, text))
+    _SCOUT_HB["ticks"] += 1
+    _SCOUT_HB["last_tick_at"] = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _SCOUT_HB["pcs_judged"] = _SCOUT.judged
+    _SCOUT_HB["candidates_last"] = len(cands)
+    _SCOUT_HB["sent_total"] += len(sent)
+    if _SCOUT.last_row_err:
+        _scout_hb_err(_SCOUT.last_row_err)
+        _SCOUT.last_row_err = ""
     if _SCOUT.dirty:
         _SCOUT.dirty = False
         keep = {k: v for k, v in _SCOUT.alerted.items() if now - v < 2 * _scout_mod.RENOTIFY}
@@ -16449,6 +16473,7 @@ async def _scout_loop() -> None:
         try:
             await _scout_tick(SCOUT_TENANT)
         except Exception as e:
+            _scout_hb_err(f"tick: {type(e).__name__}: {e}")
             print(f"[스카우터] 틱 실패(계속): {type(e).__name__}: {e}", flush=True)
         await asyncio.sleep(SCOUT_POLL_S)
 

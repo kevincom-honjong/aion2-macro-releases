@@ -203,6 +203,8 @@ class Scout:
         self.bug_hold = {}                    # (물리 PC, key) -> 이번 틱 후보를 낸 새 이름들 — ★보낸 뒤에만★ 본 것으로
         self.first = True
         self.dirty = False
+        self.judged = 0                       # 이번 틱에 판정한 카드 수(/health 심장박동)
+        self.last_row_err = ""                # 마지막 카드별 판정 예외(틱은 계속)
 
     # ── 장부 ─────────────────────────────────────────────────────────
     def due(self, pid, key, now, window=RENOTIFY) -> bool:
@@ -256,6 +258,7 @@ class Scout:
         bug_names = 지금 있는 버그스샷 이름 전부 · muted_fn(pid) → 음소거·은퇴면 True."""
         out = []
         rows = [r for r in (rows or []) if _safe_watchable(r)]
+        self.judged = len(rows)
         first, self.first = self.first, False
         cache = {}
 
@@ -317,6 +320,7 @@ class Scout:
             try:
                 out += await self._one(r, now, first, lines, msgs, logs_flowing, macro_alarmed, muted_fn)
             except Exception as e:
+                self.last_row_err = f"{r.get('pc_id')}: {type(e).__name__}: {e}"[:200]
                 print(f"[스카우터] {r.get('pc_id')} 판정 실패(건너뜀): {type(e).__name__}: {e}", flush=True)
 
         # 7 유예 판정 — 물리 PC 의 카드 중 하나라도 일하며 살아 있으면 자가복구
