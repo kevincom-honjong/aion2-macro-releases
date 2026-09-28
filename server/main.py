@@ -2900,7 +2900,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 #   읽기(GET, 세션)는 그대로 둔다. 새 서버 관리 키를 만들면 여기 더한다(시험 test_setting_reserved 가 set_setting 호출처와 대조).
 SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "banned_accts", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
-                         "rot_allow", "parsec_map", "bug_pins", "scout_alerted"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
+                         "rot_allow", "parsec_map", "bug_pins", "scout_alerted", "idverify_hold"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
 _SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
 
 
@@ -11368,6 +11368,8 @@ async def _dispatch_macro_command(tenant: str, pc_id: str,
     #   있을 때만★ 작동했다. PC-21 peer_id 사고(첫 배달만 맞고 재배달이 틀림)와 같은 기계다.
     #   화면 잡음은 `_strip_cmds` 가 `_` 로 시작하는 키를 걷어내 막는다.
     args = {**args, "_by": "human"}
+    if command in IDVERIFY_CLEAR_CMDS:
+        await _idv_hold_clear(tenant, pc_id, command)       # 사고 667 — 사람 ▶시작·전환이 보류를 푼다
     if command == "set_info":
         # ★계정 비번을 이력에 남기지 않는다 (2026-08-17)★
         #   set_info 는 info.txt 의 계정 칸(아이디·비번·PIN…)을 채우는 명령이라
@@ -12364,6 +12366,74 @@ async def _updater_cmd_belongs_to(cmd_id: int, tenant: str) -> bool:
 
 ACK_DROP_STATUSES = ("cancelled", "rejected")   # 통합 2026-09-12 — CONTRACTS_대시보드 #1
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ★사고 667 (2026-09-29 PC-09) — 「본인 확인 필요」 계정은 사람 몫★
+#   런처 [본인 확인] 은 주인님만 할 수 있다. 매크로는 알람을 한 번 내고, 그 계정으로 오는 ★자동★ 명령을
+#   ack {"status":"cancelled","why":"… 본인 확인 필요(사고 667) …"} 로 접는다(lc loot.IDVERIFY_HOLD_TAG).
+#   서버는 그걸 몰라 ⛔ 「▶시작 뒤 7분째 사냥이 안 잡힙니다」 + 🔭 버그스샷 알람을 또 냈다(한 사람 몫에 5통).
+#   → 표식 ack 를 받으면 그 물리 PC 에 보류를 걸고: 순환은 ★조용히★(routine) 멈추고, 스카우터는 그 PC 를 안 본다.
+#   ★푸는 손잡이★ = 사람 ▶시작 · 사람 전환(_dispatch_macro_command). 재배포해도 남게 설정 `idverify_hold`.
+# ══════════════════════════════════════════════════════════════════════════════
+IDVERIFY_HOLD_TAG = "본인 확인 필요(사고 667)"      # = lc loot.IDVERIFY_HOLD_TAG (CONTRACTS_대시보드 §16)
+IDVERIFY_CLEAR_CMDS = ("start",) + BAN_SWITCH_CMDS
+_IDV_HOLD: dict = {}                                 # ns(tenant, 물리 PC) -> {"pc","why","at"}
+_IDV_LOADED = [False]
+
+
+async def _idv_load() -> None:
+    if _IDV_LOADED[0]:
+        return
+    _IDV_LOADED[0] = True
+    try:
+        raw = await get_setting("idverify_hold")
+        d = json.loads(raw) if raw else {}
+        if isinstance(d, dict):
+            _IDV_HOLD.update({str(k): v for k, v in d.items() if isinstance(v, dict)})
+    except Exception as e:
+        print(f"[667] 본인 확인 보류 복원 실패(빈손으로): {e}", flush=True)
+
+
+async def _idv_save() -> None:
+    try:
+        await set_setting("idverify_hold", json.dumps(_IDV_HOLD, ensure_ascii=False))
+    except Exception as e:
+        print(f"[667] 본인 확인 보류 저장 실패(메모리엔 있음): {e}", flush=True)
+
+
+def _idv_held(tenant: str, pc_id: str) -> "dict | None":
+    try:
+        return _IDV_HOLD.get(ns(tenant, _base_pc(pc_id)))
+    except Exception:
+        return None
+
+
+def _idv_stop_msg(pc_id: str) -> str:
+    return (f"계정{_rot_acct_no(pc_id)} 본인 확인 필요 — 순환 멈춤 "
+            f"(사고 667 · 사람 몫, 매크로가 이미 알렸습니다 · 사람 ▶시작/전환이 풉니다)")
+
+
+async def _idv_hold_set(tenant: str, pc_id: str, why: str) -> None:
+    await _idv_load()
+    base = _base_pc(pc_id)
+    key = ns(tenant, base)
+    _IDV_HOLD[key] = {"pc": clean_pc_id(pc_id), "why": str(why)[:200],
+                      "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    await _idv_save()
+    if _ROT.get(key) is not None:
+        await _rot_stop(tenant, base, _idv_stop_msg(pc_id), routine=True)
+
+
+async def _idv_hold_clear(tenant: str, pc_id: str, command: str) -> None:
+    await _idv_load()
+    if _IDV_HOLD.pop(ns(tenant, _base_pc(pc_id)), None) is None:
+        return
+    await _idv_save()
+    try:
+        await insert_log(ns(tenant, clean_pc_id(pc_id)), "info",
+                         f"[명령] 사람 {command} — 본인 확인 보류(사고 667) 풀림")
+    except Exception:
+        pass
+
 
 @app.post("/command/{pc_id}/ack/{cmd_id}")
 async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
@@ -12394,6 +12464,11 @@ async def ack_cmd(pc_id: str, cmd_id: int, request: Request):
                              f"[명령] 매크로가 #{cmd_id} 를 {status} 로 돌려보냈다 — {why or '사유 없음'}")
         except Exception as e:
             print(f"[ack] 취소 기록 실패(무시): {e}")
+        if IDVERIFY_HOLD_TAG in why:
+            try:
+                await _idv_hold_set(tenant, pc_id, why)       # 사고 667 — 순환 조용히 멈춤 · 스카우터 제외
+            except Exception as e:
+                print(f"[667] 보류 걸기 실패(무시): {type(e).__name__}: {e}", flush=True)
     else:
         status = "acked"
         ok = await ack_command(cmd_id)
@@ -15462,7 +15537,7 @@ async def _rot_switch_age(tenant: str, base: str, st: dict, cards: list, age: fl
 
 
 # ── 상태 기계 ────────────────────────────────────────────────────────────────
-async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) -> None:
+async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None, routine: bool = False) -> None:
     """순환 정지 + 알림. ★st 를 주면 '내가 아직 그 무장인가' 를 확인하고 지운다★
     (지금은 호출 직전에 await 가 없어 사고가 안 나지만, 하나만 생겨도 주인님이 방금
      다시 누른 무장을 지우게 된다)."""
@@ -15480,7 +15555,7 @@ async def _rot_stop(tenant: str, base: str, msg: str, st: dict | None = None) ->
         await _rot_save(force=True)
     except Exception:
         pass
-    await _rot_say(tenant, base, msg)
+    await _rot_say(tenant, base, msg, routine=routine)
 
 
 async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
@@ -15504,6 +15579,12 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     cards = _rot_cards(pcs, base)
     if not cards:
         return                                       # 카드가 사라진 PC — 아무것도 안 한다
+    await _idv_load()
+    _idv = _idv_held(tenant, base)
+    if _idv:
+        # 사고 667 — 본인 확인 보류가 살아 있다(재배포로 되살아난 무장 등). ⛔ 7분 대신 조용히 멈춘다.
+        await _rot_stop(tenant, base, _idv_stop_msg(_idv.get("pc") or base), st, routine=True)
+        return
     active = _rot_active(cards)
     stage = str(st.get("stage") or "")
     _task = str(st.get("task") or "")                 # "" 면 완주(사냥) 순환
@@ -16387,7 +16468,8 @@ def _scout_health() -> dict:
 def _scout_muted(tenant: str, pc_id: str) -> bool:
     """음소거·은퇴 — 이런 PC 는 후보도 안 만들고 집단 사망 셈에도 안 넣는다(반증 MED-6)."""
     try:
-        return ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0
+        return (ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0
+                or bool(_idv_held(tenant, pc_id)))            # 사고 667 — 본인 확인 대기 PC 는 사람 몫
     except Exception:
         return False
 
@@ -16434,6 +16516,7 @@ async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
             print(f"[스카우터] 장부 복원 실패(빈손으로): {e}", flush=True)
         _SCOUT_LOADED[0] = True
     now = time.time() if now is None else now
+    await _idv_load()
     pcs = await _build_full_state(tenant)
     names = [x.get("filename") for x in _list_bug_files(tenant)]      # _bug_scan 캐시(엔드포인트와 같은 부름 — 스레드 안 씀)
     cands = await _SCOUT.step(pcs, now, lambda p: _scout_logs(tenant, p), names,

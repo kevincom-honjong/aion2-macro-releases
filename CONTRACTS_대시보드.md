@@ -151,3 +151,9 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - 3대↑ 15분 안 새로 죽으면 `함대` 이름으로 한 번(쿨다운 30분, 부팅 때 이미 죽은 PC 제외). 버그 스샷은 새 파일 이름으로 감지, PC+종류(마지막 타임스탬프 뒤 꼬리)로 묶는다.
 - 장부: 설정 `scout_alerted`(서버 관리 — 일반 POST 금지). 재배포해도 같은 고장을 6시간 안에 다시 안 울린다.
 - 시험: `tests/test_scout_alarm.py`(가상 시계).
+
+## 16. 「본인 확인 필요」 보류 — 사고 667 (2026-09-29)
+- 매크로 → 서버: 명령 ack 본문 `{"status":"cancelled","why":"… 본인 확인 필요(사고 667) …"}` — 표식 글자 `본인 확인 필요(사고 667)` = lc `loot.IDVERIFY_HOLD_TAG` = main `IDVERIFY_HOLD_TAG`. 둘 중 하나를 바꾸면 이 보류가 조용히 꺼진다.
+- 서버: 그 ack 를 받으면 그 ★물리 PC★(`_base_pc`) 에 보류(설정 `idverify_hold`, 서버 관리 — 재배포해도 남음). 순환이 무장돼 있으면 routine 한 줄 「계정N 본인 확인 필요 — 순환 멈춤」 으로 멈춘다(텔레그램 없음 — 매크로가 이미 알렸다). 스카우터는 그 PC 의 모든 카드를 음소거처럼 뺀다(🔭 없음, 떼죽음 셈 제외).
+- 푸는 손잡이: 사람 명령 경로(`_dispatch_macro_command` — 대시보드·FV API·ops)의 `start`·`switch_launcher`·`switch_account`. `stop` 은 안 푼다. `acked` 에 실린 표식·표식 없는 cancelled 는 보류가 아니다.
+- 시험: `tests/test_idverify_667.py`.
