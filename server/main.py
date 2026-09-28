@@ -1483,6 +1483,7 @@ async def lifespan(app: FastAPI):
     except Exception as _he:
         print(f"[팜뷰] 창고 키나 부팅 복구 실패(무시): {_he}")
     await _kina_fix_moves()            # 엉뚱한 카드에서 뺀 매니아 판매 옮기기(2026-09-27)
+    await _idv_load()                  # 사고 667 본인 확인 보류 — /status 칸이 부팅 직후부터 보이게
     # 렌탈 킬스위치 복원(2026-08-06) — 볼륨 DB의 설정을 부팅 시 메모리로
     try:
         KILLED_TENANTS.update(_parse_killed(await get_setting(ns("main", "rental_kill")) or ""))
@@ -2247,6 +2248,12 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                     _pc["status"] = _st
                 _pc["banned"] = True
                 _pc["status_label"] = BANNED_LABEL
+    # 사고 667 — 보류를 카드에 보이게(숨은 상태 금지 · 아이온2 2026-09-29). 읽기는 부팅 때 한 번(_idv_load) —
+    #   여기서 DB 를 열면 /status 마다 연결이 는다(test_regressions ⑧).
+    for _pc in statuses:
+        _h = _idv_held(tenant, _pc.get("pc_id"))
+        if _h:
+            _pc["idverify_hold"] = {"since": _h.get("at"), "acct": _rot_acct_no(_h.get("pc")), "pc": _h.get("pc")}
     return statuses
 
 
@@ -6276,6 +6283,10 @@ function buildCard(pc) {
   const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
+  // ★사고 667 본인 확인 보류 — 숨은 상태를 칩으로 (아이온2 2026-09-29)★ 사람 ▶시작/전환이 푼다
+  const idvChip = pc.idverify_hold
+    ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="런처 [본인 확인] 은 사람 몫 — 순환·버그스샷 알람을 멈춰 뒀습니다. 사람 ▶시작/전환이 풉니다">🪪 본인 확인 필요 · 계정${esc(String(pc.idverify_hold.acct||'?'))}</span>`
+    : '';
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -6355,7 +6366,7 @@ function buildCard(pc) {
          얹히니 whitespace-nowrap+overflow-hidden 이 뒤쪽 뱃지를 통째로 잘랐다
          (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
          → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
-    ${(bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${bugBadge}${doneBadges}</div>`:''}
+    ${(idvChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
@@ -12423,6 +12434,46 @@ async def _idv_hold_set(tenant: str, pc_id: str, why: str) -> None:
         await _rot_stop(tenant, base, _idv_stop_msg(pc_id), routine=True)
 
 
+IDVERIFY_REMIND_S = 12 * 3600      # 보류가 12시간 살아 있으면 ★한 번★ 텔레그램(다시 안 보냄 — 보류마다 reminded)
+
+
+async def _idv_remind(tenant: str, now: float) -> list:
+    """사고 667 — 본인 확인 보류가 12시간째면 한 번 알린다. ★보낸 것만★ reminded 로 적는다(실패·음소거면 다음 틱에 다시)."""
+    await _idv_load()
+    sent = []
+    chat = tenant_chat_id(tenant)
+    if not (tg_enabled() and chat):
+        return sent
+    for key, h in list(_IDV_HOLD.items()):
+        t, base = split_ns(key)
+        if t != tenant or not isinstance(h, dict) or h.get("reminded"):
+            continue
+        try:
+            at = datetime.strptime(str(h.get("at")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            continue
+        age = now - at
+        if age < IDVERIFY_REMIND_S or _tg_muted(tenant, base) > 0:
+            continue
+        text = (f"{base} 계정{_rot_acct_no(h.get('pc'))} 본인 확인 대기 {int(age // 3600)}시간째 "
+                f"— 런처 [본인 확인] 은 사람 몫 (사고 667 · 사람 ▶시작/전환이 풉니다)")
+        try:
+            mid = await tg_send_text(chat, f"{base} | ⏰ {text}")
+        except Exception as e:
+            print(f"[667] 텔레그램 실패: {e}", flush=True)
+            mid = None
+        if mid is None:
+            continue
+        h["reminded"] = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await _idv_save()
+        sent.append((base, text))
+        try:
+            await insert_log(ns(tenant, base), "warn", f"[알람] {base} | ⏰ {text}")
+        except Exception:
+            pass
+    return sent
+
+
 async def _idv_hold_clear(tenant: str, pc_id: str, command: str) -> None:
     await _idv_load()
     if _IDV_HOLD.pop(ns(tenant, _base_pc(pc_id)), None) is None:
@@ -16468,8 +16519,7 @@ def _scout_health() -> dict:
 def _scout_muted(tenant: str, pc_id: str) -> bool:
     """음소거·은퇴 — 이런 PC 는 후보도 안 만들고 집단 사망 셈에도 안 넣는다(반증 MED-6)."""
     try:
-        return (ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0
-                or bool(_idv_held(tenant, pc_id)))            # 사고 667 — 본인 확인 대기 PC 는 사람 몫
+        return ns(tenant, pc_id) in RETIRED_PCS or _tg_muted(tenant, pc_id) > 0
     except Exception:
         return False
 
@@ -16520,12 +16570,19 @@ async def _scout_tick(tenant: str, now: "float | None" = None) -> list:
     pcs = await _build_full_state(tenant)
     names = [x.get("filename") for x in _list_bug_files(tenant)]      # _bug_scan 캐시(엔드포인트와 같은 부름 — 스레드 안 씀)
     cands = await _SCOUT.step(pcs, now, lambda p: _scout_logs(tenant, p), names,
-                              lambda p: _scout_muted(tenant, p))
+                              lambda p: _scout_muted(tenant, p),
+                              # 사고 667 — 본인 확인 보류는 ★버그스샷(구조 실패 등) 알람만★ 뺀다. 죽음·error·무보고는 그대로 운다
+                              #   (아이온2 2026-09-29: 주인님이 조용한 알람에 데였다 #288)
+                              bug_muted_fn=lambda p: bool(_idv_held(tenant, p)))
     sent = []
     for pc_id, key, text in cands:
         if await _scout_say(tenant, pc_id, text):
             _SCOUT.mark(pc_id, key, now)
             sent.append((pc_id, key, text))
+    try:
+        await _idv_remind(tenant, now)
+    except Exception as e:
+        print(f"[667] 본인 확인 12시간 알림 실패(다음 틱에 다시): {type(e).__name__}: {e}", flush=True)
     _SCOUT_HB["ticks"] += 1
     _SCOUT_HB["last_tick_at"] = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _SCOUT_HB["pcs_judged"] = _SCOUT.judged

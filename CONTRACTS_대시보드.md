@@ -154,6 +154,8 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 
 ## 16. 「본인 확인 필요」 보류 — 사고 667 (2026-09-29)
 - 매크로 → 서버: 명령 ack 본문 `{"status":"cancelled","why":"… 본인 확인 필요(사고 667) …"}` — 표식 글자 `본인 확인 필요(사고 667)` = lc `loot.IDVERIFY_HOLD_TAG` = main `IDVERIFY_HOLD_TAG`. 둘 중 하나를 바꾸면 이 보류가 조용히 꺼진다.
-- 서버: 그 ack 를 받으면 그 ★물리 PC★(`_base_pc`) 에 보류(설정 `idverify_hold`, 서버 관리 — 재배포해도 남음). 순환이 무장돼 있으면 routine 한 줄 「계정N 본인 확인 필요 — 순환 멈춤」 으로 멈춘다(텔레그램 없음 — 매크로가 이미 알렸다). 스카우터는 그 PC 의 모든 카드를 음소거처럼 뺀다(🔭 없음, 떼죽음 셈 제외).
+- 서버: 그 ack 를 받으면 그 ★물리 PC★(`_base_pc`) 에 보류(설정 `idverify_hold`, 서버 관리 — 재배포해도 남음). 순환이 무장돼 있으면 routine 한 줄 「계정N 본인 확인 필요 — 순환 멈춤」 으로 멈춘다(⛔ 7분 알람 없음 — 매크로가 이미 알렸다). 스카우터는 그 PC 의 ★버그스샷 알람만★ 뺀다(구조 실패 등 — 새 이름·유예 둘 다). ★죽음(offline·무보고)·error·errors·재접속·떼죽음 셈은 그대로 운다★(#288 — 조용한 알람 금지).
+- 보이게: `/status` 카드(그 물리 PC 카드 전부)에 `idverify_hold: {"since": "<UTC ISO Z>", "acct": N, "pc": "PC-09b"}` · 대시보드 카드에 칩 «🪪 본인 확인 필요 · 계정N». 풀리면 칸이 사라진다.
+- 12시간 알림: 보류가 12시간째면 텔레그램 ★한 번★ «PC-XX 계정N 본인 확인 대기 N시간째 …»(보낸 뒤 `reminded` 를 설정에 적음 — 실패·음소거면 다음 틱에 다시, 보낸 뒤로는 재배포해도 안 보냄). 스카우터 틱이 돈다(`SCOUT_ALARM=off` 면 같이 꺼짐).
 - 푸는 손잡이: 사람 명령 경로(`_dispatch_macro_command` — 대시보드·FV API·ops)의 `start`·`switch_launcher`·`switch_account`. `stop` 은 안 푼다. `acked` 에 실린 표식·표식 없는 cancelled 는 보류가 아니다.
 - 시험: `tests/test_idverify_667.py`.

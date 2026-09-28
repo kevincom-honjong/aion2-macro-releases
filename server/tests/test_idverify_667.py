@@ -12,9 +12,8 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from _harness import main, db, ok, Req, run_all, finish   # noqa: E402
-import scout_alarm as S
 
-MIN_CHECKS = 16
+MIN_CHECKS = 27
 M = main
 SAID = []          # (text, routine)
 TAG_WHY = "계정 b 본인 확인 필요(사고 667) — 런처 [본인 확인] 안내 · 자동 start 접음"
@@ -115,32 +114,151 @@ async def t_rotation_guard():
        not alive and _hard() == [] and any("본인 확인 필요" in t for t, _r in SAID), str(SAID))
 
 
-async def t_scout_skips():
+def _ic(pid, st, upd):
+    """스카우터용 카드 — upd = 서버가 받은 시각(epoch)."""
+    iso = datetime.fromtimestamp(upd, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return {"pc_id": pid, "status": st, "_updated_at": iso, "last_active": iso, "_ws_live": True,
+            "errors": [], "daily_progress": [{"slot": 1, "completed": False}], "slot": 1}
+
+
+class _Scene:
+    """main._scout_tick 그대로(상태·버그 목록·텔레그램만 가짜) — 좁힌 범위를 배선째로 본다."""
+
+    def __init__(self):
+        self.rows, self.files, self.sent, self.fail = [], [], [], False
+
+    async def state(self, tenant):
+        return list(self.rows)
+
+    async def tg(self, chat, text):
+        if self.fail:
+            return None
+        self.sent.append(text)
+        return 1
+
+    def __enter__(self):
+        self.real = (M._build_full_state, M.tg_send_text, M.tg_enabled, M.tenant_chat_id, M._list_bug_files,
+                     M._tg_muted, M.get_logs)
+        M._build_full_state, M.tg_send_text = self.state, self.tg
+        M.tg_enabled, M.tenant_chat_id = (lambda: True), (lambda t: "123")
+        M._list_bug_files = lambda tenant, pc_id=None: [{"filename": f} for f in self.files]
+        M._tg_muted = lambda tenant, pc: 0.0
+        M.get_logs = _f_logs
+        M._SCOUT.__init__()
+        M._SCOUT_LOADED[0] = True
+        return self
+
+    def __exit__(self, *e):
+        (M._build_full_state, M.tg_send_text, M.tg_enabled, M.tenant_chat_id, M._list_bug_files,
+         M._tg_muted, M.get_logs) = self.real
+        M._SCOUT.__init__()
+
+
+def _said(sent, *words):
+    return [x for x in sent if all(w in x for w in words)]
+
+
+async def t_scout_narrow():
+    """① 보류는 버그스샷(구조 실패)만 뺀다 — 죽음·error·무보고는 운다(아이온2: #288 조용한 알람)."""
     await reset()
-    M._IDV_HOLD[M.ns("main", "PC-09")] = {"pc": "PC-09b", "why": TAG_WHY, "at": "x"}
-    ok("I667-9 스카우터 음소거: 그 물리 PC 의 모든 카드", M._scout_muted("main", "PC-09")
-       and M._scout_muted("main", "PC-09b") and not M._scout_muted("main", "PC-10"))
-    names = ["PC-09_20260929_043800_PC-09_20260929_043801_lc2-rescue-aion2-fail.png",
-             "PC-10_20260929_043800_captcha.png"]
-
-    async def run_scout():
-        sc, t0, out = S.Scout(), 1_790_000_000.0, []
-        rows = [card("PC-09", "idle"), card("PC-09b", "idle"), card("PC-10", "idle")]
-
-        async def logs(p):
-            return []
-        mute = lambda p: M._scout_muted("main", p)       # noqa: E731
-        for t, ns_ in ((t0, []), (t0 + 60, names), (t0 + 60 + S.BUG_GRACE_S + 5, names)):
-            o = await sc.step(rows, t, logs, ns_, mute)
-            for p, k, _x in o:
-                sc.mark(p, k, t)
-            out += [(p, k) for p, k, _x in o]
-        return out
-    held = await run_scout()
+    M._IDV_HOLD[M.ns("main", "PC-09")] = {"pc": "PC-09b", "why": TAG_WHY, "at": "2099-01-01T00:00:00Z"}
+    ok("I667-9 ★보류는 스카우터 음소거가 아니다(죽음·error 셈·전송 그대로)★", not M._scout_muted("main", "PC-09")
+       and not M._scout_muted("main", "PC-09b"))
+    shot = "PC-09_20260929_043800_PC-09_20260929_043801_lc2-rescue-aion2-fail.png"
+    t0 = 1_790_000_000.0
+    with _Scene() as sc:
+        sc.rows = [_ic("PC-09", "idle", t0), _ic("PC-09b", "idle", t0), _ic("PC-10", "idle", t0)]
+        await M._scout_tick("main", now=t0)
+        sc.files = [shot, "PC-10_20260929_043800_captcha.png"]
+        sc.rows = [_ic("PC-09", "idle", t0 + 60), _ic("PC-09b", "error", t0 + 60), _ic("PC-10", "idle", t0 + 60)]
+        await M._scout_tick("main", now=t0 + 60)
+        sc.rows = [_ic("PC-09", "idle", t0 + 60), _ic("PC-09b", "error", t0 + 60), _ic("PC-10", "idle", t0 + 700)]
+        await M._scout_tick("main", now=t0 + 60 + M._scout_mod.BUG_GRACE_S + 5)
+        bug_held = _said(sc.sent, "PC-09", "rescue")
+        err = _said(sc.sent, "PC-09b", "상태=error")
+        other = _said(sc.sent, "PC-10", "captcha")
+    ok("I667-10 ★보류 PC 의 버그스샷(lcN-rescue-aion2-fail)은 안 운다 · 다른 PC 버그는 운다★",
+       bug_held == [] and len(other) == 1, str([bug_held, other]))
+    ok("I667-17 ★보류 중이어도 error 는 운다(매크로 크래시 = 주인님이 들어야 한다)★", len(err) == 1, str(err))
+    with _Scene() as sc:
+        sc.rows = [_ic("PC-09", "idle", t0), _ic("PC-09b", "idle", t0)]
+        await M._scout_tick("main", now=t0)
+        sc.rows = [_ic("PC-09", "offline", t0), _ic("PC-09b", "offline", t0)]
+        await M._scout_tick("main", now=t0 + 60)
+        await M._scout_tick("main", now=t0 + 60 + M._scout_mod.DWELL["offline"] + 5)
+        dead = _said(sc.sent, "PC-09", "offline")
+    ok("I667-18 ★보류 중 PC 가 죽으면(offline·무보고) 운다★", len(dead) >= 1, str(dead))
+    # 실물 순서 — 구조 실패 스샷이 먼저(유예 10분 대기 중), 매크로의 표식 ack 가 그 뒤에 온다
     M._IDV_HOLD.clear()
-    free = await run_scout()
-    ok("I667-10 ★보류 PC 의 버그스샷(lcN-rescue-aion2-fail)은 안 운다 · 다른 PC 는 그대로 · 대조: 보류가 없으면 운다★",
-       held == [("PC-10", "bug:captcha")] and ("PC-09", "bug:lcN-rescue-aion2-fail") in free, str([held, free]))
+    with _Scene() as sc:
+        sc.rows = [_ic("PC-09", "idle", t0)]
+        await M._scout_tick("main", now=t0)
+        sc.files = ["PC-09_20260929_043700_stuck_map.png"]          # 유예로 가는 종류
+        sc.rows = [_ic("PC-09", "idle", t0 + 60)]
+        await M._scout_tick("main", now=t0 + 60)
+        pend = bool(M._SCOUT.bug_pending.get("PC-09"))
+        M._IDV_HOLD[M.ns("main", "PC-09")] = {"pc": "PC-09b", "why": TAG_WHY, "at": "2099-01-01T00:00:00Z"}
+        await M._scout_tick("main", now=t0 + 60 + M._scout_mod.BUG_GRACE_S + 5)
+        late = _said(sc.sent, "PC-09", "stuck_map")
+    ok("I667-27 ★스샷이 유예 중일 때 보류가 걸려도(실물 순서) 유예 끝에 안 운다★", pend and late == [], str([pend, late]))
+    # 대조 — 보류가 없으면 그 구조 실패 스샷은 운다(시험이 헛돌지 않게)
+    M._IDV_HOLD.clear()
+    with _Scene() as sc:
+        sc.rows = [_ic("PC-09", "idle", t0)]
+        await M._scout_tick("main", now=t0)
+        sc.files = [shot]
+        await M._scout_tick("main", now=t0 + 60)
+        await M._scout_tick("main", now=t0 + 60 + M._scout_mod.BUG_GRACE_S + 5)
+        free = _said(sc.sent, "PC-09", "rescue")
+    ok("I667-19 대조: 보류가 없으면 같은 스샷이 운다", len(free) == 1, str(free))
+
+
+async def t_card_and_chip():
+    """② 보류가 /status 카드와 대시보드 칩에 보인다."""
+    await reset()
+    await db.upsert_status("PC-09b", {"pc_id": "PC-09b", "status": "idle", "character": "부캐"})
+    await db.upsert_status("PC-09", {"pc_id": "PC-09", "status": "other_account", "character": "주캐"})
+    await db.upsert_status("PC-10", {"pc_id": "PC-10", "status": "idle", "character": "c10"})
+    M._IDV_HOLD[M.ns("main", "PC-09")] = {"pc": "PC-09b", "why": TAG_WHY, "at": "2026-09-29T04:38:00Z"}
+    rows = {r["pc_id"]: r for r in await M._build_full_state("main")}
+    h = (rows.get("PC-09b") or {}).get("idverify_hold")
+    ok("I667-20 ★/status 카드에 idverify_hold:{since, acct}(그 물리 PC 카드 전부)★",
+       h == {"since": "2026-09-29T04:38:00Z", "acct": 2, "pc": "PC-09b"}
+       and (rows.get("PC-09") or {}).get("idverify_hold") == h and "idverify_hold" not in (rows.get("PC-10") or {}),
+       str([h, rows.get("PC-10", {}).get("idverify_hold")]))
+    html = M.HTML_DASHBOARD
+    ok("I667-21 ★대시보드 카드에 «본인 확인 필요» 칩이 그려진다(카드 줄에 끼움)★",
+       "const idvChip = pc.idverify_hold" in html and "본인 확인 필요 · 계정" in html
+       and "${idvChip}${bugBadge}${doneBadges}" in html)
+    M._IDV_HOLD.clear()
+    rows = {r["pc_id"]: r for r in await M._build_full_state("main")}
+    ok("I667-22 풀리면 카드에서 사라진다", "idverify_hold" not in (rows.get("PC-09b") or {}))
+
+
+async def t_remind_12h():
+    """③ 12시간째 ★한 번★ 텔레그램 «PC-XX 계정N 본인 확인 대기 12시간째»."""
+    await reset()
+    now = 1_790_000_000.0
+
+    def at(ago):
+        return datetime.fromtimestamp(now - ago, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    M._IDV_HOLD[M.ns("main", "PC-09")] = {"pc": "PC-09b", "why": TAG_WHY, "at": at(M.IDVERIFY_REMIND_S - 60)}
+    with _Scene() as sc:
+        await M._scout_tick("main", now=now)
+        ok("I667-23 12시간 전엔 안 보낸다", _said(sc.sent, "본인 확인 대기") == [], str(sc.sent))
+        M._IDV_HOLD[M.ns("main", "PC-09")]["at"] = at(M.IDVERIFY_REMIND_S + 30)
+        sc.fail = True
+        await M._scout_tick("main", now=now + 60)
+        ok("I667-24 전송 실패면 reminded 를 안 적는다(다음 틱에 다시)",
+           not M._IDV_HOLD[M.ns("main", "PC-09")].get("reminded"))
+        sc.fail = False
+        await M._scout_tick("main", now=now + 120)
+        await M._scout_tick("main", now=now + 180)
+        await M._scout_tick("main", now=now + 3 * 3600)
+        r = _said(sc.sent, "PC-09 계정2 본인 확인 대기 12시간째")
+    ok("I667-25 ★스카우터 틱이 12시간째 한 번 보낸다 · 다시 안 보낸다(3시간 뒤에도)★", len(r) == 1, str(sc.sent))
+    held = json.loads(await db.get_setting("idverify_hold") or "{}")
+    ok("I667-26 보냈다는 표시가 설정에 남는다(재배포 뒤 또 안 보냄)", bool(held.get("PC-09", {}).get("reminded")), str(held))
 
 
 async def t_human_clears():
@@ -177,8 +295,8 @@ def test_all():
         _ORIG[k] = getattr(M, k)
         setattr(M, k, v)
     try:
-        run_all([t_ack_stops_rotation_quietly, t_other_cancel_untouched, t_rotation_guard, t_scout_skips,
-                 t_human_clears, t_persist])
+        run_all([t_ack_stops_rotation_quietly, t_other_cancel_untouched, t_rotation_guard, t_scout_narrow,
+                 t_card_and_chip, t_remind_12h, t_human_clears, t_persist])
     finally:
         for k, v in _ORIG.items():
             setattr(M, k, v)

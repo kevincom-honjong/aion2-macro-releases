@@ -253,9 +253,11 @@ class Scout:
                                   f"({', '.join(fresh)}) — 개별 고장이 아닙니다. 인터넷 요금/공유기/정전을 먼저 확인해 주세요")
 
     # ── 한 틱 ────────────────────────────────────────────────────────
-    async def step(self, rows, now, logs_fn, bug_names, muted_fn=lambda pid: False):
+    async def step(self, rows, now, logs_fn, bug_names, muted_fn=lambda pid: False, bug_muted_fn=None):
         """rows = /status 카드 · logs_fn(pid) → [(created_at, message)] 최근 줄(오래된→새) ·
-        bug_names = 지금 있는 버그스샷 이름 전부 · muted_fn(pid) → 음소거·은퇴면 True."""
+        bug_names = 지금 있는 버그스샷 이름 전부 · muted_fn(pid) → 음소거·은퇴면 True ·
+        bug_muted_fn(물리 PC) → 버그스샷 알람만 뺀다(사고 667 본인 확인 보류 — 죽음·error 는 그대로 운다)."""
+        bug_muted = bug_muted_fn or (lambda pid: False)
         out = []
         rows = [r for r in (rows or []) if _safe_watchable(r)]
         self.judged = len(rows)
@@ -298,7 +300,7 @@ class Scout:
         for n in new:
             by_base.setdefault(shot_base(n), []).append(n)
         for bp, ns_ in by_base.items():
-            if bp not in bases or muted_fn(bp):
+            if bp not in bases or muted_fn(bp) or bug_muted(bp):
                 continue
             try:
                 hard, sw, defer = bug_route(ns_)
@@ -340,7 +342,7 @@ class Scout:
                     continue
                 if not stopped and now - p["t0"] < BUG_TOTAL_CAP_S:
                     continue
-                if muted_fn(bp) or (cards and all([bool(park_reason(await msgs(str(r.get("pc_id"))))) for r in cards])):
+                if muted_fn(bp) or bug_muted(bp) or (cards and all([bool(park_reason(await msgs(str(r.get("pc_id"))))) for r in cards])):
                     self.bug_pending.pop(bp)
                     continue
                 k = bug_kind(p["names"][-1])

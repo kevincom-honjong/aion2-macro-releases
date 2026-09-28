@@ -2057,6 +2057,7 @@ pc.efficiency
 pc.efficiency!
 pc.hunt_progress
 pc.hunt_progress!
+pc.idverify_hold
 pc.last_active
 pc.macro_version
 pc.map

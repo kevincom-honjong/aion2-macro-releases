@@ -1423,6 +1423,10 @@ function buildCard(pc) {
   const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
   const errHtml = (pc.errors||[]).slice(0,3).map(e=>
     `<div class="text-xs text-red-400 bg-red-900/30 rounded px-2 py-0.5">⚠ ${esc(e)}</div>`).join('');
+  // ★사고 667 본인 확인 보류 — 숨은 상태를 칩으로 (아이온2 2026-09-29)★ 사람 ▶시작/전환이 푼다
+  const idvChip = pc.idverify_hold
+    ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="런처 [본인 확인] 은 사람 몫 — 순환·버그스샷 알람을 멈춰 뒀습니다. 사람 ▶시작/전환이 풉니다">🪪 본인 확인 필요 · 계정${esc(String(pc.idverify_hold.acct||'?'))}</span>`
+    : '';
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
     : '';
@@ -1502,7 +1506,7 @@ function buildCard(pc) {
          얹히니 whitespace-nowrap+overflow-hidden 이 뒤쪽 뱃지를 통째로 잘랐다
          (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
          → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
-    ${(bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${bugBadge}${doneBadges}</div>`:''}
+    ${(idvChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
