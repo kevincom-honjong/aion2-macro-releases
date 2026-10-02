@@ -34,7 +34,7 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 272     # 2026-09-24 두 형식 +4(I1-e 400 셋 더 · I1-e2 ts 방식) · 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
+MIN_CHECKS = 295     # 2026-09-24 두 형식 +4(I1-e 400 셋 더 · I1-e2 ts 방식) · 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
 
 KEY = "testkey"
 KEY2 = "ocrkey2"       # 두 번째 테넌트(격리 시험) — 헤더라 ASCII
@@ -684,7 +684,7 @@ console.log(JSON.stringify(res));
 
 FV_TOK = "fv-ocr-test-token-0123456789abcdef"
 ITEM_KEYS = {"id", "img", "site", "status", "label", "created", "at", "count", "members", "prompt", "gemini", "local", "pc", "thumbs"}
-STAT_KEYS = {"pending", "labeled", "bad", "auto", "images", "hits", "gemini_compared", "gemini_disagree", "gemini_disagree_rate",
+STAT_KEYS = {"pending", "labeled", "bad", "auto", "dismissed", "dropped", "images", "hits", "gemini_compared", "gemini_disagree", "gemini_disagree_rate",
              "local_compared", "local_disagree", "local_disagree_rate"}
 FV_ROUTES = (("get", "/api/fv/ocr/queue", {}), ("get", "/api/fv/ocr/img/1", {}), ("post", "/api/fv/ocr/label", {"json": {"id": 1, "text": "x"}}),
              ("post", "/api/fv/ocr/bad", {"json": {"id": 1}}), ("post", "/api/fv/ocr/skip", {"json": {"id": 1}}),
@@ -1294,6 +1294,142 @@ def v2_capped_does_not_evict():
     _reset_rate()
 
 
+def _dh(i):
+    """서로 멀리 떨어진(해밍 ≫ 4) 64비트 dhash — 전부 다른 묶음이 된다."""
+    return hashlib.sha256(("dh%d" % i).encode()).hexdigest()[:16]
+
+
+def _site_stats(site, sess=None):
+    return S("get", "/ocr/stats", sess=sess).json()["sites"].get(site, {})
+
+
+def d417_dismiss_restore():
+    """주인님 #417 «팜뷰에 3800개 있다 ocr» — site 대기를 한 번에 치우고(dismissed) 되돌릴 수 있다. 사람 라벨·나쁨이 아니다."""
+    with fresh_store():
+        OL.OCR_DISK_CAP = 10 ** 9
+        OL.OCR_SITE_PENDING_CAP = 0
+        _reset_rate()
+        flood = []
+        for i in range(6):
+            if i % 20 == 0:
+                _reset_rate()
+            flood.append(sub("flood", "f%d" % i, dh=_dh(i), pc="PC-D%d" % (i % 3), gem="맵%d" % i).json())
+        for i in range(2):
+            sub("keep", "k%d" % i, dh=_dh(100 + i), pc="PC-DK", gem="g")
+        S("post", "/ocr/label", json={"id": flood[0]["cluster"], "label": "정답"})
+        before = labels(0).json()
+        r = S("post", "/ocr/dismiss_site", json={"site": "flood"})
+        j = r.json()
+        ok("D417-a ★대기 5묶음(라벨 1 제외)이 치워진다 · 응답에 개수·남은 대기★",
+           r.status_code == 200 and j.get("dismissed") == 5 and j.get("pending") == 2, str(j))
+        st = _site_stats("flood")
+        ok("D417-b ★통계: 대기 0 · dismissed 5 · 라벨 1 · 나쁨 0(나쁨으로 안 센다)★",
+           (st.get("pending"), st.get("dismissed"), st.get("labeled"), st.get("bad")) == (0, 5, 1, 0), str(st)[:300])
+        sk = _site_stats("keep")
+        ok("D417-c 다른 site 는 그대로", sk.get("pending") == 2 and sk.get("dismissed") == 0, str(sk)[:200])
+        ids = q_ids()
+        ok("D417-d 대기열(/ocr/queue)에는 keep 2개만", len(ids) == 2, str(ids))
+        after = labels(0).json()
+        ok("D417-e ★매크로에 나가는 라벨·나쁨은 치우기 전과 같다(치움은 신호가 아니다)★",
+           after.get("labels") == before.get("labels") and after.get("bad") == before.get("bad"), str(after)[:200])
+        ok("D417-f 사람이 단 라벨은 그대로 매크로에 나간다",
+           after["labels"]["flood"][hashlib.sha1(img("f0")).hexdigest()] == "정답")
+        r = S("post", "/ocr/dismiss_site", json={"site": "flood"})
+        ok("D417-g 멱등: 다시 불러도 0개 · 200", r.status_code == 200 and r.json().get("dismissed") == 0, str(r.json()))
+        _reset_rate()
+        ex = sub("flood", "f1", dh=_dh(1), pc="PC-D1", gem="맵1").json()
+        nr = sub("flood", "f1-near", dh="%016x" % (int(_dh(1), 16) ^ 1), pc="PC-D1", gem="맵1").json()
+        ok("D417-h 치운 묶음에 정확·near 재제출이 와도 대기로 안 돌아온다",
+           ex["dup"] == "exact" and nr.get("cluster") == flood[1]["cluster"] and _site_stats("flood").get("pending") == 0,
+           "%s %s" % (ex, nr))
+        r = S("post", "/ocr/restore_site", json={"site": "flood"})
+        ok("D417-i ★되돌리기: 치운 5묶음이 대기로 · 라벨 된 1묶음은 그대로★",
+           r.status_code == 200 and r.json().get("restored") == 5, str(r.json()))
+        st = _site_stats("flood")
+        ok("D417-j 되돌린 뒤 통계: 대기 5 · dismissed 0 · 라벨 1",
+           (st.get("pending"), st.get("dismissed"), st.get("labeled")) == (5, 0, 1), str(st)[:300])
+        ok("D417-k 대기열에 flood 가 돌아온다", len(q_ids()) == 7)
+        ok("D417-l 세션 없으면 401(dismiss·restore 둘 다)",
+           S("post", "/ocr/dismiss_site", sess=False, json={"site": "flood"}).status_code == 401
+           and S("post", "/ocr/restore_site", sess=False, json={"site": "flood"}).status_code == 401)
+        ok("D417-m site 가 없거나 글자가 하나도 안 남으면 400",
+           S("post", "/ocr/dismiss_site", json={}).status_code == 400
+           and S("post", "/ocr/dismiss_site", json={"site": "///"}).status_code == 400)
+        main.TENANTS.setdefault("ocrt", {"password": "ocr비번2", "api_key": KEY2, "expires": "", "chat_id": ""})
+        main.PW_TO_TENANT["ocr비번2"] = "ocrt"
+        main.KEY_TO_TENANT[KEY2] = "ocrt"
+        s2 = main.new_session("ocrt")
+        r = S("post", "/ocr/dismiss_site", sess=s2, json={"site": "flood"})
+        ok("D417-n ★다른 테넌트의 dismiss 는 본판 대기를 못 건드린다(0개)★",
+           r.status_code == 200 and r.json().get("dismissed") == 0 and _site_stats("flood").get("pending") == 5, str(r.json()))
+    OL.OCR_SITE_PENDING_CAP = 300
+    _reset_rate()
+
+
+def d417_site_cap():
+    """site 별 대기 상한 — 한 site 가 대기열을 혼자 채우지 못한다(새 묶음만 버림 · 이미 있는 묶음에 붙는 것은 그대로)."""
+    saved = OL.OCR_SITE_PENDING_CAP
+    OL._DROPPED.clear()
+    try:
+        with fresh_store():
+            OL.OCR_DISK_CAP = 10 ** 9
+            OL.OCR_SITE_PENDING_CAP = 3
+            _reset_rate()
+            rs = [sub("capflood", "c%d" % i, dh=_dh(200 + i), pc="PC-CF", gem="g").json() for i in range(5)]
+            kinds = [r.get("dup") for r in rs]
+            ok("D417-o ★상한 3: 새 묶음 3개만 만들고 나머지 2개는 dropped(200 · id 없음)★",
+               kinds[:3] == ["new"] * 3 and kinds[3:] == ["dropped"] * 2 and rs[3].get("id") is None
+               and rs[3].get("reason") == "site_pending_cap", str(rs)[:400])
+            n_img = _rows("SELECT COUNT(*) FROM ocr_img WHERE site='capflood'")[0][0]
+            n_cl = _rows("SELECT COUNT(*) FROM ocr_cluster WHERE site='capflood'")[0][0]
+            ok("D417-p 버린 제출은 줄·묶음을 안 만든다(이미지 3 · 묶음 3)", (n_img, n_cl) == (3, 3), str((n_img, n_cl)))
+            st = _site_stats("capflood")
+            ok("D417-q ★통계에 dropped 2 · 대기 3★", (st.get("dropped"), st.get("pending")) == (2, 3), str(st)[:300])
+            ex = sub("capflood", "c0", dh=_dh(200), pc="PC-CF", gem="g").json()
+            nr = sub("capflood", "c0-near", dh="%016x" % (int(_dh(200), 16) ^ 1), pc="PC-CF", gem="g").json()
+            ok("D417-r 이미 있는 묶음에 붙는 정확·near 제출은 상한과 상관없이 받는다",
+               ex["dup"] == "exact" and nr.get("cluster") == rs[0]["cluster"] and nr.get("dup") != "dropped", "%s %s" % (ex, nr))
+            other = sub("othersite", "o0", dh=_dh(300), pc="PC-CF", gem="g").json()
+            ok("D417-s 다른 site 는 영향 없음", other["dup"] == "new", str(other)[:200])
+            S("post", "/ocr/label", json={"id": rs[0]["cluster"], "label": "정답"})
+            again = sub("capflood", "c9", dh=_dh(209), pc="PC-CF", gem="g").json()
+            ok("D417-t ★상한은 «대기» 만 센다 — 하나를 라벨하면 새 묶음이 다시 들어온다★", again["dup"] == "new", str(again)[:200])
+            S("post", "/ocr/dismiss_site", json={"site": "capflood"})
+            more = sub("capflood", "c10", dh=_dh(210), pc="PC-CF", gem="g").json()
+            ok("D417-u 치운 뒤에는 대기가 0 이라 새 묶음이 다시 들어온다(치운 것은 안 센다)", more["dup"] == "new", str(more)[:200])
+            OL.OCR_SITE_PENDING_CAP = 0
+            _reset_rate()
+            free = [sub("nocap", "n%d" % i, dh=_dh(400 + i), pc="PC-NC", gem="g").json()["dup"] for i in range(5)]
+            ok("D417-v 상한 0 = 끔(전부 새 묶음)", free == ["new"] * 5, str(free))
+    finally:
+        OL.OCR_SITE_PENDING_CAP = saved
+        OL._DROPPED.clear()
+        _reset_rate()
+
+
+def d417_dismissed_files_reclaimable():
+    """치운(dismissed) 묶음은 디스크가 모자라면 나쁨·auto 처럼 ★파일만★ 먼저 비운다(줄은 남는다)."""
+    SZ = 10000
+    saved = OL.OCR_SITE_PENDING_CAP
+    OL.OCR_SITE_PENDING_CAP = 0
+    with fresh_store():
+        OL.OCR_DISK_CAP = 10 ** 9
+        OL.OCR_DISK_HARD_CAP = 10 ** 9
+        _reset_rate()
+        for i in range(3):
+            sub("dz", "dz%d" % i, dh=_dh(500 + i), pc="PC-DZ", raw=img("dz%d" % i, n=SZ))
+        S("post", "/ocr/dismiss_site", json={"site": "dz"})
+        used = _rows("SELECT SUM(nbytes) FROM ocr_img WHERE on_disk=1")[0][0]
+        OL.OCR_DISK_CAP = used + 100
+        _reset_rate()
+        sub("dznew", "dzn", dh=_dh(600), pc="PC-DZ", raw=img("dzn", n=SZ))
+        off = _rows("SELECT COUNT(*) FROM ocr_img WHERE site='dz' AND on_disk=0")[0][0]
+        rows = _rows("SELECT COUNT(*) FROM ocr_cluster WHERE site='dz' AND status='dismissed'")[0][0]
+        ok("D417-w ★디스크 상한이면 치운 묶음의 파일이 비워진다(줄·dismissed 상태는 남는다)★", off >= 1 and rows == 3, "off=%s rows=%s" % (off, rows))
+    OL.OCR_SITE_PENDING_CAP = saved
+    _reset_rate()
+
+
 def OCR_CLUSTER_ROWS_MAX_T():
     return getattr(OL, "OCR_CLUSTER_ROWS_MAX", 64)
 
@@ -1301,7 +1437,8 @@ def OCR_CLUSTER_ROWS_MAX_T():
 def test_all():
     run_all([t_auth, t_captcha, t_validate, t_dedup_exact, t_near_cluster_and_korean, t_bad_undo_skip_history,
              t_size_and_rate, t_disk_evict, t_stats, t_cursor, t_tenant, t_traversal, t_fv, t_refute_ports, t_refute_ports_async,
-             t_page_js, v2_cluster_row_cap, v2_capped_does_not_evict])
+             t_page_js, v2_cluster_row_cap, v2_capped_does_not_evict,
+             d417_dismiss_restore, d417_site_cap, d417_dismissed_files_reclaimable])
     finish("test_ocr_label", MIN_CHECKS)
 
 

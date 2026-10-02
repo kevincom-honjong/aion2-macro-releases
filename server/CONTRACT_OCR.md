@@ -139,3 +139,7 @@
 - **/bugs 씨앗(2026-09-24 #125)**: `POST /ocr/seed_bugs`(세션) · `POST /api/fv/ocr/seed_bugs`(팜뷰) · 큐 첫 조회 자동 · `/bugs` 업로드 훅(`main.upload_bug` → `ocr_label.seed_upload_hook`). 전부 `submit_core`(= `/ocr/submit` 과 같은 저장 길 — 정확 일치·묶음·줄 상한·비우기·507)로 넣는다. dHash 는 서버가 순수 파이썬으로 잰다(`png_dhash` — 9x8 칸 평균, 64비트). 같은 sha1 이 이미 있으면 건너뛴다(count 안 올림). 시험 `tests/test_ocr_seed.py`.
 - 두 쪽의 되돌리기는 **한 줄 기록(ocr_hist)** 을 공유한다 — 팜뷰에서 되돌리면 웹에서 단 마지막 라벨도 되돌아간다(같은 테넌트).
 - 통계 `gemini_disagree_rate` = 라벨 된 이미지 중 제미나이 답이 비지 않은 것에서 `NFKC·소문자·공백 제거` 후 라벨과 다른 비율. `local_*` 도 같다.
+
+## #417 site 치우기 · 대기 상한 (2026-10-03)
+- `POST /ocr/dismiss_site {site}` (세션) — 그 site 의 대기(pending) 묶음 전부 → `dismissed`. 라벨·나쁨 통계에 안 세고 매크로 `/ocr/labels` 에도 안 나간다. 파일은 디스크 부족 때 나쁨·auto 처럼 먼저 비운다. `POST /ocr/restore_site {site}` 가 되돌린다. 둘 다 멱등.
+- site 별 대기 상한 `OCR_SITE_PENDING_CAP`(기본 300, 0=끔): 넘으면 *새 묶음만* `dup:"dropped"`(200)로 버리고 `sites[].dropped` 에 센다(메모리 · 재배포 때 0). 이미 있는 묶음에 붙는 제출은 그대로 받는다.

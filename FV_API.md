@@ -738,7 +738,7 @@ asyncio.run(main())
 | `POST /api/fv/ocr/skip` | `{"id": <묶음 id>}` | `{"ok": true, "id"}` — 대기열 맨 뒤로. 대기 아닌 묶음이면 409 |
 | `POST /api/fv/ocr/undo` | `{}` | `{"ok": true, "id", "status", "label"}` — **이 테넌트의** 마지막 저장/나쁨/고치기 하나를 되돌린다(웹 화면에서 한 것도 포함). 되돌려 대기가 되면 대기열 맨 앞. 되돌릴 게 없으면 404 |
 | `GET /api/fv/ocr/history?limit=30` (1~200) | — | `{"items": [Item…]}` — 최근 라벨/나쁨, 새것부터 |
-| `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","auto","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `*_rate` 는 비교한 게 없으면 `null` |
+| `GET /api/fv/ocr/stats` | — | `{"sites": {"<site>": {"pending","labeled","bad","auto","dismissed","dropped","images","hits","gemini_compared","gemini_disagree","gemini_disagree_rate","local_compared","local_disagree","local_disagree_rate"}}, "disk_bytes", "disk_cap", "disk_hard_cap"}` — `dismissed`=#417 치운 묶음 수, `dropped`=site 상한으로 버린 새 묶음 수(재배포 때 0부터) · `*_rate` 는 비교한 게 없으면 `null` |
 | `POST /api/fv/ocr/seed_bugs` (2026-09-24) | `{}` | `{"ok": true, "scanned", "added", "exists", "skipped": {"<까닭>": n}, "full", "more"}` — `/bugs` 의 `ocrdiff_*`·`oddfail_*` 크롭을 큐로(아래 «씨앗»). 몇 번 불러도 같다(`added` 0 · `exists` n). 같은 테넌트 씨앗이 도는 중이면 `{"ok": false, "busy": true, …}` |
 
 `Item`:

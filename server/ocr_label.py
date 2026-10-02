@@ -25,6 +25,8 @@
     POST /ocr/label             {id, label} 저장·고치기 / {id, bad:true} 나쁨
     POST /ocr/skip              {id} 나중에(대기열 맨 뒤로)
     POST /ocr/undo              마지막 한 번 되돌리기
+    POST /ocr/dismiss_site      {site} 그 site 의 대기 묶음을 한 번에 치움(status dismissed — 라벨·나쁨 아님, 매크로에 안 나감) · #417
+    POST /ocr/restore_site      {site} 치운 묶음을 대기로 되돌림
     GET  /ocr/history           최근 라벨(고치기용)
     GET  /ocr/stats             사이트별 대기·라벨·나쁨 + 제미나이/로컬 불일치율
   팜뷰 (X-FV-Token · 테넌트 = FV_TENANT · 에러 {ok:false, error, err, code} = main._fv_err) — 2026-09-23 (밤) 장부 #125
@@ -113,6 +115,11 @@ OCR_PROMPT_MAX = 2000
 OCR_ANSWER_MAX = 200
 OCR_LABELS_PAGE = 5000                            # /ocr/labels 한 번에 내보내는 줄 수(넘으면 more=true)
 OCR_SUGGEST_MAX = 200                             # 자동완성 후보(사이트당)
+# ★한 site 가 대기열을 혼자 채우지 못하게 (주인님 #417 «팜뷰에 3800개 있다 ocr» — awakening_py__read_objective 3,640 / 3,818)★
+#   한 site 의 ★대기(pending)★ 묶음이 이만큼이면 새 묶음은 만들지 않고 버린다(OCR_SITE_PENDING_CAP, 0 이면 끔).
+#   이미 있는 묶음에 붙는 것(정확·near)은 그대로 받는다. 버린 수는 메모리에 세어 /ocr/stats sites[].dropped 로 보인다(배포하면 0 부터).
+OCR_SITE_PENDING_CAP = int(os.getenv("OCR_SITE_PENDING_CAP", "300"))
+_DROPPED: dict = {}                               # (tenant, site) -> 버린 수 (키 512개 상한)
 
 _PNG = b"\x89PNG\r\n\x1a\n"
 _JPG = b"\xff\xd8\xff"
@@ -709,7 +716,7 @@ async def evict_for(db, tenant: str, need: int) -> dict:
     while used + need > OCR_DISK_CAP:
         cur = await db.execute(
             "SELECT i.id, i.relpath, i.nbytes FROM ocr_img i JOIN ocr_cluster c ON c.id=i.cluster_id "
-            "WHERE i.tenant=? AND i.on_disk=1 AND c.status IN ('bad','auto') ORDER BY i.created, i.id LIMIT 50", (tenant,))
+            "WHERE i.tenant=? AND i.on_disk=1 AND c.status IN ('bad','auto','dismissed') ORDER BY i.created, i.id LIMIT 50", (tenant,))
         rows = await cur.fetchall()
         if not rows:
             break
@@ -916,6 +923,18 @@ async def submit_core(tenant: str, pc: str, site: str, raw: bytes, dh: str, ts, 
                         rep_["label_match"] = "near"
                     rep_["capped"] = True
                     return rep_
+            # ⑦-c ★site 별 대기 상한★ — 새 묶음을 만들어야 하는데 그 site 의 대기가 가득이면 버린다(파일·줄 없음).
+            #   비우기(⑥)보다 먼저 — 버리는 제출이 남의 대기 묶음을 지우면 안 된다(⑦-b 와 같은 이유).
+            if best is None and OCR_SITE_PENDING_CAP > 0:
+                cur = await db.execute("SELECT COUNT(*) FROM ocr_cluster WHERE tenant=? AND site=? AND status='pending'",
+                                       (tenant, site))
+                if (await cur.fetchone())[0] >= OCR_SITE_PENDING_CAP:
+                    k = (tenant, site)
+                    if k in _DROPPED or len(_DROPPED) < 512:
+                        _DROPPED[k] = _DROPPED.get(k, 0) + 1
+                    return {"ok": True, "id": None, "cluster": None, "dup": "dropped", "near_dist": None,
+                            "status": "dropped", "label": None, "label_match": None, "count": 0, "cluster_count": 0,
+                            "capped": True, "reason": "site_pending_cap", "cap": OCR_SITE_PENDING_CAP}
             # ⑥ 새 파일 자리를 만든다 → ★묶음은 다시 찾는다★(찾아 둔 대기 묶음이 비우기에 지워지면 고아 줄이 된다)
             ev = await evict_for(db, tenant, len(raw))
             if ev["full"]:
@@ -1183,6 +1202,8 @@ async def seed_one(tenant: str, bdir: str, fname: str) -> str:
                               info["gem"], info["loc"], err=_ocr_err)
     except OcrError as e:
         return "full" if e.code == 507 else "skip:%d" % e.code
+    if r.get("dup") == "dropped":
+        return "skip:사이트대기상한"
     return "exists" if r.get("dup") == "exact" else "added"
 
 
@@ -1357,6 +1378,8 @@ async def ocr_labels(request: Request, since: str = "0", epoch: str = "", mode: 
             near.setdefault(site, {})[dh] = lb  # 구성원 전부(대표 포함)는 dhash 힌트
         elif st == "bad":
             bad.setdefault(site, {})[sha] = dh
+        elif st == "dismissed":                 # 사람 라벨도 «대기로 돌아감» 도 아니다 — 매크로에 아무 말도 안 한다(#417)
+            continue
         else:                                   # 되돌리기로 대기에 돌아간 것 — 매크로는 sha1·dhash 둘 다 지운다(반증 R10)
             cleared.setdefault(site, []).append(sha)
             cleared_near.setdefault(site, []).append(dh)
@@ -1579,13 +1602,14 @@ async def stats_core(tenant: str) -> dict:
     sites: dict = {}
 
     def S(site):
-        return sites.setdefault(site, {"pending": 0, "labeled": 0, "bad": 0, "auto": 0, "images": 0, "hits": 0,
+        return sites.setdefault(site, {"pending": 0, "labeled": 0, "bad": 0, "auto": 0, "dismissed": 0, "dropped": 0,
+                                       "images": 0, "hits": 0,
                                        "gemini_compared": 0, "gemini_disagree": 0, "gemini_disagree_rate": None,
                                        "local_compared": 0, "local_disagree": 0, "local_disagree_rate": None})
     async with aiosqlite.connect(_dbp()) as db:
         cur = await db.execute("SELECT site, status, COUNT(*) FROM ocr_cluster WHERE tenant=? GROUP BY site, status", (tenant,))
         for site, st, n in await cur.fetchall():
-            if st in ("pending", "labeled", "bad", "auto"):      # auto = #218 자동 닫음(사람 라벨 아님 — 불일치율에도 안 넣는다)
+            if st in ("pending", "labeled", "bad", "auto", "dismissed"):   # auto = #218 자동 닫음 · dismissed = #417 치움(둘 다 사람 라벨 아님 — 불일치율에도 안 넣는다)
                 S(site)[st] = n
         cur = await db.execute("SELECT site, COUNT(*), COALESCE(SUM(count),0) FROM ocr_img WHERE tenant=? GROUP BY site", (tenant,))
         for site, n, h in await cur.fetchall():
@@ -1600,6 +1624,9 @@ async def stats_core(tenant: str) -> dict:
                     if norm_answer(v) != want:
                         d[k + "_disagree"] += 1
         used = await _disk_used(db)
+    for (t_, site_), n_ in list(_DROPPED.items()):
+        if t_ == tenant and n_:
+            S(site_)["dropped"] = n_
     for d in sites.values():
         for k in ("gemini", "local"):
             if d[k + "_compared"]:
@@ -1658,6 +1685,47 @@ async def _skip_from(t, request):
 @router.post("/ocr/skip")
 async def ocr_skip(request: Request):
     return await _web_call(request, lambda t: _skip_from(t, request))
+
+
+async def dismiss_site_core(tenant: str, site, restore: bool = False) -> dict:
+    """★site 의 대기 묶음을 한 번에 치운다 (주인님 #417)★ pending → dismissed. 사람 라벨·나쁨이 아니다 — 라벨 표·매크로 커서·
+    불일치율에 안 들어가고, 매크로에도 아무 말 안 한다(seq 를 안 건드림). 파일·줄은 그대로라 restore 로 되돌릴 수 있다.
+    restore=True: 그 site 의 dismissed → pending(원래 순서 qorder 그대로). 사람이 라벨·나쁨 한 묶음은 안 건드린다."""
+    name = site_safe(_s(site, OCR_SITE_RAW_MAX))
+    if not name:
+        raise OcrError(400, "site 가 필요합니다")
+    await ensure_tables()
+    now = time.time()
+    async with _lock():
+        async with aiosqlite.connect(_dbp()) as db:
+            if restore:
+                cur = await db.execute("UPDATE ocr_cluster SET status='pending', labeled_at=NULL "
+                                       "WHERE tenant=? AND site=? AND status='dismissed'", (tenant, name))
+            else:
+                cur = await db.execute("UPDATE ocr_cluster SET status='dismissed', labeled_at=? "
+                                       "WHERE tenant=? AND site=? AND status='pending'", (now, tenant, name))
+            n = cur.rowcount
+            await db.commit()
+            cur = await db.execute("SELECT COUNT(*) FROM ocr_cluster WHERE tenant=? AND status='pending'", (tenant,))
+            pending = (await cur.fetchone())[0]
+    return {"ok": True, "site": name, "restored" if restore else "dismissed": n, "pending": pending}
+
+
+async def _site_from(t, request, restore):
+    b = await _body(request)
+    return await dismiss_site_core(t, b.get("site"), restore)
+
+
+@router.post("/ocr/dismiss_site")
+async def ocr_dismiss_site(request: Request):
+    """{site} — 그 site 의 대기 묶음 전부 치움(세션). 되돌리기 = /ocr/restore_site."""
+    return await _web_call(request, lambda t: _site_from(t, request, False))
+
+
+@router.post("/ocr/restore_site")
+async def ocr_restore_site(request: Request):
+    """{site} — /ocr/dismiss_site 로 치운 묶음을 대기로 되돌린다(세션)."""
+    return await _web_call(request, lambda t: _site_from(t, request, True))
 
 
 @router.post("/ocr/undo")
