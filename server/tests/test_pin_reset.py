@@ -60,6 +60,8 @@ async def stamp(pc, at):
     async with aiosqlite.connect(db.DB_PATH) as c:
         await c.execute("UPDATE pc_status SET updated_at=? WHERE pc_id=?", (at, pc))
         await c.commit()
+    if pc in db._ST_MEM:                              # #432-d 상태 행은 메모리가 DB 위에 덮인다 — 같이 맞춘다
+        db._ST_MEM[pc]["at"] = at
 
 
 async def t_queue():

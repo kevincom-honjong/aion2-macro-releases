@@ -195,7 +195,7 @@ async def t_432b():
 
         D.aiosqlite.connect = lambda *a, **k: Spy(real(*a, **k))
         try:
-            await D.upsert_status("PC-S", {"status": "idle"})
+            await D._upsert_status_db("PC-S", {"status": "idle"})      # 쓰기-즉시 경로(사망 전환·PC_FLUSH_S=0)
             n1 = len(seen)
             await D.insert_logs("PC-S", [("info", "x")])
             await D.insert_log("PC-S", "info", "y")

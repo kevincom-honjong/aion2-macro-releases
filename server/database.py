@@ -50,6 +50,8 @@ def _finite(v):
 
 
 async def init_db() -> None:
+    _ST_MEM.clear()
+    _ST_DIRTY.clear()
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
@@ -256,7 +258,112 @@ def _now() -> str:
 
 # ── PC 상태 ─────────────────────────────────────────────────────────────────
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ★#432-d (2026-10-03) 상태 보고는 메모리가 정본, DB 는 모아서 늦게★ — 실측: Railway 볼륨의 쓰기/fsync 처리량이 한 자리(~100~200KB/s)라
+#   상태 보고마다 커밋하면(초당 ~0.7건) 서로를 기다려 WS 상태 처리 평균 0.2~0.9초·최대 19초였다. 체크포인트 위치를 옮겨도(#432-c) 그대로.
+#   → upsert_status 는 메모리(_ST_MEM)에 쓰고, 바뀐 행만(또는 PC_PERSIST_MAX_S 마다) 모아 PC_FLUSH_S 마다 ★한 트랜잭션★ 으로 저장.
+#   읽기(get_all_statuses·get_status·get_pc_dump)는 DB 위에 메모리를 덮는다.
+#   ★재시작 때 잃는 것★ 마지막 flush(최대 PC_FLUSH_S 초) 뒤의 상태 보고뿐 — 매크로가 30초 안에 다시 보내고, 종료(SIGTERM)는 마지막 flush 를 한다.
+#   사망 전환(non-dead→dead)은 예전처럼 ★바로 DB 에★(death_events 와 같은 트랜잭션). 되돌림: Railway env PC_FLUSH_S=0 (쓰기-즉시).
+PC_FLUSH_S = float(os.getenv("PC_FLUSH_S", "10"))
+PC_PERSIST_MAX_S = float(os.getenv("PC_PERSIST_MAX_S", "60"))      # 안 바뀌어도(last_active 만 갱신) 이 간격으로는 저장
+_ST_VOLATILE = ("last_active",)
+_ST_MEM: dict = {}        # pc_id → {"data": json 문자열, "at": updated_at, "status": 상태, "sig": 휘발 칸 뺀 서명, "saved": monotonic}
+_ST_DIRTY: set = set()
+ST_STATS: dict = {"flushes": 0, "rows": 0, "last_ms": 0.0, "max_ms": 0.0, "last_rows": 0, "unchanged_skipped": 0,
+                  "last_err": None, "write_through": 0}
+
+
+def _st_sig(data: dict) -> str:
+    return json.dumps({k: v for k, v in data.items() if k not in _ST_VOLATILE}, ensure_ascii=False, sort_keys=True, default=str)
+
+
 async def upsert_status(pc_id: str, data: dict) -> None:
+    if PC_FLUSH_S <= 0:
+        return await _upsert_status_db(pc_id, data)
+    data = _finite(data)
+    mem = _ST_MEM.get(pc_id)
+    if mem is None:
+        # 부팅 뒤 처음 보는 PC — 이전 상태(dead 전환 판정)만 DB 에서 한 번 읽는다
+        prev = await get_status(pc_id)
+        prev_exists = prev is not None
+        prev_status = (prev or {}).get("status")
+    else:
+        prev_exists, prev_status = True, mem["status"]
+    if prev_exists and prev_status != "dead" and data.get("status") == "dead":
+        ST_STATS["write_through"] += 1
+        await _upsert_status_db(pc_id, data)           # 사망 이벤트는 바로 — 같은 트랜잭션
+        _ST_DIRTY.discard(pc_id)
+        _ST_MEM[pc_id] = {"data": json.dumps(data, ensure_ascii=False), "at": _now(), "status": "dead",
+                          "sig": _st_sig(data), "saved": time.monotonic()}
+        return
+    sig = _st_sig(data)
+    now_m = time.monotonic()
+    changed = mem is None or mem["sig"] != sig
+    saved = mem["saved"] if mem else 0.0
+    ent = {"data": json.dumps(data, ensure_ascii=False), "at": _now(), "status": data.get("status"), "sig": sig, "saved": saved}
+    if changed or now_m - saved >= PC_PERSIST_MAX_S:
+        _ST_DIRTY.add(pc_id)
+    else:
+        ST_STATS["unchanged_skipped"] += 1
+    _ST_MEM[pc_id] = ent
+
+
+async def flush_statuses() -> int:
+    """바뀐 상태 행을 한 트랜잭션으로 저장. 실패하면 다시 dirty 로(다음 바퀴)."""
+    if not _ST_DIRTY:
+        return 0
+    ids = list(_ST_DIRTY)
+    rows = []
+    for pid in ids:
+        m = _ST_MEM.get(pid)
+        if m is not None:
+            rows.append((pid, m["data"], m["at"]))
+    _ST_DIRTY.difference_update(ids)
+    if not rows:
+        return 0
+    t0 = time.monotonic()
+    try:
+        async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
+            if HOT_SYNC != "FULL":
+                await db.execute("PRAGMA synchronous=" + HOT_SYNC)
+            await db.executemany("INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)", rows)
+            await db.commit()
+        for pid, _, _ in rows:
+            m = _ST_MEM.get(pid)
+            if m is not None:
+                m["saved"] = time.monotonic()
+        ST_STATS["last_err"] = None
+    except Exception as e:
+        _ST_DIRTY.update(r[0] for r in rows)
+        ST_STATS["last_err"] = "%s: %s" % (e.__class__.__name__, str(e)[:100])
+        return 0
+    ms = (time.monotonic() - t0) * 1000
+    ST_STATS.update(flushes=ST_STATS["flushes"] + 1, rows=ST_STATS["rows"] + len(rows), last_ms=round(ms, 1), last_rows=len(rows))
+    if ms > ST_STATS["max_ms"]:
+        ST_STATS["max_ms"] = round(ms, 1)
+    return len(rows)
+
+
+async def status_flush_loop() -> None:
+    if PC_FLUSH_S <= 0:
+        return
+    try:
+        while True:
+            await asyncio.sleep(PC_FLUSH_S)
+            try:
+                await flush_statuses()
+            except Exception as e:
+                ST_STATS["last_err"] = "loop %s" % e.__class__.__name__
+    except asyncio.CancelledError:
+        pass
+
+
+def st_stats() -> dict:
+    return dict(ST_STATS, mem_rows=len(_ST_MEM), dirty=len(_ST_DIRTY), flush_s=PC_FLUSH_S)
+
+
+async def _upsert_status_db(pc_id: str, data: dict) -> None:
     data = _finite(data)
     _t = time.monotonic()
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
@@ -339,18 +446,24 @@ async def get_all_statuses() -> list[dict]:
             "SELECT pc_id, data, updated_at FROM pc_status ORDER BY pc_id"
         ) as cur:
             rows = await cur.fetchall()
+    by = {row["pc_id"]: (row["data"], row["updated_at"]) for row in rows}
+    for pid, m in _ST_MEM.items():            # ★#432-d★ 메모리가 DB 보다 새롭다
+        by[pid] = (m["data"], m["at"])
     result = []
-    for row in rows:
+    for pid in sorted(by):
+        raw, at = by[pid]
         try:
-            d = json.loads(row["data"])
+            d = json.loads(raw)
         except Exception:
             d = {}
-        d["_updated_at"] = row["updated_at"]
+        d["_updated_at"] = at
         result.append(d)
     return result
 
 
 async def delete_status(pc_id: str) -> None:
+    _ST_MEM.pop(pc_id, None)
+    _ST_DIRTY.discard(pc_id)
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("DELETE FROM pc_status WHERE pc_id=?", (pc_id,))
         await db.commit()
@@ -358,6 +471,8 @@ async def delete_status(pc_id: str) -> None:
 
 async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     """pc_id 관련 모든 테이블 데이터 삭제 (완전 제거). purge_all=True(은퇴)면 슬롯 필터·악몽 진행까지."""
+    _ST_MEM.pop(pc_id, None)
+    _ST_DIRTY.discard(pc_id)
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
@@ -393,6 +508,7 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
 #   쓰기 없음 — 삭제 여부와 무관하게 언제나 안전하게 부를 수 있다. logs 는 보존 상한(3000/PC)
 #   보다 넉넉한 5000 으로 잘라 무제한 테이블 사고(2026-09-11류)를 막는다.
 async def get_pc_dump(pc_id: str) -> dict:
+    await flush_statuses()          # ★#432-d★ 메모리에만 있는 상태 행을 먼저 저장해야 덤프에 실린다
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
 
@@ -434,6 +550,12 @@ async def get_pc_dump(pc_id: str) -> dict:
 
 
 async def get_status(pc_id: str) -> dict | None:
+    _m = _ST_MEM.get(pc_id)
+    if _m is not None:
+        try:
+            return json.loads(_m["data"])
+        except Exception:
+            return {}
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
