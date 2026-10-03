@@ -522,6 +522,31 @@ def _note_dash_close(tenant: str, secs: float, why: str, ws=None) -> None:
     del _DASH_CLOSES[:-40]
 
 
+# ★#431 (2026-10-03)★ «database is locked» — 예전엔 WS 루프 밖으로 새어 소켓을 닫았다(매크로 WS 400건 중 349건).
+WS_DB_RETRY = int(os.getenv("WS_DB_RETRY", "3"))
+_DB_LOCKED = {"n": 0, "by": {}, "recent": []}
+
+
+def _db_is_locked(e: BaseException) -> bool:
+    return isinstance(e, sqlite3.OperationalError) and "locked" in str(e).lower()
+
+
+def _db_locked_note(where: str, e: BaseException) -> None:
+    """누가·어디서 잠김에 걸렸나 — /diag/perf db_locked. 잠금을 쥔 쪽은 못 잡아도 걸린 쪽의 마지막 프레임은 남긴다."""
+    try:
+        import traceback as _tb
+        fr = [f for f in _tb.extract_tb(e.__traceback__) if "updater" in f.filename.replace("\\", "/") or f.filename.endswith(("main.py", "database.py", "ocr_label.py"))]
+        at = ("%s:%s" % (os.path.basename(fr[-1].filename), fr[-1].name)) if fr else "?"
+        _DB_LOCKED["n"] += 1
+        k = "%s @ %s" % (where, at)
+        if k in _DB_LOCKED["by"] or len(_DB_LOCKED["by"]) < 60:
+            _DB_LOCKED["by"][k] = _DB_LOCKED["by"].get(k, 0) + 1
+        _DB_LOCKED["recent"].append({"at": datetime.now(timezone.utc).strftime("%H:%M:%S"), "k": k})
+        del _DB_LOCKED["recent"][:-20]
+    except Exception:
+        pass
+
+
 def _ws_note_close(nspc: str, secs: float, why: str) -> None:
     try:
         _WS_CLOSES.append({
@@ -3252,6 +3277,7 @@ async def diag_perf(request: Request):
         "ws_closes_n": len(_WS_CLOSES),
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
+        "db_locked": _DB_LOCKED,                  # #431 «database is locked» 에 걸린 곳(n·by·recent) — 쥔 쪽 단서
         "ws_per_second": _bucket_count([x["at"] for x in _WS_CLOSES], top=8),
         "ws_closes": _WS_CLOSES[-40:],
         "slow_sends": _SLOW_SENDS[-40:],          # 대시보드 한 통에 SLOW_SEND_MS 넘은 전송(2026-09-23)
@@ -11811,47 +11837,57 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             except Exception:
                 continue
             msg_type = msg.get("type", "")
-            if msg_type == "status":
-                payload = msg.get("payload", {})
-                if not isinstance(payload, dict):   # 목록이면 연결째 죽었다 (2026-09-23)
-                    continue
-                payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
-                await upsert_status(nspc, payload)
-                await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
-                errors = payload.get("errors") or []
-                for e in errors[:3]:
-                    await insert_log(nspc, "warn", str(e))
-                await push_state(tenant)
-            elif msg_type == "log":
-                logs = msg.get("logs", [])
-                for entry in logs:
-                    _m = entry.get("message", "")
-                    await insert_log(nspc, entry.get("level", "info"), _m)
-                    # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
-                    #   WS 재연결이 아니라 ★부팅★ 일 때만 나오는 줄을 본다
-                    #   (PC-21b 처럼 60초마다 WS 가 끊겼다 붙는 PC 가 있다).
-                    if "[BOOT" in str(_m):
-                        try:
-                            _rot_note_boot(nspc, _m)
-                        except Exception as _be:
-                            print(f"[순환] 부팅 감지 실패(무시): {_be}")
-                    if _HOTKEY_ARM_MARK in str(_m):      # ★사고 456-b★
-                        try:
-                            _t456, _p456 = split_ns(nspc)
-                            await _rot_note_hotkey(_t456, _p456, _m)
-                        except Exception as _he:
-                            print(f"[순환] 핫키 감지 실패(무시): {_he}")
-            elif msg_type == "ack":
-                cmd_id = msg.get("command_id")
-                if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
-                    await ack_command(cmd_id)
-                    # ★이력도 알린다 (2026-09-11 전수조사)★ — HTTP ack 라우트는
-                    #   이걸 부르는데 WS 갈래만 빠져 있었다(§A12: 규칙이 둘).
-                    #   그래서 ★WS 로 붙은 건강한 PC 에서만★ 대시보드의 ②ack 단계가
-                    #   안 돌아, 받은 명령이 ⏳ 로 남았다가 ⚠ 로 넘어갔다.
-                    await _push_cmd_history(tenant)
-            elif msg_type == "pong":
-                pass
+            for _att in range(WS_DB_RETRY):   # ★#431★ DB 잠김 한 번에 소켓을 닫지 않는다 — 같은 메시지를 물러서며 다시
+                try:
+                    if msg_type == "status":
+                        payload = msg.get("payload", {})
+                        if not isinstance(payload, dict):   # 목록이면 연결째 죽었다 (2026-09-23)
+                            break
+                        payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
+                        await upsert_status(nspc, payload)
+                        await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
+                        errors = payload.get("errors") or []
+                        for e in errors[:3]:
+                            await insert_log(nspc, "warn", str(e))
+                        await push_state(tenant)
+                    elif msg_type == "log":
+                        logs = msg.get("logs", [])
+                        for entry in logs:
+                            _m = entry.get("message", "")
+                            await insert_log(nspc, entry.get("level", "info"), _m)
+                            # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
+                            #   WS 재연결이 아니라 ★부팅★ 일 때만 나오는 줄을 본다
+                            #   (PC-21b 처럼 60초마다 WS 가 끊겼다 붙는 PC 가 있다).
+                            if "[BOOT" in str(_m):
+                                try:
+                                    _rot_note_boot(nspc, _m)
+                                except Exception as _be:
+                                    print(f"[순환] 부팅 감지 실패(무시): {_be}")
+                            if _HOTKEY_ARM_MARK in str(_m):      # ★사고 456-b★
+                                try:
+                                    _t456, _p456 = split_ns(nspc)
+                                    await _rot_note_hotkey(_t456, _p456, _m)
+                                except Exception as _he:
+                                    print(f"[순환] 핫키 감지 실패(무시): {_he}")
+                    elif msg_type == "ack":
+                        cmd_id = msg.get("command_id")
+                        if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
+                            await ack_command(cmd_id)
+                            # ★이력도 알린다 (2026-09-11 전수조사)★ — HTTP ack 라우트는
+                            #   이걸 부르는데 WS 갈래만 빠져 있었다(§A12: 규칙이 둘).
+                            #   그래서 ★WS 로 붙은 건강한 PC 에서만★ 대시보드의 ②ack 단계가
+                            #   안 돌아, 받은 명령이 ⏳ 로 남았다가 ⚠ 로 넘어갔다.
+                            await _push_cmd_history(tenant)
+                    elif msg_type == "pong":
+                        pass
+                    break
+                except Exception as _de:
+                    if not _db_is_locked(_de):
+                        raise
+                    _db_locked_note("ws:" + msg_type, _de)
+                    if _att + 1 >= WS_DB_RETRY:
+                        break                     # 이 메시지만 버린다(상태·로그는 다음 보고가 다시 채운다) — 소켓은 산다
+                    await asyncio.sleep(0.5 * (2 ** _att))
     except WebSocketDisconnect as _wde:
         # ★상대(또는 중간 프록시)가 끊은 것★ — code 가 이유를 말해준다
         _ws_why = "disconnect(code=%s)" % getattr(_wde, "code", "?")
