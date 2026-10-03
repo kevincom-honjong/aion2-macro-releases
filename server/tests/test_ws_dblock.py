@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 20
+MIN_CHECKS = 26
 
 
 class Feed(FakeWS):
@@ -164,13 +164,65 @@ async def t_432():
         D.DB_PATH = old_path
 
 
+async def t_432b():
+    """#432-b — 상태 처리 단계별 계측 · 뜨거운 쓰기(상태·로그)만 synchronous=NORMAL."""
+    import tempfile, os as _os
+    ok("W432b-a 기본 HOT_SYNC 는 NORMAL(Railway env HOT_SYNC=FULL 로 되돌림)", D.HOT_SYNC == "NORMAL", D.HOT_SYNC)
+    old_path = D.DB_PATH
+    D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "t.db")
+    seen = []
+    try:
+        await D.init_db()
+        real = D.aiosqlite.connect
+
+        class Spy:
+            def __init__(self, cm):
+                self.cm = cm
+
+            async def __aenter__(self):
+                self.db = await self.cm.__aenter__()
+                orig = self.db.execute
+
+                def ex(sql, *a, **k):
+                    if "synchronous" in str(sql):
+                        seen.append(str(sql))
+                    return orig(sql, *a, **k)
+                self.db.execute = ex
+                return self.db
+
+            async def __aexit__(self, *a):
+                return await self.cm.__aexit__(*a)
+
+        D.aiosqlite.connect = lambda *a, **k: Spy(real(*a, **k))
+        try:
+            await D.upsert_status("PC-S", {"status": "idle"})
+            n1 = len(seen)
+            await D.insert_logs("PC-S", [("info", "x")])
+            await D.insert_log("PC-S", "info", "y")
+            n2 = len(seen)
+            await D.set_setting("k431", "v")
+            n3 = len(seen)
+        finally:
+            D.aiosqlite.connect = real
+        ok("W432b-b 상태 보고·로그 쓰기는 PRAGMA synchronous=NORMAL 을 건다", n1 == 1 and n2 == 3 and "NORMAL" in seen[0], str(seen))
+        ok("W432b-c ★설정 같은 나머지 쓰기는 안 건드린다(FULL 그대로)★", n3 == n2, str(seen))
+        t = D.TIMING
+        ok("W432b-d db_timing: upsert 단계(connect/select/insert/commit)·logs_batch_write 가 센다",
+           all(k in t and t[k]["n"] >= 1 for k in ("upsert_connect", "upsert_select", "upsert_insert", "upsert_commit", "logs_batch_write")), str(list(t)))
+    finally:
+        D.DB_PATH = old_path
+    src = inspect_src(main.macro_websocket)
+    ok("W432b-e 상태 갈래가 단계별로 잰다(ws_st_upsert·abyss·push)", all(k in src for k in ("ws_st_upsert", "ws_st_abyss", "ws_st_push", "ws_st_errlog")))
+    ok("W432b-f /diag/perf 에 db_timing", '"db_timing"' in inspect_src(main.diag_perf))
+
+
 def inspect_src(f):
     import inspect
     return inspect.getsource(f)
 
 
 def test_all():
-    run_all([t_all, t_432])
+    run_all([t_all, t_432, t_432b])
     finish("test_ws_dblock", MIN_CHECKS)
 
 

@@ -2,6 +2,7 @@
 import aiosqlite
 import asyncio
 import os
+import time
 import json
 import math
 from datetime import datetime, timezone, timedelta
@@ -11,6 +12,23 @@ DB_PATH = os.getenv("DB_PATH", "/data/macro_control.db")
 #   (매크로 WS 400건 중 349건이 이 이유로 닫혔고 build_full_state/push_state 최대치가 정확히 5.0초). 기다림만 늘린다 —
 #   쓰기 순서·내용은 그대로. 되돌림: Railway env DB_BUSY_S=5.
 DB_BUSY_S = float(os.getenv("DB_BUSY_S", "30"))
+# ★#432 (2026-10-03)★ 뜨거운 쓰기(상태 보고·로그)는 synchronous=NORMAL — WAL 에서 커밋마다 fsync 를 안 한다.
+#   Railway 볼륨은 네트워크 디스크라 FULL 커밋 하나가 수백 ms 이고, 쓰기는 DB 하나에 줄을 서므로 24대 상태 보고가 서로를 기다렸다
+#   (WS 상태 처리 평균 0.86초 · 최대 17초). 이 두 표는 30초마다 다시 오는 값이라 호스트가 죽어 마지막 몇 건을 잃어도 다음 보고가 채운다.
+#   설정·명령 큐·장부 등 나머지는 그대로 FULL. 되돌림: Railway env HOT_SYNC=FULL.
+HOT_SYNC = os.getenv("HOT_SYNC", "NORMAL").strip().upper()
+if HOT_SYNC not in ("NORMAL", "FULL", "OFF"):
+    HOT_SYNC = "NORMAL"
+TIMING: dict = {}      # 이름 → {n, ms_total, ms_max} — /diag/perf db_timing
+
+
+def _tnote(name: str, t0: float) -> None:
+    ms = (time.monotonic() - t0) * 1000
+    s = TIMING.setdefault(name, {"n": 0, "ms_total": 0.0, "ms_max": 0.0})
+    s["n"] += 1
+    s["ms_total"] += ms
+    if ms > s["ms_max"]:
+        s["ms_max"] = ms
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # 같은 PC의 사망을 이 초 이내 중복 기록하지 않음(사망→부활 처리 중 상태 오가며 중복 방지).
@@ -240,22 +258,30 @@ def _now() -> str:
 
 async def upsert_status(pc_id: str, data: dict) -> None:
     data = _finite(data)
+    _t = time.monotonic()
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
+        _tnote("upsert_connect", _t)
+        if HOT_SYNC != "FULL":
+            await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         # dead 전환(edge) 감지용으로 이전 상태를 먼저 읽는다.
         prev_status = None
         prev_exists = False
+        _t = time.monotonic()
         async with db.execute("SELECT data FROM pc_status WHERE pc_id=?", (pc_id,)) as cur:
             row = await cur.fetchone()
+        _tnote("upsert_select", _t)
         if row is not None:
             prev_exists = True
             try:
                 prev_status = (json.loads(row[0]) or {}).get("status")
             except Exception:
                 prev_status = None
+        _t = time.monotonic()
         await db.execute(
             "INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)",
             (pc_id, json.dumps(data, ensure_ascii=False), _now()),
         )
+        _tnote("upsert_insert", _t)
         # non-dead → dead 전환일 때만 사망 이벤트 1건 기록.
         #   · 반복 "dead" 보고(어비스 사망 유지·30초 자동보고)는 prev==dead라 중복 안 됨.
         #   · prev_exists 요구: 재배포로 DB 비운 뒤 이미 죽은 PC가 "dead"로 재푸시할 때
@@ -280,7 +306,9 @@ async def upsert_status(pc_id: str, data: dict) -> None:
                 # 테이블 비대화 방지 — 6시간 지난 이벤트 정리(30분 집계엔 넉넉).
                 cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
                 await db.execute("DELETE FROM death_events WHERE created_at < ?", (cutoff,))
+        _t = time.monotonic()
         await db.commit()
+        _tnote("upsert_commit", _t)
 
 
 async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
@@ -730,6 +758,8 @@ async def insert_log(pc_id: str, level: str, message: str,
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
+        if HOT_SYNC != "FULL":
+            await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         await db.execute(
             "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
             (pc_id, level, message, created_at or _now()),
@@ -762,6 +792,9 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     now = created_at or _now()
     async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
+        if HOT_SYNC != "FULL":
+            await db.execute("PRAGMA synchronous=" + HOT_SYNC)
+        _t = time.monotonic()
         await db.executemany(
             "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
             [(pc_id, l, m, now) for l, m in ents],
@@ -776,6 +809,7 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
                 (pc_id, pc_id, LOG_KEEP_PER_PC),
             )
         await db.commit()
+        _tnote("logs_batch_write", _t)
 
 
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ Railway 배포용
   PORT                uvicorn 포트 (Railway 자동 설정)
 """
 import os, json, uuid, re, io, zipfile, time, hashlib, hmac, base64, asyncio, sqlite3, sys, math
+import database as _database_mod
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -3340,6 +3341,7 @@ async def diag_perf(request: Request):
         "ws_closes_n": len(_WS_CLOSES),
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
+        "db_timing": {k: dict(v, ms_avg=round(v["ms_total"] / max(1, v["n"]), 2), ms_max=round(v["ms_max"], 1)) for k, v in _database_mod.TIMING.items()},
         "status_lag": _lag_report(),               # #432
         "db_locked": _DB_LOCKED,                  # #431 «database is locked» 에 걸린 곳(n·by·recent) — 쥔 쪽 단서
         "ws_per_second": _bucket_count([x["at"] for x in _WS_CLOSES], top=8),
@@ -11958,13 +11960,22 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                             break
                         payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
                         _lag_note("recv", nspc, payload.get("last_active"))
+                        _ts = time.monotonic()
                         await upsert_status(nspc, payload)
+                        _perf_note("ws_st_upsert", (time.monotonic() - _ts) * 1000)       # ★#432 상태 처리 단계별★
                         _lag_note("stored", nspc, payload.get("last_active"))
+                        _ts = time.monotonic()
                         await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
+                        _perf_note("ws_st_abyss", (time.monotonic() - _ts) * 1000)
                         errors = payload.get("errors") or []
+                        _ts = time.monotonic()
                         for e in errors[:3]:
                             await insert_log(nspc, "warn", str(e))
+                        if errors:
+                            _perf_note("ws_st_errlog", (time.monotonic() - _ts) * 1000)
+                        _ts = time.monotonic()
                         await push_state(tenant)
+                        _perf_note("ws_st_push", (time.monotonic() - _ts) * 1000)
                     elif msg_type == "log":
                         # ★#432★ 로그 묶음은 별도 일꾼이 처리한다 — 50줄 묶음이 같은 소켓의 status/ack 앞을 막았다
                         try:
