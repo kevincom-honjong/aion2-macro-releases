@@ -29,100 +29,9 @@ def _tnote(name: str, t0: float) -> None:
     s["ms_total"] += ms
     if ms > s["ms_max"]:
         s["ms_max"] = ms
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-
-# ★#432-c (2026-10-03) WAL 자동 체크포인트를 쓰기 경로에서 뺀다★ — SQLite 는 WAL 이 1000쪽을 넘기는 ★그 커밋★ 이 체크포인트
-#   (WAL → 본 파일 복사 + fsync)를 직접 한다. 네트워크 볼륨에선 그 한 커밋이 수 초이고 다른 쓰기는 전부 그 뒤에 줄을 섰다
-#   (실측 upsert_commit 최대 6.9초 · upsert_insert 최대 5.1초). → 연결마다 wal_autocheckpoint=0, 별도 일꾼이 PASSIVE 체크포인트를
-#   주기적으로(쓰기를 막지 않는다). 일꾼이 죽어 WAL 이 WAL_MAX_MB 를 넘으면 자동 체크포인트를 다시 켠다(무한 증가 방지).
-#   되돌림: Railway env WAL_BG=0.
-WAL_BG = os.getenv("WAL_BG", "1").strip() != "0"
-WAL_CKPT_EVERY_S = float(os.getenv("WAL_CKPT_EVERY_S", "20"))
-WAL_MAX_MB = float(os.getenv("WAL_MAX_MB", "256"))
-WAL_STATS: dict = {"runs": 0, "last_at": None, "last_ms": 0.0, "max_ms": 0.0, "last": None, "wal_bytes": None, "auto_on": False, "err": None}
-
-
-class _Conn:
-    """aiosqlite.connect 와 같은 `async with … as db` — 들어올 때 wal_autocheckpoint 만 정한다."""
-
-    def __init__(self, path, timeout):
-        self._cm = aiosqlite.connect(path, timeout=timeout)
-
-    async def __aenter__(self):
-        db = await self._cm.__aenter__()
-        try:
-            await db.execute("PRAGMA wal_autocheckpoint=%d" % (1000 if (not WAL_BG or WAL_STATS["auto_on"]) else 0))
-            await db.execute("PRAGMA journal_size_limit=67108864")      # WAL 이 비워질 때 64MB 로 줄인다 — 파일 크기가 «지금 쌓인 양» 의 근사가 되게
-        except BaseException:
-            await self._cm.__aexit__(None, None, None)
-            raise
-        return db
-
-    async def __aexit__(self, *a):
-        return await self._cm.__aexit__(*a)
-
-
-def connect_db(path: str | None = None, timeout: float | None = None):
-    return _Conn(path or DB_PATH, DB_BUSY_S if timeout is None else timeout)
-
-
-def _wal_size() -> int | None:
-    try:
-        return os.path.getsize(DB_PATH + "-wal")
-    except OSError:
-        return None
-
-
-async def wal_checkpoint_once(db=None) -> None:
-    """PASSIVE 체크포인트 한 번 — 쓰기를 막지 않는다(못 옮긴 쪽수는 다음 번에). 결과는 WAL_STATS.
-    db 를 주면(일꾼의 상주 연결) 그걸로, 아니면 잠깐 열어서."""
-    t0 = time.monotonic()
-    try:
-        if db is None:
-            async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as _db:
-                await _db.execute("PRAGMA wal_autocheckpoint=0")
-                async with _db.execute("PRAGMA wal_checkpoint(PASSIVE)") as cur:
-                    r = await cur.fetchone()
-        else:
-            async with db.execute("PRAGMA wal_checkpoint(PASSIVE)") as cur:
-                r = await cur.fetchone()
-        WAL_STATS["last"] = list(r) if r else None          # [busy, wal쪽수, 옮긴쪽수]
-        WAL_STATS["err"] = None
-    except Exception as e:
-        WAL_STATS["err"] = "%s: %s" % (e.__class__.__name__, str(e)[:100])
-    ms = (time.monotonic() - t0) * 1000
-    WAL_STATS.update(runs=WAL_STATS["runs"] + 1, last_at=_now(), last_ms=round(ms, 1))
-    if ms > WAL_STATS["max_ms"]:
-        WAL_STATS["max_ms"] = round(ms, 1)
-    sz = _wal_size()
-    WAL_STATS["wal_bytes"] = sz
-    # 일꾼이 못 따라가 WAL 이 너무 크면 자동 체크포인트(쓰기 경로)를 다시 켠다 — 느려도 파일 무한 증가보단 낫다
-    WAL_STATS["auto_on"] = bool(sz is not None and sz > WAL_MAX_MB * 1024 * 1024)
-
-
-async def wal_checkpoint_loop() -> None:
-    """상주 연결 하나를 열어 둔 채 주기적으로 PASSIVE 체크포인트.
-    ★상주 연결이 하나 더 있는 이유★ — SQLite 는 ★마지막 연결이 닫힐 때★ 그 연결이 전체 체크포인트(fsync)를 하고 WAL 을 지운다.
-    쓰기 연결은 짧게 열렸다 닫히므로 이 연결이 없으면 한가한 틈마다 닫는 쪽이 그 비용을 낸다."""
-    if not WAL_BG:
-        return
-    while True:
-        try:
-            async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
-                await db.execute("PRAGMA wal_autocheckpoint=0")
-                async with db.execute("SELECT COUNT(*) FROM sqlite_master") as _c:     # ★읽어야 WAL 에 정식으로 붙는다★
-                    await _c.fetchone()
-                WAL_STATS["anchor"] = True
-                while True:
-                    await asyncio.sleep(WAL_CKPT_EVERY_S)
-                    await wal_checkpoint_once(db)
-        except asyncio.CancelledError:
-            WAL_STATS["anchor"] = False
-            return
-        except Exception as e:
-            WAL_STATS["anchor"] = False
-            WAL_STATS["err"] = "loop %s" % e.__class__.__name__
-            await asyncio.sleep(5)
+# 같은 PC의 사망을 이 초 이내 중복 기록하지 않음(사망→부활 처리 중 상태 오가며 중복 방지).
 DEATH_DEBOUNCE_SEC = 60
 CMD_KEEP_DAYS = 30   # ★B-DB7 (2026-09-23)★ 끝난 명령 행 보관 일수(init_db 가 부팅 때 정리)
 
@@ -141,7 +50,7 @@ def _finite(v):
 
 
 async def init_db() -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pc_status (
@@ -350,7 +259,7 @@ def _now() -> str:
 async def upsert_status(pc_id: str, data: dict) -> None:
     data = _finite(data)
     _t = time.monotonic()
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         _tnote("upsert_connect", _t)
         if HOT_SYNC != "FULL":
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
@@ -404,7 +313,7 @@ async def upsert_status(pc_id: str, data: dict) -> None:
 
 async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
     """cutoff_iso(UTC ISO) 이후 pc_id별 사망 이벤트 수."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute(
             "SELECT pc_id, COUNT(*) FROM death_events WHERE created_at >= ? GROUP BY pc_id",
             (cutoff_iso,),
@@ -415,7 +324,7 @@ async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
 
 async def get_all_death_events() -> list[dict]:
     """[진단용] 모든 death_events (pc_id, created_at) 최신순."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute(
             "SELECT pc_id, created_at FROM death_events ORDER BY created_at DESC LIMIT 500"
         ) as cur:
@@ -424,7 +333,7 @@ async def get_all_death_events() -> list[dict]:
 
 
 async def get_all_statuses() -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM pc_status ORDER BY pc_id"
@@ -442,14 +351,14 @@ async def get_all_statuses() -> list[dict]:
 
 
 async def delete_status(pc_id: str) -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("DELETE FROM pc_status WHERE pc_id=?", (pc_id,))
         await db.commit()
 
 
 async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     """pc_id 관련 모든 테이블 데이터 삭제 (완전 제거). purge_all=True(은퇴)면 슬롯 필터·악몽 진행까지."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM commands         WHERE pc_id=?", (pc_id,))
@@ -484,7 +393,7 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
 #   쓰기 없음 — 삭제 여부와 무관하게 언제나 안전하게 부를 수 있다. logs 는 보존 상한(3000/PC)
 #   보다 넉넉한 5000 으로 잘라 무제한 테이블 사고(2026-09-11류)를 막는다.
 async def get_pc_dump(pc_id: str) -> dict:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
 
         async def _all(sql: str, params: tuple) -> list[dict]:
@@ -525,7 +434,7 @@ async def get_pc_dump(pc_id: str) -> dict:
 
 
 async def get_status(pc_id: str) -> dict | None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT data FROM pc_status WHERE pc_id=?", (pc_id,)
@@ -542,7 +451,7 @@ async def get_status(pc_id: str) -> dict | None:
 # ── 명령 큐 ─────────────────────────────────────────────────────────────────
 
 async def insert_command(pc_id: str, command: str, args: dict) -> int:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             "INSERT INTO commands(pc_id, command, args, status, created_at) VALUES(?,?,?,?,?)",
             (pc_id, command, json.dumps(args, ensure_ascii=False), "pending", _now()),
@@ -586,7 +495,7 @@ async def get_pending_commands(pc_id: str, all_key: str = "all",
     이 위험이 전 함대로 넓어져 함께 막는다. 지난 명령은 expired로 표시해 큐에서 걷어낸다."""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=COMMAND_MAX_AGE_SEC)
               ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         _keep = ",".join("?" for _ in COMMAND_NO_EXPIRE)
         # ★만료시킬 게 있을 때만 쓴다 (2026-09-11 전수조사)★
@@ -635,7 +544,7 @@ async def get_pending_commands(pc_id: str, all_key: str = "all",
 
 
 async def ack_command(cmd_id: int) -> bool:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             # ★되돌리지 않는다 (2026-09-11 전수조사)★ — 초판은 `WHERE id=?` 뿐이라
             #   사람이 ✕ 로 취소한 명령이나 만료된 명령이 뒤늦은 ack 하나로
@@ -656,7 +565,7 @@ async def cancel_command(cmd_id: int, allow_acked: bool = False) -> bool:
       그 뒤에 버리거나 거부하면 cancelled/rejected 를 보낸다. 그 통지는 acked 에서도 내린다.
       대시보드 ✕ 취소는 기본값(pending 만) 그대로 — expired·cancelled 는 어느 쪽도 안 뒤집는다."""
     _from = "('pending','acked')" if allow_acked else "('pending')"
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             f"UPDATE commands SET status='cancelled', updated_at=? WHERE id=? AND status IN {_from}",
             (_now(), cmd_id),
@@ -684,7 +593,7 @@ async def get_recent_commands(limit: int = 20, ns_prefix: "str | None" = None) -
         where = "WHERE pc_id LIKE ? ESCAPE '\\'"
         params.append(_like_prefix(ns_prefix) + "::%")
     params.append(limit)
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             f"SELECT * FROM commands {where} ORDER BY id DESC LIMIT ?", params
@@ -706,7 +615,7 @@ async def latest_command_after(pc_ids: list, commands: tuple, after: str) -> "di
     cmds = [str(x) for x in (commands or []) if x][:8]
     if not ids or not cmds:
         return None
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             f"SELECT id, pc_id, command, created_at FROM commands WHERE pc_id IN ({','.join('?' for _ in ids)}) "
@@ -719,7 +628,7 @@ async def latest_command_after(pc_ids: list, commands: tuple, after: str) -> "di
 
 async def get_command_pc(cmd_id: int) -> "str | None":
     """명령 id의 pc_id(저장 키) 단건 조회 — 소유 테넌트 판정용(2026-07-26)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT pc_id FROM commands WHERE id=?", (cmd_id,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
@@ -727,7 +636,7 @@ async def get_command_pc(cmd_id: int) -> "str | None":
 
 async def set_setting(key: str, value: str) -> None:
     """전역 설정 KV (각성 난이도 프리셋 등, 2026-07-26). key는 호출측에서 테넌트 스코프."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT OR REPLACE INTO settings(key, value, updated_at) VALUES(?,?,?)",
             (key, value, _now()),
@@ -736,7 +645,7 @@ async def set_setting(key: str, value: str) -> None:
 
 
 async def get_setting(key: str) -> "str | None":
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
@@ -746,7 +655,7 @@ async def get_setting(key: str) -> "str | None":
 
 async def tg_map_put(message_id: int, pc_id: str, chat_id: str, kind: str = "captcha") -> None:
     """서버가 보낸 텔레그램 메시지 id에 요청 PC를 붙여둔다(답장 라우팅용)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT OR REPLACE INTO telegram_map(message_id, pc_id, chat_id, kind, created_at)"
             " VALUES(?,?,?,?,?)",
@@ -761,7 +670,7 @@ async def tg_map_put(message_id: int, pc_id: str, chat_id: str, kind: str = "cap
 
 
 async def tg_map_get(message_id: int) -> dict | None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT message_id, pc_id, chat_id, kind, created_at FROM telegram_map WHERE message_id=?",
@@ -776,7 +685,7 @@ async def tg_map_recent(chat_id: str, within_sec: int, kind: str = "captcha") ->
     ★답장 없이 코드만 보냈을 때 대상 추론용 — 후보가 정확히 1건일 때만 쓴다(호출측 판단).★"""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=int(within_sec))
               ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT message_id, pc_id, chat_id, kind, created_at FROM telegram_map"
@@ -792,14 +701,14 @@ async def tg_map_delete_pc(pc_id: str) -> None:
     ★B-TG1 보강 (2026-09-23 병합 반증) 지우지 않고 kind='done' 으로 묻는다★ — 대기 후보(kind='captcha')
     에서는 똑같이 빠지지만, 그 사진에 다시 단 답장을 「처리된 사진」 으로 알아본다(행이 없으면 봇의
     안내문·expect_reply 없는 알림 같은 ★처음부터 모르는 메시지★ 와 구별이 안 된다). 48시간 뒤 정리."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("UPDATE telegram_map SET kind='done' WHERE pc_id=?", (pc_id,))
         await db.commit()
 
 
 async def get_updater_command_pc(cmd_id: int) -> "str | None":
     """업데이터 명령 id의 pc_id(저장 키) 단건 조회 — 소유 테넌트 판정용(2026-07-26)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT pc_id FROM updater_commands WHERE id=?", (cmd_id,)) as cur:
             row = await cur.fetchone()
     return row[0] if row else None
@@ -848,7 +757,7 @@ async def insert_log(pc_id: str, level: str, message: str,
         for _k in list(_LOG_SINCE_PRUNE)[:len(_LOG_SINCE_PRUNE) - LOG_SINCE_PRUNE_MAX + 1]:
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         if HOT_SYNC != "FULL":
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         await db.execute(
@@ -882,7 +791,7 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     now = created_at or _now()
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         if HOT_SYNC != "FULL":
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         _t = time.monotonic()
@@ -906,7 +815,7 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────
 
 async def upsert_updater_status(pc_id: str, data: dict) -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT OR REPLACE INTO updater_status(pc_id, data, updated_at) VALUES(?,?,?)",
             (pc_id, json.dumps(data, ensure_ascii=False), _now()),
@@ -915,7 +824,7 @@ async def upsert_updater_status(pc_id: str, data: dict) -> None:
 
 
 async def get_all_updater_statuses() -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM updater_status ORDER BY pc_id"
@@ -935,7 +844,7 @@ async def get_all_updater_statuses() -> list[dict]:
 # ── 업데이터 명령 큐 ──────────────────────────────────────────────────────────
 
 async def insert_updater_command(pc_id: str, command: str, args: dict) -> int:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             "INSERT INTO updater_commands(pc_id, command, args, status, created_at) VALUES(?,?,?,?,?)",
             (pc_id, command, json.dumps(args, ensure_ascii=False), "pending", _now()),
@@ -988,7 +897,7 @@ async def maintain_command_tables(batch: int = 2000, pause: float = 0.05) -> dic
     out = {"commands": 0, "updater_commands": 0, "index": False}
     for tbl in ("commands", "updater_commands"):
         while True:
-            async with connect_db() as db:
+            async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
                 cur = await db.execute(
                     f"DELETE FROM {tbl} WHERE rowid IN (SELECT rowid FROM {tbl} "
                     f"WHERE status != 'pending' AND created_at < ? LIMIT ?)", (_cut, batch))
@@ -998,7 +907,7 @@ async def maintain_command_tables(batch: int = 2000, pause: float = 0.05) -> dic
             if n < batch:
                 break
             await asyncio.sleep(pause)
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         # ★B-DB7 명령 이벤트 시각 인덱스★ — get_commands_since 가 커서와 같은 기준(이벤트 시각 =
         #   COALESCE(updated_at, created_at))으로 자르고 정렬해야 잘림 경계가 맞는다(B-FV5). 식 인덱스라
         #   쿼리의 식과 ★글자 그대로★ 같아야 탄다. 없어도 결과는 같다(느릴 뿐).
@@ -1023,7 +932,7 @@ async def get_pending_updater_command(pc_id: str, all_key: str = "all",
               ).strftime("%Y-%m-%dT%H:%M:%S")
     ack_cut = (datetime.now(timezone.utc) - timedelta(seconds=FV_CLAIM_ACK_SEC)
                ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         # ★B-DB3★ 먼저 읽기만 하고, 걷어낼 게 있을 때만 쓴다(매크로 큐 2026-09-11 과 같은 이유 —
         #   폴링마다 쓰기 락을 잡지 않는다). 대기 행은 PC 당 몇 건뿐이라 파이썬에서 가른다.
@@ -1099,7 +1008,7 @@ async def sweep_fv_claims(fv_quiet: bool) -> list:
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=UPDATER_COMMAND_MAX_AGE_SEC)).strftime("%Y-%m-%dT%H:%M:%S")
     ack_cut = (datetime.now(timezone.utc) - timedelta(seconds=FV_CLAIM_ACK_SEC)).strftime("%Y-%m-%dT%H:%M:%S")
     out = []
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute(
             "SELECT id, pc_id, command, created_at, updated_at FROM updater_commands WHERE status='fv_claimed'") as cur:
             rows = await cur.fetchall()
@@ -1128,7 +1037,7 @@ async def recent_updater_commands(limit: int = 60) -> list[dict]:
     LIKE 'prefix%' 로 좁히면 prefix 가 빈 문자열이 되어 ★남의 테넌트까지 전부★ 걸린다.
     (초판이 그렇게 짰다가 스스로 잡았다.) 호출부가 ns_of() 로 걸러 쓴다.
     """
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
@@ -1169,7 +1078,7 @@ async def claim_updater_command_for_fv(cmd_id: int, fv_id: "int | None" = None,
     (호출부는 팜뷰 목록에서 빼지 않고 다음 폴링에 다시 본다 — 그 사이 업데이터가 받아 가면 거기서 빠진다, H1·H5)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=UPDATER_COMMAND_MAX_AGE_SEC)
               ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT pc_id, command, handed_at FROM updater_commands WHERE id=?", (cmd_id,)) as cur:
             r = await cur.fetchone()
@@ -1226,7 +1135,7 @@ async def release_updater_command_from_fv(cmd_id: int) -> bool:
     유효기간이 지났으면 안 되돌린다(False — 호출부가 fv_failed 로 남긴다)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=UPDATER_COMMAND_MAX_AGE_SEC)
               ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT pc_id, command FROM updater_commands WHERE id=? AND status IN ('fv_claimed','fv_unknown')",
                               (cmd_id,)) as cur:
@@ -1250,7 +1159,7 @@ async def finish_updater_command_fv(cmd_id: int, ok) -> bool:
     #   폴링이 await 사이에 들고 있던 그 행을 «끝난 명령» 인데도 내줄 수 있었다. 팜뷰가 집은 명령은 업데이터에
     #   회수되지 않으므로(#1) pending 인 짝 행은 «안-감 확실» 로 이미 업데이터 몫이다 — 건드리지 않는다.
     _from = ("fv_claimed", "fv_unknown")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             f"UPDATE updater_commands SET status=?, updated_at=? WHERE id=? AND status IN ({','.join('?' for _ in _from)})",
             ("fv_done" if ok else "fv_failed", _now(), cmd_id, *_from))
@@ -1267,7 +1176,7 @@ async def open_fv_claims() -> list:
     기억한 결과로 ack 만 다시 보낸다(fvdash pull_updcmd)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=UPDATER_COMMAND_MAX_AGE_SEC)
               ).strftime("%Y-%m-%dT%H:%M:%S")
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute(
                 "SELECT f.fv_id, u.id, u.pc_id, u.command, f.at FROM updater_fv_claim f "
                 "JOIN updater_commands u ON u.id=f.ucmd_id "
@@ -1280,7 +1189,7 @@ async def mark_updater_handed(cmd_id: int) -> None:
     """업데이터에 ★실제로 내준★ 행에 내준 시각을 적는다 — 처음 한 번만(ack 전까지 매 폴링 다시 준다).
     get_pending 안에서 적지 않는다: 거기서 고른 행을 호출부가 안 줄 수도 있다(팜뷰가 먼저 집음) — 그러면 아무도 못 받았다
     (test_fv_found U-13, v2 반증 1부 B 첫 판)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("UPDATE updater_commands SET handed_at=? WHERE id=? AND handed_at IS NULL AND status='pending'",
                          (_now(), cmd_id))
         await db.commit()
@@ -1288,7 +1197,7 @@ async def mark_updater_handed(cmd_id: int) -> None:
 
 async def pc_clock_get(pc_id: str) -> list:
     """카드의 PC 시계 표본 [[서버 epoch, 서버−PC 초], …] (없으면 [])."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT samples FROM pc_clock WHERE pc_id=?", (pc_id,)) as cur:
             r = await cur.fetchone()
     try:
@@ -1299,14 +1208,14 @@ async def pc_clock_get(pc_id: str) -> list:
 
 
 async def pc_clock_put(pc_id: str, samples: list) -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("INSERT OR REPLACE INTO pc_clock(pc_id, samples) VALUES(?,?)", (pc_id, json.dumps(samples)))
         await db.commit()
 
 
 async def updater_command_for_fv_id(fv_id: int) -> "dict | None":
     """팜뷰 ack 의 id → 짝 업데이터 행 {id, pc_id, command, status}. 모르면 None(옛 서버가 집은 것·2일 지난 것)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute(
                 "SELECT u.id, u.pc_id, u.command, u.status FROM updater_fv_claim f "
                 "JOIN updater_commands u ON u.id=f.ucmd_id WHERE f.fv_id=?", (int(fv_id),)) as cur:
@@ -1316,7 +1225,7 @@ async def updater_command_for_fv_id(fv_id: int) -> "dict | None":
 
 async def updater_command_status(cmd_id: int) -> "str | None":
     """한 행의 상태만(업데이터 폴링이 집은 직후 다시 본다 — 배포 반증 3차 #5)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT status FROM updater_commands WHERE id=?", (cmd_id,)) as cur:
             r = await cur.fetchone()
     return r[0] if r else None
@@ -1327,7 +1236,7 @@ async def supersede_updater_command(cmd_id: int) -> bool:
     ★업데이터에 이미 내준 행(handed_at)은 superseded(«안 돎») 가 아니라 handed_noack(«받아감 — ack 없음, 돌았을 수 있음»)★
     (v3 델타 반증 #3 — 팜뷰가 같은 종류 새 명령을 집으면 폴링이 이 옛 행을 치우는데, ack 가 끝내 안 오면 돈 명령이 «안 돎»
     으로 남았다). 늦은 ack 는 여전히 acked 로 적는다(ack_updater_command)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute("UPDATE updater_commands SET status=CASE WHEN handed_at IS NULL THEN 'superseded' "
                                "ELSE 'handed_noack' END, updated_at=? WHERE id=? AND status='pending'",
                                (_now(), cmd_id))
@@ -1336,7 +1245,7 @@ async def supersede_updater_command(cmd_id: int) -> bool:
 
 
 async def ack_updater_command(cmd_id: int) -> bool:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         cur = await db.execute(
             # ★B-DB3★ pending 일 때만 — 늦은 ack 하나가 expired/superseded 흔적을 acked 로 뒤집지 않게
             #   (매크로 큐 ack_command 2026-09-11 과 같은 규칙, §A12).
@@ -1354,7 +1263,7 @@ async def ack_updater_command(cmd_id: int) -> bool:
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 
 async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT level, message, created_at FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT ?",
@@ -1405,14 +1314,14 @@ async def get_logs_since(since: str, limit: int = 500,
         elif ns_prefix:
             where.append("pc_id LIKE ? ESCAPE '\\'"); params.append(_like_prefix(ns_prefix) + "::%")
         params.append(limit)
-        async with connect_db() as db:
+        async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT id, pc_id, level, message, created_at FROM logs WHERE "
                 + " AND ".join(where) + " ORDER BY created_at ASC, id ASC LIMIT ?", params,
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         if pc_id:
             sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
@@ -1446,7 +1355,7 @@ async def get_commands_since(since: str, limit: int = 500, until: "str | None" =
     elif ns_prefix:
         where.append("pc_id LIKE ? ESCAPE '\\'"); params.append(_like_prefix(ns_prefix) + "::%")
     params.append(limit)
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, pc_id, command, args, status, created_at, updated_at "
@@ -1638,7 +1547,7 @@ async def heal_reverted_kina() -> list[dict]:
     판정은 재전송 판정과 같은 함수(_kina_ledger_replay). 두 번 돌려도 같다(고친 값은 before 가 아니다).
     반환: 고친 카드 [{pc_id, before, after, tids}] — 호출부가 그 PC 로그에 한 줄씩 남긴다(A2)."""
     out = []
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT DISTINCT pc_id FROM kina_adjust") as cur:
             pcs = [r[0] for r in await cur.fetchall()]
         for pc in pcs:
@@ -1663,7 +1572,7 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
     유지(단일수집·시각 미제공 재전송), 기존값도 없으면 _now().
     반환: 최종 저장된 chars 리스트(WS 브로드캐스트용)."""
     chars = _finite(chars)
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         # 장부(kina_adjust)와 한 트랜잭션 — adjust_char_kina 가 사이에 끼면 그 차감을 덮어 쓴다
         await db.execute("BEGIN IMMEDIATE")
@@ -1828,7 +1737,7 @@ async def upsert_char_info(pc_id: str, total_kina: int, chars: list, merge: bool
 
 
 async def get_all_char_info() -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             # ★kina_ledger (2026-09-24 #114 FV8)★ — 창고키나 0 이 «진짜 0» 인지 가르는 증거. 매크로가 보낸 0 은 기존값을
@@ -1874,7 +1783,7 @@ async def get_all_char_info() -> list[dict]:
 
 
 async def get_char_info(pc_id: str) -> dict | None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, total_kina, chars, collected_at FROM char_info WHERE pc_id=?", (pc_id,)
@@ -1899,7 +1808,7 @@ async def adjust_char_kina(pc_id: str, tid: str, delta: int, why: dict) -> dict 
     · char_info 행이 없으면 None(→ 404). collected_at 은 ★안 건드린다★ — 수집 시각은 매크로 것.
     · 같은 tid 는 두 번 빼지 않는다 → {"dup": True, before=after=지금 값}.
     · after = max(0, before + delta). BEGIN IMMEDIATE 로 읽기-쓰기를 한 트랜잭션에."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("BEGIN IMMEDIATE")
         # ★되돌려진 채인 카드에 새 판매가 오면 먼저 장부를 다시 적용한다 (2026-09-23 P0 v3 반증 ①)★ — 예전엔
         #   저장값(되돌려진 before)에서 바로 빼서 새 행의 before 가 옛 행의 before 와 같아졌고, 다음 재전송이
@@ -1936,7 +1845,7 @@ async def adjust_char_kina(pc_id: str, tid: str, delta: int, why: dict) -> dict 
 
 async def kina_adjust_row(tid: str) -> dict | None:
     """장부 한 줄(tid) — dup 재전송 때 원래 차감 값으로 로그줄을 되살리는 데 쓴다(2026-09-24 아이온2 #201 후속)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT tid, pc_id, delta, before, after, why, at FROM kina_adjust WHERE tid=?", (tid,)) as cur:
             row = await cur.fetchone()
@@ -1974,7 +1883,7 @@ def _kina_known_by(read, at: str, why_json) -> bool:
 
 async def find_kina_adjust_tids(pc_id: str, delta: int, needle: str) -> list:
     """그 카드·그 금액이면서 tid 에 needle 이 든 장부 줄의 tid 목록(판매 옮기기가 짐작 없이 한 줄을 고르는 데)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT tid FROM kina_adjust WHERE pc_id=? AND delta=? AND instr(tid, ?) > 0",
                               (pc_id, int(delta), needle)) as cur:
             return [r[0] for r in await cur.fetchall()]
@@ -1989,7 +1898,7 @@ async def move_kina_adjust(tid: str, to_pc: str, note: str = "") -> dict:
       (옛 카드에 행이 남으면 판매 전 판독이 재전송될 때 또 빠진다).
     반환 {tid, from, to, from_before, from_after, to_before, to_after} · 없으면 {"missing": True} ·
     이미 그 카드면 {"same": True} · 새 카드 행이 없으면 {"no_card": to_pc}(아무것도 안 바꿈)."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT pc_id, delta, why, at FROM kina_adjust WHERE tid=?", (tid,)) as cur:
             row = await cur.fetchone()
@@ -2030,7 +1939,7 @@ async def move_kina_adjust(tid: str, to_pc: str, note: str = "") -> dict:
 
 async def log_has(pc_id: str, needle: str) -> bool:
     """그 PC 로그에 needle 글자가 든 줄이 있나(instr — LIKE 의 %·_ 이스케이프가 필요 없다). 없으면 False."""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         async with db.execute("SELECT 1 FROM logs WHERE pc_id=? AND instr(message, ?) > 0 LIMIT 1", (pc_id, needle)) as cur:
             return (await cur.fetchone()) is not None
 
@@ -2039,7 +1948,7 @@ FV_NOTIFY_KEEP_DAYS = 30        # fv_notify 행 보관 — 이보다 오래된 k
 
 
 async def fv_notify_get(key: str) -> dict | None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM fv_notify WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
@@ -2051,7 +1960,7 @@ async def fv_notify_record(key: str, pc_id: str | None, text: str, status: str,
     """요청 하나를 장부에 적는다. status: sent | dup | limited | send_failed | disabled.
     ★sent 는 끈적하다★ — 한 번 sent 가 된 key 는 뒤의 dup·limited 가 status·sent_at·message_id 를 안 덮는다(n·last_at 만)."""
     now = _now()
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT INTO fv_notify(key, pc_id, text, status, n, first_at, last_at, sent_at, message_id) "
             "VALUES(?,?,?,?,1,?,?,?,?) "
@@ -2068,7 +1977,7 @@ async def fv_notify_record(key: str, pc_id: str | None, text: str, status: str,
 
 
 async def fv_notify_recent(limit: int = 50) -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM fv_notify ORDER BY last_at DESC, key LIMIT ?", (int(limit),)) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -2077,7 +1986,7 @@ async def fv_notify_recent(limit: int = 50) -> list[dict]:
 # ── 악몽 진행 상태 ──────────────────────────────────────────────────────────
 
 async def upsert_nightmare_progress(pc_id: str, slot: int, tab: str, bosses: dict) -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT OR REPLACE INTO nightmare_progress(pc_id, slot, tab, bosses, updated_at) VALUES(?,?,?,?,?)",
             (pc_id, slot, tab, json.dumps(bosses, ensure_ascii=False), _now()),
@@ -2086,7 +1995,7 @@ async def upsert_nightmare_progress(pc_id: str, slot: int, tab: str, bosses: dic
 
 
 async def get_nightmare_progress(pc_id: str) -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress WHERE pc_id=? ORDER BY slot",
@@ -2110,7 +2019,7 @@ async def get_nightmare_progress(pc_id: str) -> list[dict]:
 
 
 async def get_all_nightmare_progress() -> list[dict]:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress ORDER BY pc_id, slot"
@@ -2135,7 +2044,7 @@ async def get_all_nightmare_progress() -> list[dict]:
 # ── 슬롯 필터 (캐릭별 활성화/비활성화) ────────────────────────────────────────
 
 async def upsert_slot_filters(pc_id: str, filters: dict) -> None:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         await db.execute(
             "INSERT OR REPLACE INTO slot_filters(pc_id, filters) VALUES(?,?)",
             (pc_id, json.dumps(filters)),
@@ -2144,7 +2053,7 @@ async def upsert_slot_filters(pc_id: str, filters: dict) -> None:
 
 
 async def get_slot_filters(pc_id: str) -> dict:
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT filters FROM slot_filters WHERE pc_id=?", (pc_id,)
@@ -2160,7 +2069,7 @@ async def get_slot_filters(pc_id: str) -> dict:
 
 async def get_all_slot_filters() -> dict:
     """pc_id -> filters dict 전체 반환"""
-    async with connect_db() as db:
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT pc_id, filters FROM slot_filters") as cur:
             rows = await cur.fetchall()

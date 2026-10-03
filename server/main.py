@@ -1606,7 +1606,6 @@ async def lifespan(app: FastAPI):
     bugsweep_task = asyncio.create_task(_bug_sweeper())     # #271 버그스샷 나이 정리
     ka_task = asyncio.create_task(_dash_keepalive())         # #271 숨은 대시보드 ping
     scout_task = asyncio.create_task(_scout_loop())          # #288 🔭 스카우터 알람(서버 안)
-    wal_task = asyncio.create_task(_database_mod.wal_checkpoint_loop())   # #432-c WAL 체크포인트를 쓰기 경로 밖에서
     try:
         yield
     finally:
@@ -1618,7 +1617,7 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task, wal_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task):
             if _t:
                 _t.cancel()
                 try:
@@ -3342,7 +3341,6 @@ async def diag_perf(request: Request):
         "ws_closes_n": len(_WS_CLOSES),
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
-        "wal": dict(_database_mod.WAL_STATS, bg=_database_mod.WAL_BG),
         "db_timing": {k: dict(v, ms_avg=round(v["ms_total"] / max(1, v["n"]), 2), ms_max=round(v["ms_max"], 1)) for k, v in _database_mod.TIMING.items()},
         "status_lag": _lag_report(),               # #432
         "db_locked": _DB_LOCKED,                  # #431 «database is locked» 에 걸린 곳(n·by·recent) — 쥔 쪽 단서
