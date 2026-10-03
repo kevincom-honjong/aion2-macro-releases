@@ -552,7 +552,9 @@ WS_LOGQ_MAX = int(os.getenv("WS_LOGQ_MAX", "200"))
 # ★#432 (2026-10-03) 상태 지연 계측★ «Home 누르면 일시정지가 10초 뒤» — 단계마다 «서버가 받은 시각 − 매크로가 찍은 last_active»
 #   PC 마다 시계가 어긋나므로(최대 273초, 주석 «_macro_silent») 절대값 대신 ★PC 별 최소값(시계차+망 바닥)을 뺀 초과분★ 을 센다.
 #   stage: recv(WS 에서 받음) · stored(DB 저장 뒤) · send(바뀐 카드가 대시보드 방송에 실림)
-_LAG: dict = {"recv": [], "stored": [], "send": []}
+_LAG: dict = {"recv": [], "stored": [], "send": [], "recv_all": []}
+_LAG_ST: dict = {}        # pc → 마지막으로 본 status 문자열 (전이 판정)
+_LAG_SEND_ST: dict = {}   # 카드 → 마지막 방송 때 status
 _LAG_BASE: dict = {}      # pc → 최근 raw 최소값들
 _LAG_PC: dict = {}        # pc → 최근 recv 초과분
 LAG_KEEP = 600
@@ -571,11 +573,11 @@ def _lag_note(stage: str, pc: str, last_active) -> None:
         if t is None:
             return
         raw = time.time() - t
-        if stage == "recv":
+        if stage == "recv_all":
             b = _LAG_BASE.setdefault(pc, [])
             b.append(raw)
             del b[:-30]
-        if stage != "recv" and pc not in _LAG_BASE:
+        if stage != "recv_all" and pc not in _LAG_BASE:
             return                                  # 바닥(시계차)을 모르면 초과분을 못 낸다 — 0 으로 거짓말하지 않는다
         base = min(_LAG_BASE.get(pc) or [raw])
         ex = max(0.0, raw - base)
@@ -600,7 +602,8 @@ def _lag_pct(a: list) -> dict:
 
 def _lag_report() -> dict:
     byp = sorted(((pc, _lag_pct(v)) for pc, v in _LAG_PC.items()), key=lambda x: -(x[1].get("p95") or 0))[:8]
-    return {"note": "초과분(s) = (서버 수신시각 − 매크로 last_active) − 그 PC 최근 30건 최소값. recv=WS 수신, stored=DB 저장 뒤, send=바뀐 카드 방송",
+    return {"note": "초과분(s) = (서버 수신시각 − 매크로 last_active) − 그 PC 최근 30건 최소값. ★recv/stored/send 는 status 값이 바뀐 보고(전이: Home→paused 같은)만★ — "
+                    "recv_all 은 30초 하트비트까지 전부(하트비트는 마지막 set_status 때 찍힌 옛 last_active 를 그대로 실어 오므로 최대 30초 늙어 보인다 = 전달 지연이 아님). send=그 전이가 방송에 실린 때",
             "stages": {k: _lag_pct(v) for k, v in _LAG.items()}, "worst_pcs_recv": dict(byp)}
 
 
@@ -2606,7 +2609,9 @@ async def _push_state_now(tenant: str = "main"):
             for _pid in (f.get("upd_ids") or [])[:80]:
                 _p = _byid.get(_pid)
                 if _p and _p.get("last_active"):
-                    _lag_note("send", _pid, _p.get("last_active"))
+                    if _LAG_SEND_ST.get(_pid) != _p.get("status"):     # 전이된 카드만(진행도·하트비트 갱신은 지연 표본이 아니다)
+                        _lag_note("send", _pid, _p.get("last_active"))
+                    _LAG_SEND_ST[_pid] = _p.get("status")
     except Exception:
         _perf_count("push_state_failed")
         raise
@@ -12010,11 +12015,16 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                         if not isinstance(payload, dict):   # 목록이면 연결째 죽었다 (2026-09-23)
                             break
                         payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
-                        _lag_note("recv", nspc, payload.get("last_active"))
+                        _lag_note("recv_all", nspc, payload.get("last_active"))
+                        _lag_tr = _LAG_ST.get(nspc) != payload.get("status")      # ★전이 보고만 지연으로 센다(하트비트의 옛 last_active 는 지연이 아니다)★
+                        _LAG_ST[nspc] = payload.get("status")
+                        if _lag_tr:
+                            _lag_note("recv", nspc, payload.get("last_active"))
                         _ts = time.monotonic()
                         await upsert_status(nspc, payload)
                         _perf_note("ws_st_upsert", (time.monotonic() - _ts) * 1000)       # ★#432 상태 처리 단계별★
-                        _lag_note("stored", nspc, payload.get("last_active"))
+                        if _lag_tr:
+                            _lag_note("stored", nspc, payload.get("last_active"))
                         _ts = time.monotonic()
                         await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
                         _perf_note("ws_st_abyss", (time.monotonic() - _ts) * 1000)

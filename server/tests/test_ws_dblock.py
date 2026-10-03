@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 26
+MIN_CHECKS = 29
 
 
 class Feed(FakeWS):
@@ -127,12 +127,14 @@ async def t_432():
     main._LAG_BASE.pop("PC-LAG", None)
     main._lag_note("send", "PC-LAG", la)
     n_send = main._LAG["send"].__len__()
-    main._lag_note("recv", "PC-LAG", la)
-    main._lag_note("recv", "PC-LAG", (_dt.now(_tz.utc) - _td(seconds=13)).strftime("%Y-%m-%dT%H:%M:%S"))
+    main._lag_note("recv_all", "PC-LAG", la)
+    _la13 = (_dt.now(_tz.utc) - _td(seconds=13)).strftime("%Y-%m-%dT%H:%M:%S")
+    main._lag_note("recv_all", "PC-LAG", _la13)
+    main._lag_note("recv", "PC-LAG", _la13)
     ex = main._LAG_PC["PC-LAG"][-1]
     ok("W432-e 초과분 = raw − 그 PC 최소값(시계차 상쇄): 3초 바닥 뒤 13초면 약 10초", 8.5 <= ex <= 11.5, str(ex))
     ok("W432-f 바닥을 모르는 PC 의 send 는 기록하지 않는다(0 거짓말 금지)", main._LAG["send"].__len__() == n_send)
-    ok("W432-g 쓸 수 없는 last_active 는 조용히 무시", main._lag_note("recv", "PC-X", "garbage") is None and "PC-X" not in main._LAG_BASE)
+    ok("W432-g 쓸 수 없는 last_active 는 조용히 무시", main._lag_note("recv_all", "PC-X", "garbage") is None and "PC-X" not in main._LAG_BASE)
     ok("W432-h /diag/perf 에 status_lag", '"status_lag": _lag_report()' in inspect_src(main.diag_perf))
 
     # insert_logs: 한 연결·한 커밋, 줄 수, prune 카운터
@@ -216,13 +218,37 @@ async def t_432b():
     ok("W432b-f /diag/perf 에 db_timing", '"db_timing"' in inspect_src(main.diag_perf))
 
 
+async def t_432f():
+    """#432-f — 하트비트(옛 last_active)는 지연 표본이 아니다: status 가 바뀐 보고만 recv/stored 로 센다."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    main._LAG_ST.pop("PC-01", None)
+    main._LAG["recv"].clear(); main._LAG["recv_all"].clear(); main._LAG["stored"].clear()
+    main._LAG_BASE.pop("PC-01", None)
+    old = _dt.now(_tz.utc) - _td(seconds=25)
+    f = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S")
+
+    async def up(pc, payload):
+        pass
+
+    msgs = [json.dumps({"type": "status", "payload": {"status": "hunting", "last_active": f(_dt.now(_tz.utc))}}),     # 전이(처음)
+            json.dumps({"type": "status", "payload": {"status": "hunting", "last_active": f(old)}}),                  # 하트비트(옛 값)
+            json.dumps({"type": "status", "payload": {"status": "hunting", "last_active": f(old)}}),
+            json.dumps({"type": "status", "payload": {"status": "paused", "last_active": f(_dt.now(_tz.utc))}})]       # 전이
+    await _drive(msgs, up)
+    ok("W432f-a 4건 중 전이 2건만 recv·stored, 전부는 recv_all", len(main._LAG["recv"]) == 2 and len(main._LAG["stored"]) == 2 and len(main._LAG["recv_all"]) == 4,
+       "%s %s %s" % (len(main._LAG["recv"]), len(main._LAG["stored"]), len(main._LAG["recv_all"])))
+    ok("W432f-b ★옛 last_active 하트비트가 전이 지연(recv)을 부풀리지 않는다(최대 < 5초)★ — recv_all 쪽만 20초대", max(main._LAG["recv"]) < 5 and max(main._LAG["recv_all"]) > 15,
+       "%s %s" % (main._LAG["recv"], main._LAG["recv_all"]))
+    ok("W432f-c 리포트에 recv_all 단계와 설명", "recv_all" in main._lag_report()["stages"] and "하트비트" in main._lag_report()["note"])
+
+
 def inspect_src(f):
     import inspect
     return inspect.getsource(f)
 
 
 def test_all():
-    run_all([t_all, t_432, t_432b])
+    run_all([t_all, t_432, t_432b, t_432f])
     finish("test_ws_dblock", MIN_CHECKS)
 
 
