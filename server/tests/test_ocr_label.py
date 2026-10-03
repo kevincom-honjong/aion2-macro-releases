@@ -34,7 +34,7 @@ from _harness import main, db, ok, run_all, finish   # noqa: E402
 import ocr_label as OL                                # noqa: E402
 from fastapi.testclient import TestClient            # noqa: E402
 
-MIN_CHECKS = 295     # 2026-09-24 두 형식 +4(I1-e 400 셋 더 · I1-e2 ts 방식) · 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
+MIN_CHECKS = 300     # 2026-09-24 두 형식 +4(I1-e 400 셋 더 · I1-e2 ts 방식) · 2026-09-24 v4 델타 반증 +3(V2-f~h 상한 제출은 비우기 안 돌림) · v4 반증 2차 +5(V2 묶음 줄 상한) · 2026-09-23 (밤) 반증 R1~R10 이식 뒤 실측 260 — 검사를 더하면 같이 올린다
 
 KEY = "testkey"
 KEY2 = "ocrkey2"       # 두 번째 테넌트(격리 시험) — 헤더라 ASCII
@@ -688,7 +688,8 @@ STAT_KEYS = {"pending", "labeled", "bad", "auto", "dismissed", "dropped", "image
              "local_compared", "local_disagree", "local_disagree_rate"}
 FV_ROUTES = (("get", "/api/fv/ocr/queue", {}), ("get", "/api/fv/ocr/img/1", {}), ("post", "/api/fv/ocr/label", {"json": {"id": 1, "text": "x"}}),
              ("post", "/api/fv/ocr/bad", {"json": {"id": 1}}), ("post", "/api/fv/ocr/skip", {"json": {"id": 1}}),
-             ("post", "/api/fv/ocr/undo", {"json": {}}), ("get", "/api/fv/ocr/history", {}), ("get", "/api/fv/ocr/stats", {}))
+             ("post", "/api/fv/ocr/undo", {"json": {}}), ("get", "/api/fv/ocr/history", {}), ("get", "/api/fv/ocr/stats", {}),
+             ("post", "/api/fv/ocr/dismiss_site", {"json": {"site": "x"}}), ("post", "/api/fv/ocr/restore_site", {"json": {"site": "x"}}))
 
 
 def FV(method, url, tok=FV_TOK, **kw):
@@ -716,14 +717,14 @@ def t_fv():
     try:
         main.FV_TOKEN = ""
         res = [FV(m, u, **kw) for m, u, kw in FV_ROUTES]
-        ok("F1-a FV_TOKEN 미설정 → /api/fv/ocr/* 8개 전부 404 {error,code}", all(_errshape(r, 404) for r in res),
+        ok("F1-a FV_TOKEN 미설정 → /api/fv/ocr/* 10개 전부 404 {error,code}", all(_errshape(r, 404) for r in res),
            str([r.status_code for r in res]))
         main.FV_TOKEN = FV_TOK
         main._KEY_FAILS.clear()
         res = [FV(m, u, tok=None, **kw) for m, u, kw in FV_ROUTES]
-        ok("F1-b 토큰 없음 → 8개 전부 401 {error,code}", all(_errshape(r, 401) for r in res), str([r.status_code for r in res]))
+        ok("F1-b 토큰 없음 → 10개 전부 401 {error,code}", all(_errshape(r, 401) for r in res), str([r.status_code for r in res]))
         res = [FV(m, u, tok="wrong-token", **kw) for m, u, kw in FV_ROUTES]
-        ok("F1-c 틀린 토큰 → 8개 전부 401", all(_errshape(r, 401) for r in res), str([r.status_code for r in res]))
+        ok("F1-c 틀린 토큰 → 10개 전부 401", all(_errshape(r, 401) for r in res), str([r.status_code for r in res]))
         r = FV("get", "/api/fv/ocr/queue", tok=None, params={"limit": "abc"})
         ok("F1-d 토큰 없는 limit=abc 는 401(422·400 아님 — 토큰부터)", _errshape(r, 401), str(r.status_code))
         r = FV("get", "/api/fv/ocr/img/abc", tok=None)
@@ -1430,6 +1431,38 @@ def d417_dismissed_files_reclaimable():
     _reset_rate()
 
 
+def d420_fv_dismiss():
+    """#420 팜뷰 ocr-1.2 — FV 토큰으로 site 치우기/되돌리기(웹 세션 길과 같은 동작)."""
+    old = (main.FV_TOKEN, main.FV_TENANT)
+    saved = OL.OCR_SITE_PENDING_CAP
+    OL.OCR_SITE_PENDING_CAP = 0
+    main.FV_TOKEN = FV_TOK
+    main._KEY_FAILS.clear()
+    try:
+        with fresh_store():
+            OL.OCR_DISK_CAP = 10 ** 9
+            _reset_rate()
+            for i in range(3):
+                sub("fvd", "fd%d" % i, dh=_dh(700 + i), pc="PC-FV", key=KEY)
+            ten = main.FV_TENANT
+            n0 = _rows("SELECT COUNT(*) FROM ocr_cluster WHERE site='fvd' AND status='pending' AND tenant=?", (ten,))[0][0]
+            ok("D420-a 준비: FV 테넌트 대기 묶음 확인(키 테넌트와 같으면 3)", n0 in (0, 3), str(n0))
+            r = FV("post", "/api/fv/ocr/dismiss_site", json={"site": "fvd"})
+            j = r.json()
+            ok("D420-b FV dismiss → {ok,site,dismissed,pending} 200", r.status_code == 200 and j.get("ok") is True
+               and j.get("site") == "fvd" and j.get("dismissed") == n0 and "pending" in j, str(j))
+            r = FV("post", "/api/fv/ocr/dismiss_site", json={"site": "fvd"})
+            ok("D420-c 멱등: 두 번째는 0개", r.status_code == 200 and r.json().get("dismissed") == 0, str(r.json()))
+            r = FV("post", "/api/fv/ocr/restore_site", json={"site": "fvd"})
+            ok("D420-d FV restore → restored 가 치운 개수와 같다", r.status_code == 200 and r.json().get("restored") == n0, str(r.json()))
+            r = FV("post", "/api/fv/ocr/dismiss_site", json={})
+            ok("D420-e site 없으면 400 {error,code}", _errshape(r, 400), r.text[:80])
+    finally:
+        main.FV_TOKEN, main.FV_TENANT = old
+        OL.OCR_SITE_PENDING_CAP = saved
+        _reset_rate()
+
+
 def OCR_CLUSTER_ROWS_MAX_T():
     return getattr(OL, "OCR_CLUSTER_ROWS_MAX", 64)
 
@@ -1438,7 +1471,7 @@ def test_all():
     run_all([t_auth, t_captcha, t_validate, t_dedup_exact, t_near_cluster_and_korean, t_bad_undo_skip_history,
              t_size_and_rate, t_disk_evict, t_stats, t_cursor, t_tenant, t_traversal, t_fv, t_refute_ports, t_refute_ports_async,
              t_page_js, v2_cluster_row_cap, v2_capped_does_not_evict,
-             d417_dismiss_restore, d417_site_cap, d417_dismissed_files_reclaimable])
+             d417_dismiss_restore, d417_site_cap, d417_dismissed_files_reclaimable, d420_fv_dismiss])
     finish("test_ocr_label", MIN_CHECKS)
 
 

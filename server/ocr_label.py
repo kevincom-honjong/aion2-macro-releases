@@ -1790,6 +1790,16 @@ async def fv_ocr_undo(request: Request):
     return await _fv_call(request, undo_core)
 
 
+@router.post("/api/fv/ocr/dismiss_site")
+async def fv_ocr_dismiss_site(request: Request):
+    return await _fv_call(request, lambda t: _site_from(t, request, False))
+
+
+@router.post("/api/fv/ocr/restore_site")
+async def fv_ocr_restore_site(request: Request):
+    return await _fv_call(request, lambda t: _site_from(t, request, True))
+
+
 @router.get("/api/fv/ocr/history")
 async def fv_ocr_history(request: Request, limit: str = "30"):
     return await _fv_call(request, lambda t: history_core(t, _limit(limit, 30, 200, True)))
