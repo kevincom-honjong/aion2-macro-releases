@@ -746,6 +746,38 @@ async def insert_log(pc_id: str, level: str, message: str,
         await db.commit()
 
 
+async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) -> None:
+    """★#432★ 로그 여러 줄을 ★연결 하나·커밋 하나★ 로 — WS 로그 묶음(최대 50줄)이 줄마다 연결을 열고(스레드+볼륨 open)
+    커밋(synchronous=FULL, 네트워크 디스크)해서 같은 소켓의 상태 보고를 한참 막았다. 정리(prune) 규칙은 insert_log 와 같다:
+    카운터는 줄 수만큼 늘고, 문턱을 넘으면 묶음 끝에 한 번만 자른다.
+    entries = [(level, message), …]"""
+    ents = [(str(l or "info"), str(m)) for l, m in entries]
+    if not ents:
+        return
+    _n = _LOG_SINCE_PRUNE.get(pc_id, LOG_PRUNE_EVERY - 1) + len(ents)
+    _prune = _n >= LOG_PRUNE_EVERY
+    if pc_id not in _LOG_SINCE_PRUNE and len(_LOG_SINCE_PRUNE) >= LOG_SINCE_PRUNE_MAX:
+        for _k in list(_LOG_SINCE_PRUNE)[:len(_LOG_SINCE_PRUNE) - LOG_SINCE_PRUNE_MAX + 1]:
+            _LOG_SINCE_PRUNE.pop(_k, None)
+    _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
+    now = created_at or _now()
+    async with aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S) as db:
+        await db.executemany(
+            "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
+            [(pc_id, l, m, now) for l, m in ents],
+        )
+        if _prune:
+            await db.execute(
+                """
+                DELETE FROM logs WHERE pc_id=? AND id NOT IN (
+                    SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT ?
+                )
+                """,
+                (pc_id, pc_id, LOG_KEEP_PER_PC),
+            )
+        await db.commit()
+
+
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────
 
 async def upsert_updater_status(pc_id: str, data: dict) -> None:

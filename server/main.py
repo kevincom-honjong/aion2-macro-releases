@@ -22,7 +22,7 @@ from database import (
     delete_pc_all_data, get_pc_dump, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, get_pending_commands,
     ack_command, cancel_command, get_logs,
-    insert_log, get_recent_commands, get_command_pc, get_updater_command_pc, latest_command_after,
+    insert_log, insert_logs, get_recent_commands, get_command_pc, get_updater_command_pc, latest_command_after,
     set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
@@ -545,6 +545,62 @@ def _db_locked_note(where: str, e: BaseException) -> None:
         del _DB_LOCKED["recent"][:-20]
     except Exception:
         pass
+
+
+WS_LOGQ_MAX = int(os.getenv("WS_LOGQ_MAX", "200"))
+# ★#432 (2026-10-03) 상태 지연 계측★ «Home 누르면 일시정지가 10초 뒤» — 단계마다 «서버가 받은 시각 − 매크로가 찍은 last_active»
+#   PC 마다 시계가 어긋나므로(최대 273초, 주석 «_macro_silent») 절대값 대신 ★PC 별 최소값(시계차+망 바닥)을 뺀 초과분★ 을 센다.
+#   stage: recv(WS 에서 받음) · stored(DB 저장 뒤) · send(바뀐 카드가 대시보드 방송에 실림)
+_LAG: dict = {"recv": [], "stored": [], "send": []}
+_LAG_BASE: dict = {}      # pc → 최근 raw 최소값들
+_LAG_PC: dict = {}        # pc → 최근 recv 초과분
+LAG_KEEP = 600
+
+
+def _lag_parse(s):
+    try:
+        return datetime.strptime(str(s)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return None
+
+
+def _lag_note(stage: str, pc: str, last_active) -> None:
+    try:
+        t = _lag_parse(last_active)
+        if t is None:
+            return
+        raw = time.time() - t
+        if stage == "recv":
+            b = _LAG_BASE.setdefault(pc, [])
+            b.append(raw)
+            del b[:-30]
+        if stage != "recv" and pc not in _LAG_BASE:
+            return                                  # 바닥(시계차)을 모르면 초과분을 못 낸다 — 0 으로 거짓말하지 않는다
+        base = min(_LAG_BASE.get(pc) or [raw])
+        ex = max(0.0, raw - base)
+        a = _LAG[stage]
+        a.append(ex)
+        del a[:-LAG_KEEP]
+        if stage == "recv":
+            p = _LAG_PC.setdefault(pc, [])
+            p.append(ex)
+            del p[:-60]
+    except Exception:
+        pass
+
+
+def _lag_pct(a: list) -> dict:
+    if not a:
+        return {"n": 0}
+    s = sorted(a)
+    q = lambda f: round(s[min(len(s) - 1, int(f * len(s)))], 2)
+    return {"n": len(s), "p50": q(0.5), "p95": q(0.95), "max": round(s[-1], 2)}
+
+
+def _lag_report() -> dict:
+    byp = sorted(((pc, _lag_pct(v)) for pc, v in _LAG_PC.items()), key=lambda x: -(x[1].get("p95") or 0))[:8]
+    return {"note": "초과분(s) = (서버 수신시각 − 매크로 last_active) − 그 PC 최근 30건 최소값. recv=WS 수신, stored=DB 저장 뒤, send=바뀐 카드 방송",
+            "stages": {k: _lag_pct(v) for k, v in _LAG.items()}, "worst_pcs_recv": dict(byp)}
 
 
 def _ws_note_close(nspc: str, secs: float, why: str) -> None:
@@ -2482,6 +2538,7 @@ def _feed_update(tenant: str, statuses: list, retired: list, latest) -> bool:
     retired_s = json.dumps(retired, ensure_ascii=False)
     latest_s = json.dumps(latest, ensure_ascii=False) if latest else None
     upd = [pid for pid in order if f["keys"].get(pid) != keys[pid]]
+    f["upd_ids"] = list(upd)          # ★#432★ 이번 판에 바뀐 카드 — 방송 지연 계측용
     dels = [pid for pid in f["keys"] if pid not in keys]
     r_ch = retired_s != f["retired"]
     l_ch = latest_s is not None and latest_s != f["latest"]
@@ -2538,6 +2595,12 @@ async def _push_state_now(tenant: str = "main"):
         else:
             _perf_count("push_state_unchanged")
         await manager.publish_state(tenant)      # 바뀐 게 없어도 — 새로 붙은 소켓은 전량을 받아야 한다
+        if changed:                               # ★#432★ send 단계: 바뀐 카드의 last_active 지연(초과분)
+            _byid = {str(p.get("pc_id") or ""): p for p in statuses}
+            for _pid in (f.get("upd_ids") or [])[:80]:
+                _p = _byid.get(_pid)
+                if _p and _p.get("last_active"):
+                    _lag_note("send", _pid, _p.get("last_active"))
     except Exception:
         _perf_count("push_state_failed")
         raise
@@ -3277,6 +3340,7 @@ async def diag_perf(request: Request):
         "ws_closes_n": len(_WS_CLOSES),
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
+        "status_lag": _lag_report(),               # #432
         "db_locked": _DB_LOCKED,                  # #431 «database is locked» 에 걸린 곳(n·by·recent) — 쥔 쪽 단서
         "ws_per_second": _bucket_count([x["at"] for x in _WS_CLOSES], top=8),
         "ws_closes": _WS_CLOSES[-40:],
@@ -11748,6 +11812,54 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
     _WS_DRAINING[nspc] = websocket
     _ws_t0 = time.monotonic()        # ★수명 계측 (2026-09-10)★
     _ws_why = "루프 이탈"            # 아래에서 덮어쓴다
+    async def _handle_logs(_lm):
+        """로그 묶음 한 통 — 잠김이면 물러서며 다시(#431), 안 되면 그 묶음만 버린다."""
+        for _a in range(WS_DB_RETRY):
+            try:
+                logs = _lm.get("logs", [])
+                _ents = [e for e in logs if isinstance(e, dict)]
+                await insert_logs(nspc, [(e.get("level", "info"), e.get("message", "")) for e in _ents])   # ★#432★ 연결 하나·커밋 하나
+                for entry in _ents:
+                    _m = entry.get("message", "")
+                    # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
+                    #   WS 재연결이 아니라 ★부팅★ 일 때만 나오는 줄을 본다
+                    #   (PC-21b 처럼 60초마다 WS 가 끊겼다 붙는 PC 가 있다).
+                    if "[BOOT" in str(_m):
+                        try:
+                            _rot_note_boot(nspc, _m)
+                        except Exception as _be:
+                            print(f"[순환] 부팅 감지 실패(무시): {_be}")
+                    if _HOTKEY_ARM_MARK in str(_m):      # ★사고 456-b★
+                        try:
+                            _t456, _p456 = split_ns(nspc)
+                            await _rot_note_hotkey(_t456, _p456, _m)
+                        except Exception as _he:
+                            print(f"[순환] 핫키 감지 실패(무시): {_he}")
+
+                return
+            except Exception as _de:
+                if not _db_is_locked(_de):
+                    print(f"[WS] {nspc} 로그 처리 실패: {_de.__class__.__name__}: {_de}")
+                    return
+                _db_locked_note("ws:log", _de)
+                if _a + 1 >= WS_DB_RETRY:
+                    return
+                await asyncio.sleep(0.5 * (2 ** _a))
+
+    async def _log_worker():
+        while True:
+            _lm = await _logq.get()
+            try:
+                await _handle_logs(_lm)
+            except asyncio.CancelledError:
+                raise
+            except Exception as _we:
+                print(f"[WS] {nspc} 로그 일꾼 오류(무시): {_we.__class__.__name__}: {_we}")
+            finally:
+                _logq.task_done()
+
+    _logq: asyncio.Queue = asyncio.Queue(maxsize=WS_LOGQ_MAX)
+    _log_task = asyncio.ensure_future(_log_worker())
     _WS_ACCEPTS[0] += 1
     try:
         # ==================================================================
@@ -11837,6 +11949,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             except Exception:
                 continue
             msg_type = msg.get("type", "")
+            _tm0 = time.monotonic()
             for _att in range(WS_DB_RETRY):   # ★#431★ DB 잠김 한 번에 소켓을 닫지 않는다 — 같은 메시지를 물러서며 다시
                 try:
                     if msg_type == "status":
@@ -11844,31 +11957,20 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                         if not isinstance(payload, dict):   # 목록이면 연결째 죽었다 (2026-09-23)
                             break
                         payload["pc_id"] = nspc   # 저장 키와 일치(테넌트 필터 기준) — 출력 시 벗김
+                        _lag_note("recv", nspc, payload.get("last_active"))
                         await upsert_status(nspc, payload)
+                        _lag_note("stored", nspc, payload.get("last_active"))
                         await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
                         errors = payload.get("errors") or []
                         for e in errors[:3]:
                             await insert_log(nspc, "warn", str(e))
                         await push_state(tenant)
                     elif msg_type == "log":
-                        logs = msg.get("logs", [])
-                        for entry in logs:
-                            _m = entry.get("message", "")
-                            await insert_log(nspc, entry.get("level", "info"), _m)
-                            # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
-                            #   WS 재연결이 아니라 ★부팅★ 일 때만 나오는 줄을 본다
-                            #   (PC-21b 처럼 60초마다 WS 가 끊겼다 붙는 PC 가 있다).
-                            if "[BOOT" in str(_m):
-                                try:
-                                    _rot_note_boot(nspc, _m)
-                                except Exception as _be:
-                                    print(f"[순환] 부팅 감지 실패(무시): {_be}")
-                            if _HOTKEY_ARM_MARK in str(_m):      # ★사고 456-b★
-                                try:
-                                    _t456, _p456 = split_ns(nspc)
-                                    await _rot_note_hotkey(_t456, _p456, _m)
-                                except Exception as _he:
-                                    print(f"[순환] 핫키 감지 실패(무시): {_he}")
+                        # ★#432★ 로그 묶음은 별도 일꾼이 처리한다 — 50줄 묶음이 같은 소켓의 status/ack 앞을 막았다
+                        try:
+                            _logq.put_nowait(msg)
+                        except asyncio.QueueFull:
+                            await _handle_logs(msg)       # 일꾼이 밀렸으면 예전처럼 여기서(역압)
                     elif msg_type == "ack":
                         cmd_id = msg.get("command_id")
                         if cmd_id and await _cmd_belongs_to(cmd_id, tenant):
@@ -11888,6 +11990,8 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                     if _att + 1 >= WS_DB_RETRY:
                         break                     # 이 메시지만 버린다(상태·로그는 다음 보고가 다시 채운다) — 소켓은 산다
                     await asyncio.sleep(0.5 * (2 ** _att))
+            _perf_note("ws_msg_" + (msg_type if msg_type in ("status", "log", "ack", "pong") else "other"),
+                       (time.monotonic() - _tm0) * 1000)       # ★#432★ 메시지 종류별 처리 시간(로그는 큐에 넣는 시간)
     except WebSocketDisconnect as _wde:
         # ★상대(또는 중간 프록시)가 끊은 것★ — code 가 이유를 말해준다
         _ws_why = "disconnect(code=%s)" % getattr(_wde, "code", "?")
@@ -11916,6 +12020,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             macro_ws_connections.pop(nspc, None)
         else:
             _WS_KEPT[0] += 1        # ★새 연결을 안 지우고 살려둔 횟수★
+        try:
+            await asyncio.wait_for(_logq.join(), 3)      # 남은 로그 묶음은 잠깐 기다려 비운다
+        except Exception:
+            pass
+        _log_task.cancel()
         _ws_note_close(nspc, time.monotonic() - _ws_t0, _ws_why)
 
 

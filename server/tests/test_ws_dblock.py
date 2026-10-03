@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 10
+MIN_CHECKS = 20
 
 
 class Feed(FakeWS):
@@ -91,8 +91,86 @@ async def t_all():
     ok("W431-j ocr_label 연결도 같은 대기", __import__("ocr_label")._busy_s() == D.DB_BUSY_S)
 
 
+async def t_432():
+    """#432 — 로그 묶음이 같은 소켓의 상태 보고를 막지 않는다 · 로그는 한 연결·한 커밋 · 지연 계측."""
+    import time as _t
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    order = []
+    old_il, old_us = main.insert_logs, main.upsert_status
+
+    async def slow_logs(pc, ents):
+        order.append("logs-start")
+        await asyncio.sleep(0.8)
+        order.append("logs-end")
+
+    async def fast_up(pc, payload):
+        order.append("status")
+
+    main.insert_logs = slow_logs
+    try:
+        la = (_dt.now(_tz.utc) - _td(seconds=3)).strftime("%Y-%m-%dT%H:%M:%S")
+        msgs = [json.dumps({"type": "log", "logs": [{"level": "info", "message": "x%d" % i} for i in range(50)]}),
+                json.dumps({"type": "status", "payload": {"status": "paused", "last_active": la}})]
+        t0 = _t.monotonic()
+        ws = await _drive(msgs, fast_up)
+        ok("W432-a ★느린 로그 묶음(0.8초)이 앞에 있어도 상태 보고는 로그가 끝나기 전에 처리된다★",
+           order.index("status") < order.index("logs-end"), str(order))
+    finally:
+        main.insert_logs = old_il
+        main.upsert_status = old_us
+    ok("W432-b 로그 일꾼이 끝까지 처리했다(소켓이 끝날 때 남은 묶음을 기다림)", "logs-end" in order, str(order))
+    ok("W432-c 메시지 종류별 처리 시간이 /diag/perf 에 센다(status·log)",
+       main._PERF.get("ws_msg_status", {}).get("n", 0) >= 1 and main._PERF.get("ws_msg_log", {}).get("n", 0) >= 1)
+    r = main._lag_report()
+    ok("W432-d 지연 계측: recv·stored 단계가 쌓이고 p50/p95/max 를 낸다",
+       r["stages"]["recv"].get("n", 0) >= 1 and "p95" in r["stages"]["recv"] and r["stages"]["stored"].get("n", 0) >= 1, str(r)[:300])
+    main._LAG_BASE.pop("PC-LAG", None)
+    main._lag_note("send", "PC-LAG", la)
+    n_send = main._LAG["send"].__len__()
+    main._lag_note("recv", "PC-LAG", la)
+    main._lag_note("recv", "PC-LAG", (_dt.now(_tz.utc) - _td(seconds=13)).strftime("%Y-%m-%dT%H:%M:%S"))
+    ex = main._LAG_PC["PC-LAG"][-1]
+    ok("W432-e 초과분 = raw − 그 PC 최소값(시계차 상쇄): 3초 바닥 뒤 13초면 약 10초", 8.5 <= ex <= 11.5, str(ex))
+    ok("W432-f 바닥을 모르는 PC 의 send 는 기록하지 않는다(0 거짓말 금지)", main._LAG["send"].__len__() == n_send)
+    ok("W432-g 쓸 수 없는 last_active 는 조용히 무시", main._lag_note("recv", "PC-X", "garbage") is None and "PC-X" not in main._LAG_BASE)
+    ok("W432-h /diag/perf 에 status_lag", '"status_lag": _lag_report()' in inspect_src(main.diag_perf))
+
+    # insert_logs: 한 연결·한 커밋, 줄 수, prune 카운터
+    import tempfile, os as _os
+    old_path = D.DB_PATH
+    d = tempfile.mkdtemp()
+    D.DB_PATH = _os.path.join(d, "t.db")
+    try:
+        await D.init_db()
+        n_conn = [0]
+        real = D.aiosqlite.connect
+
+        def counting(*a, **k):
+            n_conn[0] += 1
+            return real(*a, **k)
+
+        D.aiosqlite.connect = counting
+        try:
+            await D.insert_logs("PC-L", [("info", "a%d" % i) for i in range(50)])
+        finally:
+            D.aiosqlite.connect = real
+        import sqlite3 as _sq
+        rows = _sq.connect(D.DB_PATH).execute("SELECT level,message FROM logs WHERE pc_id='PC-L' ORDER BY id").fetchall()
+        ok("W432-i ★50줄이 연결 1번으로 순서대로 저장된다(예전: 줄마다 연결 50번)★",
+           n_conn[0] == 1 and len(rows) == 50 and rows[0][1] == "a0" and rows[-1][1] == "a49", "%s %s" % (n_conn[0], len(rows)))
+        await D.insert_logs("PC-L", [])
+        ok("W432-j 빈 묶음은 아무 일도 안 한다", len(_sq.connect(D.DB_PATH).execute("SELECT 1 FROM logs WHERE pc_id='PC-L'").fetchall()) == 50)
+    finally:
+        D.DB_PATH = old_path
+
+
+def inspect_src(f):
+    import inspect
+    return inspect.getsource(f)
+
+
 def test_all():
-    run_all([t_all])
+    run_all([t_all, t_432])
     finish("test_ws_dblock", MIN_CHECKS)
 
 
