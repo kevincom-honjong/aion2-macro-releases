@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 26
+MIN_CHECKS = 33
 
 
 class Feed(FakeWS):
@@ -216,13 +216,60 @@ async def t_432b():
     ok("W432b-f /diag/perf 에 db_timing", '"db_timing"' in inspect_src(main.diag_perf))
 
 
+async def t_432c():
+    """#432-c — WAL 자동 체크포인트를 쓰기 경로에서 빼고 일꾼이 PASSIVE 로 한다."""
+    import tempfile, os as _os
+    old_path = D.DB_PATH
+    D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "w.db")
+    try:
+        await D.init_db()
+        async with D.connect_db() as db:
+            async with db.execute("PRAGMA wal_autocheckpoint") as c:
+                v0 = (await c.fetchone())[0]
+        ok("W432c-a 연결마다 wal_autocheckpoint=0 (쓰기 커밋이 체크포인트를 떠안지 않는다)", v0 == 0, str(v0))
+        D.WAL_STATS["auto_on"] = True
+        async with D.connect_db() as db:
+            async with db.execute("PRAGMA wal_autocheckpoint") as c:
+                v1 = (await c.fetchone())[0]
+        D.WAL_STATS["auto_on"] = False
+        ok("W432c-b WAL 이 너무 커진 뒤(auto_on)엔 자동 체크포인트가 다시 켜진다(무한 증가 방지)", v1 == 1000, str(v1))
+        anchor = D.aiosqlite.connect(D.DB_PATH)        # 운영의 상주 연결(일꾼)과 같다 — 마지막 연결이 닫히며 WAL 을 지우지 않게
+        adb = await anchor.__aenter__()
+        await (await adb.execute("SELECT COUNT(*) FROM sqlite_master")).fetchone()
+        for i in range(300):
+            await D.upsert_status("PC-W%d" % (i % 20), {"status": "idle", "pad": "x" * 2000, "i": i})
+        before = D._wal_size()
+        await D.wal_checkpoint_once(adb)
+        await anchor.__aexit__(None, None, None)
+        st = D.WAL_STATS
+        ok("W432c-c 일꾼 체크포인트 한 번: [busy, wal쪽수, 옮긴쪽수] 를 기록하고 에러 없음",
+           st["runs"] >= 1 and isinstance(st["last"], list) and len(st["last"]) == 3 and st["err"] is None and st["last"][2] >= 0, str(st))
+        ok("W432c-d WAL 파일이 자동 체크포인트 없이도 쌓였다가(>0) 체크포인트가 돈다", (before or 0) > 0 and st["last"][1] >= st["last"][2], "%s %s" % (before, st["last"]))
+        ok("W432c-e wal_bytes·last_ms 가 기록된다", st["wal_bytes"] is not None and st["last_ms"] >= 0)
+        # 데이터는 체크포인트 뒤에도 그대로
+        got = await D.get_all_statuses() if hasattr(D, "get_all_statuses") else None
+        ok("W432c-f 체크포인트 뒤에도 상태 행이 20개 그대로", got is None or len(got) == 20, str(None if got is None else len(got)))
+    finally:
+        D.DB_PATH = old_path
+    old = D.WAL_BG
+    D.WAL_BG = False
+    try:
+        await asyncio.wait_for(D.wal_checkpoint_loop(), 2)
+        off = True
+    except Exception:
+        off = False
+    finally:
+        D.WAL_BG = old
+    ok("W432c-g WAL_BG=0 이면 일꾼은 바로 끝난다(손잡이)", off)
+
+
 def inspect_src(f):
     import inspect
     return inspect.getsource(f)
 
 
 def test_all():
-    run_all([t_all, t_432, t_432b])
+    run_all([t_all, t_432, t_432b, t_432c])
     finish("test_ws_dblock", MIN_CHECKS)
 
 
