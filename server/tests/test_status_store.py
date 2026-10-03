@@ -13,7 +13,7 @@ import tempfile
 from _harness import main, ok, Req, run_all, finish   # noqa: E402
 import database as D                                   # noqa: E402
 
-MIN_CHECKS = 22
+MIN_CHECKS = 29
 
 
 def _rows(sql, args=()):
@@ -141,6 +141,45 @@ async def t_store():
         ok("S432d-r 일꾼이 주기적으로 flush 한다", _rows("SELECT COUNT(*) FROM pc_status WHERE pc_id='PC-LOOP'")[0][0] == 1)
 
 
+async def t_held():
+    """#432-e — 쓰기 구간(첫 쓰기 문 → 연결 닫힘)을 호출 함수 이름별로 잰다 · 느린 구간은 시각과 함께 남긴다."""
+    with _Fresh():
+        await D.init_db()
+        D.HELD.clear()
+        del D.HELD_EVENTS[:]
+        old_slow = D.HELD_SLOW_MS
+
+        async def my_writer():
+            async with D.connect_db() as db:
+                await db.execute("INSERT INTO logs(pc_id, level, message, created_at) VALUES('P','info','m','t')")
+                await asyncio.sleep(0.15)
+                await db.commit()
+
+        async def my_reader():
+            async with D.connect_db() as db:
+                async with db.execute("SELECT COUNT(*) FROM logs") as c:
+                    await c.fetchone()
+
+        D.HELD_SLOW_MS = 100
+        await my_writer()
+        await my_reader()
+        D.HELD_SLOW_MS = old_slow
+        k = [x for x in D.HELD if x.endswith("my_writer")]
+        ok("S432e-a 쓰기 연결은 «파일.함수» 이름으로 센다", len(k) == 1 and D.HELD[k[0]]["n"] == 1, str(list(D.HELD)))
+        ok("S432e-b 읽기만 한 연결은 세지 않는다", not any(x.endswith("my_reader") for x in D.HELD))
+        ok("S432e-c ★쓰기 구간 길이가 실제 시간(≥150ms)을 담는다★", D.HELD[k[0]]["ms_max"] >= 140, str(D.HELD[k[0]]))
+        ok("S432e-d 느린 구간(문턱 이상)은 시작·끝 시각과 함께 events 에 남는다",
+           any(e["label"].endswith("my_writer") and e["ms"] >= 140 and len(e["start"]) == 8 for e in D.HELD_EVENTS), str(D.HELD_EVENTS))
+        await D.insert_log("PC-H", "info", "x")
+        ok("S432e-e 기존 쓰기 함수(insert_log)도 같은 길로 잡힌다", any(x.endswith("insert_log") for x in D.HELD), str(list(D.HELD)))
+        r = D.held_report()
+        ok("S432e-f held_report 모양: by_writer_top_total·slow_events·slow_ms", {"by_writer_top_total", "slow_events", "slow_ms"} <= set(r), str(r)[:200])
+        import inspect
+        ok("S432e-g /diag/perf 에 db_held", '"db_held"' in inspect.getsource(main.diag_perf))
+        left = [f for f in inspect.getsource(D).splitlines() if "aiosqlite.connect(" in f and "def " not in f]
+        ok("S432e-h database.py 의 모든 연결이 connect_db 를 거친다(남은 직접 연결은 래퍼 자신뿐)", len(left) == 1, str(left))
+
+
 async def t_diag():
     import inspect
     ok("S432d-s /diag/perf 에 status_store", '"status_store"' in inspect.getsource(main.diag_perf))
@@ -160,7 +199,7 @@ async def t_diag():
 
 
 def test_all():
-    run_all([t_store, t_diag])
+    run_all([t_store, t_held, t_diag])
     finish("test_status_store", MIN_CHECKS)
 
 

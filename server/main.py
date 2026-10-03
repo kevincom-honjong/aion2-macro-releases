@@ -3391,6 +3391,7 @@ async def diag_perf(request: Request):
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
         "status_store": _database_mod.st_stats(),
+        "db_held": _database_mod.held_report(),
         "db_timing": {k: dict(v, ms_avg=round(v["ms_total"] / max(1, v["n"]), 2), ms_max=round(v["ms_max"], 1)) for k, v in _database_mod.TIMING.items()},
         "status_lag": _lag_report(),               # #432
         "db_locked": _DB_LOCKED,                  # #431 «database is locked» 에 걸린 곳(n·by·recent) — 쥔 쪽 단서

@@ -265,7 +265,7 @@ async def ensure_tables() -> None:
 
 
 async def _ensure_tables_once(p: str) -> None:
-    async with aiosqlite.connect(p, timeout=_busy_s()) as db:
+    async with _db.connect_db(p, _busy_s()) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ocr_cluster (
@@ -668,7 +668,7 @@ async def auto_sweep(tenant: str = None, dry: bool = False) -> dict:
         q += " AND c.tenant=?"
         args.append(tenant)
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             cur = await db.execute(q + " ORDER BY c.id", args)
             rows = await cur.fetchall()
             now = time.time()
@@ -881,7 +881,7 @@ async def submit_core(tenant: str, pc: str, site: str, raw: bytes, dh: str, ts, 
 
     await ensure_tables()
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             # ⑤ 정확 일치 — count 만 올린다(대기열에 새로 안 넣는다)
             cur = await db.execute(
                 "SELECT i.id, i.cluster_id, i.on_disk, i.relpath FROM ocr_img i "
@@ -1194,7 +1194,7 @@ async def seed_one(tenant: str, bdir: str, fname: str) -> str:
         return "skip:PNG아님"
     sha = hashlib.sha1(raw).hexdigest()
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         cur = await db.execute("SELECT 1 FROM ocr_img WHERE tenant=? AND site=? AND sha1=?", (tenant, info["site"], sha))
         if await cur.fetchone():
             return "exists"
@@ -1310,7 +1310,7 @@ async def labels_ts_core(tenant: str, since_f: float) -> dict:
     ts = 라벨이 바뀐 서버 시각(_next_lts, 테넌트마다 늘 증가) — 매크로는 받은 최대 ts 를 since 로 다시 보낸다.
     한 쪽(5,000줄)을 넘으면 마지막 ts 가 쪽 경계에 걸리지 않게 자른다(같은 ts 가 다음 쪽으로 새지 않게)."""
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         ep = await _epoch(db)
         cur = await db.execute(_TS_SQL + "i.lts>? ORDER BY i.lts, i.id LIMIT ?", (tenant, since_f, OCR_LABELS_PAGE + 1))
         rows = await cur.fetchall()
@@ -1358,7 +1358,7 @@ async def ocr_labels(request: Request, since: str = "0", epoch: str = "", mode: 
         _bad(400, "since 는 0 이상의 정수여야 합니다")
     ep_in = epoch.strip() if isinstance(epoch, str) else ""
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         ep = await _epoch(db)
         cur = await db.execute("SELECT v FROM ocr_seq WHERE tenant=?", (tenant,))
         r = await cur.fetchone()
@@ -1482,7 +1482,7 @@ async def _cluster_items(db, tenant, where, args, order, limit):
 
 async def queue_core(tenant: str, lim: int) -> dict:
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         items = await _cluster_items(db, tenant, "c.status='pending'", (), "c.qorder, c.id", lim)
         cur = await db.execute("SELECT COUNT(*) FROM ocr_cluster WHERE tenant=? AND status='pending'", (tenant,))
         pending = (await cur.fetchone())[0]
@@ -1502,7 +1502,7 @@ async def img_core(tenant: str, img_id) -> FileResponse:
     if not _i64(iid):                       # 2^70 같은 값 → sqlite OverflowError(500) 대신 404(반증 R4)
         raise OcrError(404, "이미지 없음")
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         cur = await db.execute("SELECT relpath, mime, on_disk FROM ocr_img WHERE id=? AND tenant=?", (iid, tenant))
         row = await cur.fetchone()
     if not row or not row[2]:
@@ -1523,7 +1523,7 @@ async def label_core(tenant: str, cid: int, new_st: str, new_lb) -> dict:
         raise OcrError(400, "라벨이 비었습니다")
     await ensure_tables()
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             cur = await db.execute("SELECT status, label FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
             row = await cur.fetchone()
             if not row:
@@ -1546,7 +1546,7 @@ async def skip_core(tenant: str, cid: int) -> dict:
     """나중에 — 대기열 맨 뒤로. 대기 아닌 묶음이면 409."""
     await ensure_tables()
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             cur = await db.execute("SELECT status FROM ocr_cluster WHERE id=? AND tenant=?", (cid, tenant))
             row = await cur.fetchone()
             if not row:
@@ -1566,7 +1566,7 @@ async def undo_core(tenant: str) -> dict:
     대기로 돌아가면 대기열 ★맨 앞★ 으로(바로 다시 친다)."""
     await ensure_tables()
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             cur = await db.execute(
                 "SELECT h.id, h.cluster_id, h.prev_status, h.prev_label FROM ocr_hist h JOIN ocr_cluster c ON c.id=h.cluster_id "
                 "WHERE h.tenant=? AND h.undone=0 ORDER BY h.id DESC LIMIT 1", (tenant,))
@@ -1596,7 +1596,7 @@ async def undo_core(tenant: str) -> dict:
 
 async def history_core(tenant: str, lim: int) -> dict:
     await ensure_tables()
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         items = await _cluster_items(db, tenant, "c.status IN ('labeled','bad')", (), "c.labeled_at DESC, c.id DESC", lim)
     return {"items": items}
 
@@ -1611,7 +1611,7 @@ async def stats_core(tenant: str) -> dict:
                                        "images": 0, "hits": 0,
                                        "gemini_compared": 0, "gemini_disagree": 0, "gemini_disagree_rate": None,
                                        "local_compared": 0, "local_disagree": 0, "local_disagree_rate": None})
-    async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+    async with _db.connect_db(_dbp(), _busy_s()) as db:
         cur = await db.execute("SELECT site, status, COUNT(*) FROM ocr_cluster WHERE tenant=? GROUP BY site, status", (tenant,))
         for site, st, n in await cur.fetchall():
             if st in ("pending", "labeled", "bad", "auto", "dismissed"):   # auto = #218 자동 닫음 · dismissed = #417 치움(둘 다 사람 라벨 아님 — 불일치율에도 안 넣는다)
@@ -1702,7 +1702,7 @@ async def dismiss_site_core(tenant: str, site, restore: bool = False) -> dict:
     await ensure_tables()
     now = time.time()
     async with _lock():
-        async with aiosqlite.connect(_dbp(), timeout=_busy_s()) as db:
+        async with _db.connect_db(_dbp(), _busy_s()) as db:
             if restore:
                 cur = await db.execute("UPDATE ocr_cluster SET status='pending', labeled_at=NULL "
                                        "WHERE tenant=? AND site=? AND status='dismissed'", (tenant, name))
