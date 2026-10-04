@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 66
+MIN_CHECKS = 69
 
 
 class Feed(FakeWS):
@@ -411,6 +411,20 @@ async def t_435():
            not D._UPD_DIRTY and D._UPD_MEM["PC-U"]["at"] > t_before and D.ST_STATS.get("upd_unchanged_skipped", 0) >= 1)
         await D.upsert_updater_status("PC-U", {"pc_id": "PC-U", "macro_state": "stopped", "updater_version": "3.1"})
         ok("W435-n 값이 바뀌면 저장 대상", "PC-U" in D._UPD_DIRTY)
+        old_fl = D.LOG_FLUSH_S
+        D.LOG_FLUSH_S = 3.0
+        try:
+            c0 = con().execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+            await D.insert_log("PC-IL", "info", "buffered-line", created_at="2026-10-04T01:02:03")
+            await D.insert_log("PC-IL", "warn", "direct-line", direct=True)
+            ok("W435-q ★insert_log 는 버퍼로(DB 0줄 증가) · direct=True 만 바로★",
+               con().execute("SELECT COUNT(*) FROM logs").fetchone()[0] == c0 + 1 and D.log_stats()["buffered"] == 1)
+            ok("W435-r log_has 는 버퍼 줄도 본다(먼저 flush)", await D.log_has("PC-IL", "buffered-line"))
+            r = con().execute("SELECT created_at, level FROM logs WHERE message='buffered-line'").fetchone()
+            ok("W435-s 클라 시각(created_at)과 레벨이 그대로 저장", r == ("2026-10-04T01:02:03", "info"), str(r))
+        finally:
+            D.LOG_FLUSH_S = old_fl
+            D._LOG_BUF.clear()
         await D.delete_pc_all_data("PC-U")
         ok("W435-o 카드 삭제는 업데이터 메모리도 지운다", "PC-U" not in D._UPD_MEM and "PC-U" not in D._UPD_DIRTY)
     finally:

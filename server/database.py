@@ -1066,7 +1066,7 @@ LOG_SINCE_PRUNE_MAX = 2000
 
 
 async def insert_log(pc_id: str, level: str, message: str,
-                     created_at: str | None = None) -> None:
+                     created_at: str | None = None, direct: bool = False) -> None:
     """created_at: 클라이언트가 그 줄을 ★실제로 찍은 시각★(UTC ISO). None이면 수신 시각.
 
     ★왜 필요한가 (2026-08-20, 업데이터 원격 로그)★
@@ -1075,6 +1075,16 @@ async def insert_log(pc_id: str, level: str, message: str,
       뭉쳐 보여서 ★사고 순서를 못 읽는다★. 클라가 준 시각을 그대로 쓴다.
       기본값 None 이라 기존 호출부(매크로 /log/, 서버 내부 기록)는 전부 무영향.
     """
+    # ★#435-b (2026-10-04) 모든 로그 한 줄도 같은 버퍼로★ — 실측 insert_log 가 10분에 275 트랜잭션(업데이터 로그 줄마다·서버 이벤트·/log).
+    #   볼륨이 느린 구간에 트랜잭션 하나가 ~4초라 하나씩 쓰면 서로를 줄 세운다. 버퍼 → LOG_FLUSH_S 마다 한 트랜잭션(flush_logs).
+    #   바로 읽어야 하는 곳은 direct=True 또는 flush_logs() 를 먼저 부른다(log_has 가 그렇다). 되돌림: LOG_FLUSH_S=0.
+    if LOG_FLUSH_S > 0 and not direct:
+        _LOG_BUF.append((pc_id, str(level or "info"), str(message), created_at or _now()))
+        over = len(_LOG_BUF) - LOG_BUF_MAX
+        if over > 0:
+            del _LOG_BUF[:over]
+            LOG_STATS["dropped"] += over
+        return
     # ══════════════════════════════════════════════════════════════════════
     # ★★연결 하나·커밋 하나 (2026-09-11 전수조사)★★
     #   초판은 ①INSERT 용 연결 ②정리용 연결을 ★따로★ 열고 커밋도 두 번 했다.
@@ -2409,6 +2419,7 @@ async def move_kina_adjust(tid: str, to_pc: str, note: str = "") -> dict:
 
 async def log_has(pc_id: str, needle: str) -> bool:
     """그 PC 로그에 needle 글자가 든 줄이 있나(instr — LIKE 의 %·_ 이스케이프가 필요 없다). 없으면 False."""
+    await flush_logs()                  # ★#435-b★ 버퍼에 있는 줄도 본다
     async with connect_db() as db:
         async with db.execute("SELECT 1 FROM logs WHERE pc_id=? AND instr(message, ?) > 0 LIMIT 1", (pc_id, needle)) as cur:
             return (await cur.fetchone()) is not None
