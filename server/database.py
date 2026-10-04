@@ -49,11 +49,17 @@ HELD_SLOW_MS = float(os.getenv("HELD_SLOW_MS", "800"))
 _WRITE_HEADS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "BEGIN IMM")
 
 
+HELD_FILE: dict = {}            # ★#438★ 파일(main/hot)별 쓰기 구간 {n, ms_total, ms_max}
 HELD_TOTAL = {"txns": 0, "since": time.time()}      # ★#434★ 쓰기 연결(≈커밋) 총수 — 분당 값은 held_report 가 계산
 
 
-def _held_note(label: str, t_wall0: float, ms: float) -> None:
+def _held_note(label: str, t_wall0: float, ms: float, kind: str = "main") -> None:
     HELD_TOTAL["txns"] += 1
+    f = HELD_FILE.setdefault(kind, {"n": 0, "ms_total": 0.0, "ms_max": 0.0})
+    f["n"] += 1
+    f["ms_total"] += ms
+    if ms > f["ms_max"]:
+        f["ms_max"] = ms
     s = HELD.get(label)
     if s is None:
         if len(HELD) >= 120:
@@ -73,9 +79,11 @@ def _held_note(label: str, t_wall0: float, ms: float) -> None:
 class _Conn:
     """aiosqlite.connect 와 같은 `async with … as db` — 쓰기 구간 시간을 호출 함수 이름으로 잰다."""
 
-    def __init__(self, path, timeout, label):
+    def __init__(self, path, timeout, label, kind="main", sync=None):
         self._cm = aiosqlite.connect(path, timeout=timeout)
         self._label = label
+        self._kind = kind
+        self._sync = sync
         self._t0 = None
         self._w0 = 0.0
 
@@ -94,9 +102,10 @@ class _Conn:
             await db.set_trace_callback(self._trace)
         except Exception:
             pass
-        if DB_SYNC != "FULL":
+        _sy = self._sync or DB_SYNC
+        if _sy != "FULL":
             try:
-                await db.execute("PRAGMA synchronous=" + DB_SYNC)
+                await db.execute("PRAGMA synchronous=" + _sy)
             except Exception:
                 pass
         return db
@@ -106,7 +115,7 @@ class _Conn:
             return await self._cm.__aexit__(*a)
         finally:
             if self._t0 is not None:
-                _held_note(self._label, self._w0, (time.monotonic() - self._t0) * 1000)
+                _held_note(self._label, self._w0, (time.monotonic() - self._t0) * 1000, self._kind)
 
 
 def connect_db(path: str | None = None, timeout: float | None = None):
@@ -116,6 +125,108 @@ def connect_db(path: str | None = None, timeout: float | None = None):
     except Exception:
         label = "?"
     return _Conn(path or DB_PATH, DB_BUSY_S if timeout is None else timeout, label)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★#438 (2026-10-04 주인님 승인) 뜨겁게 쓰는 자료는 컨테이너 로컬 디스크(/tmp)의 SQLite 로★
+#   Railway /data 볼륨이 12:28 부터 4KB fsync 가 안 끝나고 1MB 가 2~12초 — 쓰기 평균 5초, 방송 최대 24초. 로그·상태는 «지금 값» 이라 볼륨에 둘 이유가 약하다.
+#   ★옮긴 표 (HOT_DB_PATH)★ logs(로그 줄·로그 버퍼 flush 대상) · pc_status · updater_status · death_events(30분 사망 집계·진단 — 상태 전환과 같은 트랜잭션이라 같이)
+#   ★그대로 /data★ commands·updater_commands(명령 큐·이력·ack) · settings · kina_adjust·kina_read·char_info(장부) · pc_clock · fv_notify · telegram_map ·
+#   nightmare_progress · slot_filters · updater_fv_claim · 버그(파일) · OCR · 세션 · 순환 상태(settings). 두 파일에 걸친 JOIN/트랜잭션은 없다(delete_pc_all_data·get_pc_dump 만 연결을 둘로 쪼갠다).
+#   ★배포하면 /tmp 가 비므로★ 로그 기록은 사라진다(복사해 오지 않는다 — 주인님 결정). 상태는 매크로·업데이터 보고(≤30초)로 다시 채워지고,
+#   «사망 전환» 판정은 «이전 상태가 있어야» 하므로(prev_exists) 배포 직후 첫 보고가 dead 인 카드는 사망 1건을 못 센다(옛 DB 를 비웠을 때와 같다).
+#   /data 의 옛 logs·pc_status·updater_status·death_events 는 안 읽고 안 지운다(HOT_DB=0 으로 되돌리면 그대로 다시 쓰인다).
+#   ★HOT_DB=0 = 예전 단일 DB 그대로★ (hot_path() 가 DB_PATH 를 돌려준다). /tmp 를 못 쓰면(권한·디스크) 부팅 때 스스로 HOT_DB=False 로 떨어진다.
+HOT_DB = os.getenv("HOT_DB", "1").strip() != "0"
+HOT_DB_PATH = os.getenv("HOT_DB_PATH", "/tmp/hot.db")
+HOT_STATE: dict = {"fallback": None}      # 부팅 때 /tmp 를 못 열어 단일 DB 로 떨어졌으면 까닭
+
+
+def hot_path() -> str:
+    return HOT_DB_PATH if HOT_DB else DB_PATH
+
+
+def connect_hot():
+    """뜨거운 표(logs·pc_status·updater_status·death_events) 전용 연결 — HOT_DB=0 이면 주 DB 와 같은 파일."""
+    try:
+        f = sys._getframe(1)
+        label = "%s.%s" % (os.path.splitext(os.path.basename(f.f_code.co_filename))[0], f.f_code.co_name)
+    except Exception:
+        label = "?"
+    if HOT_DB:
+        return _Conn(HOT_DB_PATH, DB_BUSY_S, label, kind="hot", sync="OFF")     # 로컬 디스크·잃어도 되는 자료 — fsync 안 함
+    return _Conn(DB_PATH, DB_BUSY_S, label, kind="main")
+
+
+_HOT_DDL = (
+    """CREATE TABLE IF NOT EXISTS pc_status (
+        pc_id      TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS logs (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        pc_id      TEXT NOT NULL,
+        level      TEXT DEFAULT 'info',
+        message    TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_logs_pc ON logs(pc_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at, id)",
+    """CREATE TABLE IF NOT EXISTS updater_status (
+        pc_id      TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS death_events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        pc_id      TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_death_pc_time ON death_events(pc_id, created_at)",
+)
+
+
+async def init_hot_db() -> None:
+    """뜨거운 DB 파일을 만든다(없으면 빈 채로 시작 — 배포 직후가 늘 그렇다). 못 열면 단일 DB 로 떨어진다."""
+    global HOT_DB
+    if not HOT_DB:
+        return
+    try:
+        os.makedirs(os.path.dirname(HOT_DB_PATH) or ".", exist_ok=True)
+        async with _Conn(HOT_DB_PATH, DB_BUSY_S, "database.init_hot_db", kind="hot", sync="OFF") as db:
+            await db.execute("PRAGMA journal_mode=WAL")
+            for ddl in _HOT_DDL:
+                await db.execute(ddl)
+            await db.commit()
+        HOT_STATE["fallback"] = None
+    except Exception as e:
+        HOT_DB = False
+        HOT_STATE["fallback"] = "%s: %s" % (e.__class__.__name__, str(e)[:120])
+        print(f"[DB] 뜨거운 DB({HOT_DB_PATH}) 열기 실패 — 단일 DB 로 계속: {HOT_STATE['fallback']}", flush=True)
+
+
+def _fsize(path: str):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def db_files() -> dict:
+    """/health·/diag/perf — 각 DB 가 어느 파일에 있고 얼마나 큰지, 파일별 쓰기 구간 시간."""
+    def tm(kind):
+        f = HELD_FILE.get(kind)
+        if not f:
+            return {"n": 0}
+        return {"n": f["n"], "ms_avg": round(f["ms_total"] / max(1, f["n"]), 1), "ms_max": round(f["ms_max"], 1)}
+    hp = hot_path()
+    return {
+        "main": {"path": DB_PATH, "bytes": _fsize(DB_PATH), "tables": "commands settings ledgers(kina_*·char_info) pc_clock … (+ HOT_DB=0 이면 아래 넷도)", "write_txns": tm("main")},
+        "hot": {"enabled": HOT_DB, "path": hp, "bytes": _fsize(hp), "wal_bytes": _fsize(hp + "-wal"),
+                "tables": "logs pc_status updater_status death_events", "write_txns": tm("hot"),
+                "fallback": HOT_STATE["fallback"], "env": {"HOT_DB": os.getenv("HOT_DB", "(기본 1)"), "HOT_DB_PATH": HOT_DB_PATH}},
+    }
 
 
 async def keeper_open() -> None:
@@ -147,7 +258,7 @@ def held_report() -> dict:
     for _, v in top:
         v.pop("ms_total", None)
     _min = max(1.0, (time.time() - HELD_TOTAL["since"]) / 60.0)
-    return {"write_txns_total": HELD_TOTAL["txns"], "write_txns_per_min": round(HELD_TOTAL["txns"] / _min, 1),
+    return {"files": db_files(), "write_txns_total": HELD_TOTAL["txns"], "write_txns_per_min": round(HELD_TOTAL["txns"] / _min, 1),
             "db_sync": DB_SYNC, "keeper": _KEEPER is not None, "log_buf": log_stats(),
             "by_writer_top_total": dict(top), "slow_events": HELD_EVENTS[-25:], "slow_ms": HELD_SLOW_MS,
             "note": "쓰기 문 시작→연결 닫힘(잠금 대기 포함). 시각은 UTC. 겹친 느린 구간 중 가장 먼저 시작한 것이 쥔 쪽."}
@@ -377,6 +488,7 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_tgmap_chat_time ON telegram_map(chat_id, created_at)"
         )
         await db.commit()
+    await init_hot_db()                  # ★#438★ 뜨거운 표(로컬 파일) — 비어 있어도 된다
 
 
 def _now() -> str:
@@ -523,7 +635,7 @@ async def flush_statuses() -> int:
         return 0
     t0 = time.monotonic()
     try:
-        async with connect_db() as db:
+        async with connect_hot() as db:
             if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
                 await db.execute("PRAGMA synchronous=" + HOT_SYNC)
             if rows:
@@ -573,7 +685,7 @@ def st_stats() -> dict:
 async def _upsert_status_db(pc_id: str, data: dict) -> None:
     data = _finite(data)
     _t = time.monotonic()
-    async with connect_db() as db:
+    async with connect_hot() as db:
         _tnote("upsert_connect", _t)
         if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
@@ -628,7 +740,7 @@ async def _upsert_status_db(pc_id: str, data: dict) -> None:
 
 async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
     """cutoff_iso(UTC ISO) 이후 pc_id별 사망 이벤트 수."""
-    async with connect_db() as db:
+    async with connect_hot() as db:
         async with db.execute(
             "SELECT pc_id, COUNT(*) FROM death_events WHERE created_at >= ? GROUP BY pc_id",
             (cutoff_iso,),
@@ -639,7 +751,7 @@ async def get_death_counts_since(cutoff_iso: str) -> dict[str, int]:
 
 async def get_all_death_events() -> list[dict]:
     """[진단용] 모든 death_events (pc_id, created_at) 최신순."""
-    async with connect_db() as db:
+    async with connect_hot() as db:
         async with db.execute(
             "SELECT pc_id, created_at FROM death_events ORDER BY created_at DESC LIMIT 500"
         ) as cur:
@@ -648,7 +760,7 @@ async def get_all_death_events() -> list[dict]:
 
 
 async def _load_status_rows() -> list:
-    async with connect_db() as db:
+    async with connect_hot() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM pc_status ORDER BY pc_id"
@@ -678,7 +790,7 @@ async def delete_status(pc_id: str) -> None:
     _ST_MEM.pop(pc_id, None)
     _ST_DIRTY.discard(pc_id)
     read_cache_clear("pc_status")
-    async with connect_db() as db:
+    async with connect_hot() as db:
         await db.execute("DELETE FROM pc_status WHERE pc_id=?", (pc_id,))
         await db.commit()
 
@@ -691,20 +803,24 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     _UPD_DIRTY.discard(pc_id)
     read_cache_clear()                                  # ★#435★ 방송 조립용 읽기 캐시 전부
     _LOG_BUF[:] = [r for r in _LOG_BUF if r[0] not in (pc_id, pc_id + ".upd")]      # ★#434★ 버퍼의 줄이 지운 뒤 되살아나지 않게
-    async with connect_db() as db:
-        await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
-        await db.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
-        await db.execute("DELETE FROM commands         WHERE pc_id=?", (pc_id,))
-        await db.execute("DELETE FROM updater_commands WHERE pc_id=?", (pc_id,))
-        await db.execute("DELETE FROM logs             WHERE pc_id=?", (pc_id,))
+    # ★#438★ 뜨거운 표(로컬 파일)와 주 DB 는 연결을 따로 — HOT_DB=0 이면 둘이 같은 파일이라 예전과 같다.
+    async with connect_hot() as hdb:
+        await hdb.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
+        await hdb.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
+        await hdb.execute("DELETE FROM logs             WHERE pc_id=?", (pc_id,))
         # ★업데이터 로그는 별도 키(".upd" 접미사)에 쌓인다 (2026-08-20)★
         #   같은 logs 표를 쓰지만 pc_id 가 "PC-01.upd" 라서 위 줄로는 안 지워진다.
         #   빼먹으면 PC 를 지워도 그 PC 의 업데이터 로그만 유령으로 남는다.
-        await db.execute("DELETE FROM logs WHERE pc_id=?", (pc_id + ".upd",))
+        await hdb.execute("DELETE FROM logs WHERE pc_id=?", (pc_id + ".upd",))
+        await hdb.execute("DELETE FROM death_events      WHERE pc_id=?", (pc_id,))
+        await hdb.commit()
+        _char_info_bump()                  # 커밋 바로 뒤 — (SF-10) 안 지우는 표여도 세대는 한 번 더 올려도 무해
+    async with connect_db() as db:
+        await db.execute("DELETE FROM commands         WHERE pc_id=?", (pc_id,))
+        await db.execute("DELETE FROM updater_commands WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM char_info        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM kina_read        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM pc_clock         WHERE pc_id=?", (pc_id,))   # 시계 표본도(v3 델타 반증 #6)
-        await db.execute("DELETE FROM death_events      WHERE pc_id=?", (pc_id,))
         # ★B-DB9 (2026-09-23)★ slot_filters·nightmare_progress 는 ★은퇴(purge_all=True)일 때만★ 지운다 —
         #   카드 삭제는 「멈춘 카드 청소」로도 쓰여 매크로가 곧 같은 id 로 재보고하는데(실측 31개 중 5개 부활),
         #   그때 매크로 메모리의 슬롯 필터·주간 진행과 서버 값이 어긋나면 안 된다. 은퇴는 영구라 다 지운다.
@@ -728,6 +844,30 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
 async def get_pc_dump(pc_id: str) -> dict:
     await flush_statuses()          # ★#432-d★ 메모리에만 있는 상태 행을 먼저 저장해야 덤프에 실린다
     await flush_logs()              # ★#434★ 버퍼에 있는 로그 줄도
+    # ★#438★ 뜨거운 표는 로컬 파일 — 연결을 따로 읽는다(HOT_DB=0 이면 같은 파일)
+    async with connect_hot() as hdb:
+        hdb.row_factory = aiosqlite.Row
+
+        async def _hall(sql: str, params: tuple) -> list[dict]:
+            async with hdb.execute(sql, params) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
+        hot = {
+            "pc_status": await _hall(
+                "SELECT pc_id, data, updated_at FROM pc_status WHERE pc_id=?", (pc_id,)),
+            "updater_status": await _hall(
+                "SELECT pc_id, data, updated_at FROM updater_status WHERE pc_id=?", (pc_id,)),
+            "logs": await _hall(
+                "SELECT id, pc_id, level, message, created_at FROM logs "
+                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id,)),
+            # ★업데이터 로그는 ".upd" 접미사 키(delete_pc_all_data 와 짝)★
+            "logs_upd": await _hall(
+                "SELECT id, pc_id, level, message, created_at FROM logs "
+                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id + ".upd",)),
+            "death_events": await _hall(
+                "SELECT id, pc_id, created_at FROM death_events WHERE pc_id=? ORDER BY id",
+                (pc_id,)),
+        }
     async with connect_db() as db:
         db.row_factory = aiosqlite.Row
 
@@ -735,30 +875,15 @@ async def get_pc_dump(pc_id: str) -> dict:
             async with db.execute(sql, params) as cur:
                 return [dict(r) for r in await cur.fetchall()]
 
-        return {
-            "pc_id": pc_id,
-            "pc_status": await _all(
-                "SELECT pc_id, data, updated_at FROM pc_status WHERE pc_id=?", (pc_id,)),
-            "updater_status": await _all(
-                "SELECT pc_id, data, updated_at FROM updater_status WHERE pc_id=?", (pc_id,)),
+        cold = {
             "commands": await _all(
                 "SELECT id, pc_id, command, args, status, created_at, updated_at "
                 "FROM commands WHERE pc_id=? ORDER BY id", (pc_id,)),
             "updater_commands": await _all(
                 "SELECT id, pc_id, command, args, status, created_at, updated_at "
                 "FROM updater_commands WHERE pc_id=? ORDER BY id", (pc_id,)),
-            "logs": await _all(
-                "SELECT id, pc_id, level, message, created_at FROM logs "
-                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id,)),
-            # ★업데이터 로그는 ".upd" 접미사 키(delete_pc_all_data 와 짝)★
-            "logs_upd": await _all(
-                "SELECT id, pc_id, level, message, created_at FROM logs "
-                "WHERE pc_id=? ORDER BY id DESC LIMIT 5000", (pc_id + ".upd",)),
             "char_info": await _all(
                 "SELECT pc_id, total_kina, chars, collected_at FROM char_info WHERE pc_id=?",
-                (pc_id,)),
-            "death_events": await _all(
-                "SELECT id, pc_id, created_at FROM death_events WHERE pc_id=? ORDER BY id",
                 (pc_id,)),
             "nightmare_progress": await _all(
                 "SELECT pc_id, slot, tab, bosses, updated_at FROM nightmare_progress "
@@ -766,6 +891,10 @@ async def get_pc_dump(pc_id: str) -> dict:
             "slot_filters": await _all(
                 "SELECT pc_id, filters FROM slot_filters WHERE pc_id=?", (pc_id,)),
         }
+    out = {"pc_id": pc_id}
+    out.update(hot)
+    out.update(cold)
+    return out
 
 
 async def get_status(pc_id: str) -> dict | None:
@@ -775,7 +904,7 @@ async def get_status(pc_id: str) -> dict | None:
             return json.loads(_m["data"])
         except Exception:
             return {}
-    async with connect_db() as db:
+    async with connect_hot() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT data FROM pc_status WHERE pc_id=?", (pc_id,)
@@ -1108,7 +1237,7 @@ async def insert_log(pc_id: str, level: str, message: str,
         for _k in list(_LOG_SINCE_PRUNE)[:len(_LOG_SINCE_PRUNE) - LOG_SINCE_PRUNE_MAX + 1]:
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
-    async with connect_db() as db:
+    async with connect_hot() as db:
         if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         await db.execute(
@@ -1142,7 +1271,7 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     now = created_at or _now()
-    async with connect_db() as db:
+    async with connect_hot() as db:
         if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         _t = time.monotonic()
@@ -1228,7 +1357,7 @@ async def flush_logs() -> int:
     _fm = min(r[3] for r in rows)
     _FLUSH_MIN.append(_fm)
     try:
-        async with connect_db() as db:
+        async with connect_hot() as db:
             await db.executemany("INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)", rows)
             for pid in prune:
                 await db.execute(
@@ -1270,7 +1399,7 @@ async def log_flush_loop() -> None:
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────
 
 async def _upsert_updater_status_db(pc_id: str, data: dict) -> None:
-    async with connect_db() as db:
+    async with connect_hot() as db:
         await db.execute(
             "INSERT OR REPLACE INTO updater_status(pc_id, data, updated_at) VALUES(?,?,?)",
             (pc_id, json.dumps(data, ensure_ascii=False), _now()),
@@ -1294,7 +1423,7 @@ async def upsert_updater_status(pc_id: str, data: dict) -> None:
 
 
 async def _load_updater_rows() -> list:
-    async with connect_db() as db:
+    async with connect_hot() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM updater_status ORDER BY pc_id"
@@ -1742,7 +1871,7 @@ async def ack_updater_command(cmd_id: int) -> bool:
 # ── 로그 ─────────────────────────────────────────────────────────────────────
 
 async def get_logs(pc_id: str, limit: int = 1000) -> list[dict]:
-    async with connect_db() as db:
+    async with connect_hot() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT level, message, created_at FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT ?",
@@ -1793,14 +1922,14 @@ async def get_logs_since(since: str, limit: int = 500,
         elif ns_prefix:
             where.append("pc_id LIKE ? ESCAPE '\\'"); params.append(_like_prefix(ns_prefix) + "::%")
         params.append(limit)
-        async with connect_db() as db:
+        async with connect_hot() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT id, pc_id, level, message, created_at FROM logs WHERE "
                 + " AND ".join(where) + " ORDER BY created_at ASC, id ASC LIMIT ?", params,
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
-    async with connect_db() as db:
+    async with connect_hot() as db:
         db.row_factory = aiosqlite.Row
         if pc_id:
             sql = ("SELECT id, pc_id, level, message, created_at FROM logs "
@@ -2420,7 +2549,7 @@ async def move_kina_adjust(tid: str, to_pc: str, note: str = "") -> dict:
 async def log_has(pc_id: str, needle: str) -> bool:
     """그 PC 로그에 needle 글자가 든 줄이 있나(instr — LIKE 의 %·_ 이스케이프가 필요 없다). 없으면 False."""
     await flush_logs()                  # ★#435-b★ 버퍼에 있는 줄도 본다
-    async with connect_db() as db:
+    async with connect_hot() as db:
         async with db.execute("SELECT 1 FROM logs WHERE pc_id=? AND instr(message, ?) > 0 LIMIT 1", (pc_id, needle)) as cur:
             return (await cur.fetchone()) is not None
 

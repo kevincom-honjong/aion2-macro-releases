@@ -257,15 +257,15 @@ async def t_434():
         finally:
             D.LOG_BUF_MAX = old_max
         # 실패하면 줄이 되돌아온다
-        real_conn = D.connect_db
+        real_conn = D.connect_hot
 
         def boom(*a, **k):
             raise RuntimeError("db down")
-        D.connect_db = boom
+        D.connect_hot = boom
         try:
             r = await D.flush_logs()
         finally:
-            D.connect_db = real_conn
+            D.connect_hot = real_conn
         ok("W434-f ★flush 실패 시 줄을 잃지 않고 되돌린다 · last_err 기록★", r == 0 and D.log_stats()["buffered"] == 5 and D.log_stats()["last_err"], str(D.log_stats()))
         ok("W434-g 다시 flush 하면 저장된다", await D.flush_logs() == 5 and D.log_stats()["last_err"] is None)
         # 카드 삭제 시 버퍼의 줄이 되살아나지 않는다
@@ -308,16 +308,16 @@ async def t_434():
         pm = D.log_pending_min()
         ok("W434-q ★버퍼에 줄이 있으면 pending_min = 그 줄 시각★", pm == D._LOG_BUF[0][3], str(pm))
         seen_mid = []
-        real_ins = D.connect_db
+        real_ins = D.connect_hot
 
         def spy(*a, **k):
             seen_mid.append(D.log_pending_min())
             return real_ins(*a, **k)
-        D.connect_db = spy
+        D.connect_hot = spy
         try:
             await D.flush_logs()
         finally:
-            D.connect_db = real_ins
+            D.connect_hot = real_ins
         ok("W434-r ★저장 중에도 pending_min 이 유지되고 끝나면 None★", seen_mid and seen_mid[0] == pm and D.log_pending_min() is None, str(seen_mid))
         # 알람 줄: DB(flush)가 느려도 _alarm_event 는 바로 돌아온다
         real_fl = D.flush_logs

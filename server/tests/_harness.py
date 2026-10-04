@@ -16,6 +16,7 @@ os.environ.setdefault("DB_PATH", os.path.join(_TMP, "t.db"))
 os.environ.setdefault("BUGS_DIR", os.path.join(_TMP, "bugs"))
 os.environ.setdefault("DASHBOARD_PASSWORD", "harness")
 os.environ.setdefault("API_KEY", "testkey")
+os.environ.setdefault("HOT_DB", "0")                # #438 기존 시험은 단일 DB 로(옛 동작 그대로) — 뜨거운 DB 는 test_hot_db 가 켜서 시험
 os.environ.setdefault("LOG_FLUSH_S", "0")           # #434/#435-b 로그 버퍼도 끄고 시험한다(버퍼 자체는 test_ws_dblock 이 켜서 시험)
 os.environ.setdefault("READ_CACHE_S", "0")          # #435 읽기 캐시는 끄고 시험한다(캐시 자체는 test_status_store 가 켜서 시험)
 os.environ.setdefault("TTS_DIR", os.path.join(_TMP, "tts"))

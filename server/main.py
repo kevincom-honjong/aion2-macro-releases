@@ -3404,6 +3404,7 @@ async def diag_perf(request: Request):
         "ws_life_buckets": _bucket_count([x["bucket"] for x in _WS_CLOSES]),
         "ws_why": _bucket_count([x["why"] for x in _WS_CLOSES]),
         "status_store": _database_mod.st_stats(),
+        "db_files": _database_mod.db_files(),
         "db_held": _database_mod.held_report(),
         "db_timing": {k: dict(v, ms_avg=round(v["ms_total"] / max(1, v["n"]), 2), ms_max=round(v["ms_max"], 1)) for k, v in _database_mod.TIMING.items()},
         "status_lag": _lag_report(),               # #432
@@ -3474,12 +3475,14 @@ async def health(request: Request):
                                 if _version_cache.get("ts") else None),
         # ★#288 🔭 스카우터 심장박동★ — ticks 가 늘고 pcs_judged>0 이면 루프가 산 것(알람 0통과 구별)
         "scout": _scout_health(),
+        "hot_db": _database_mod.HOT_DB,              # ★#438★ 로그·상태가 로컬 파일에 있나(상세는 main 세션 db_files)
     }
     if _detail:
         out.update({
             "rss_max_mb": rss_mb,
             "db_path": _dbp,
             "db_size_kb": (round(os.path.getsize(_dbp) / 1024, 1) if os.path.exists(_dbp) else 0),
+            "db_files": _database_mod.db_files(),        # ★#438★ 주 DB(/data) · 뜨거운 DB(/tmp) 경로·크기·파일별 쓰기 시간
             "bug_files": _bugs,
             "prev_boot": (VOLUME_PREV.get("boot") or "")[:8] or None,
             "prev_boot_at": VOLUME_PREV.get("at"),
