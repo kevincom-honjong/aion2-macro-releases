@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 29
+MIN_CHECKS = 44
 
 
 class Feed(FakeWS):
@@ -96,7 +96,7 @@ async def t_432():
     import time as _t
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     order = []
-    old_il, old_us = main.insert_logs, main.upsert_status
+    old_il, old_us = main.log_buffer_put, main.upsert_status
 
     async def slow_logs(pc, ents):
         order.append("logs-start")
@@ -106,7 +106,7 @@ async def t_432():
     async def fast_up(pc, payload):
         order.append("status")
 
-    main.insert_logs = slow_logs
+    main.log_buffer_put = slow_logs
     try:
         la = (_dt.now(_tz.utc) - _td(seconds=3)).strftime("%Y-%m-%dT%H:%M:%S")
         msgs = [json.dumps({"type": "log", "logs": [{"level": "info", "message": "x%d" % i} for i in range(50)]}),
@@ -116,7 +116,7 @@ async def t_432():
         ok("W432-a ★느린 로그 묶음(0.8초)이 앞에 있어도 상태 보고는 로그가 끝나기 전에 처리된다★",
            order.index("status") < order.index("logs-end"), str(order))
     finally:
-        main.insert_logs = old_il
+        main.log_buffer_put = old_il
         main.upsert_status = old_us
     ok("W432-b 로그 일꾼이 끝까지 처리했다(소켓이 끝날 때 남은 묶음을 기다림)", "logs-end" in order, str(order))
     ok("W432-c 메시지 종류별 처리 시간이 /diag/perf 에 센다(status·log)",
@@ -207,7 +207,8 @@ async def t_432b():
         finally:
             D.aiosqlite.connect = real
         ok("W432b-b 상태 보고·로그 쓰기는 PRAGMA synchronous=NORMAL 을 건다", n1 == 1 and n2 == 3 and "NORMAL" in seen[0], str(seen))
-        ok("W432b-c ★설정 같은 나머지 쓰기는 안 건드린다(FULL 그대로)★", n3 == n2, str(seen))
+        ok("W432b-c ★#434: 설정 같은 나머지 쓰기도 연결마다 NORMAL 을 건다(DB_SYNC 기본 NORMAL) · 뜨거운 쪽은 중복으로 안 건다★",
+           n3 == n2 + 1 and D.DB_SYNC == "NORMAL", str(seen))
         t = D.TIMING
         ok("W432b-d db_timing: upsert 단계(connect/select/insert/commit)·logs_batch_write 가 센다",
            all(k in t and t[k]["n"] >= 1 for k in ("upsert_connect", "upsert_select", "upsert_insert", "upsert_commit", "logs_batch_write")), str(list(t)))
@@ -216,6 +217,88 @@ async def t_432b():
     src = inspect_src(main.macro_websocket)
     ok("W432b-e 상태 갈래가 단계별로 잰다(ws_st_upsert·abyss·push)", all(k in src for k in ("ws_st_upsert", "ws_st_abyss", "ws_st_push")))
     ok("W432b-f /diag/perf 에 db_timing", '"db_timing"' in inspect_src(main.diag_perf))
+
+
+async def t_434():
+    """#434 — WS 로그는 소켓 합쳐 트랜잭션 하나 · 상주 연결 · 모든 연결 NORMAL."""
+    import tempfile, os as _os, sqlite3 as _sq
+    old_path, old_fl = D.DB_PATH, D.LOG_FLUSH_S
+    D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "t.db")
+    D.LOG_FLUSH_S = 3.0
+    try:
+        await D.init_db()
+        n_conn = [0]
+        real = D.aiosqlite.connect
+
+        def counting(*a, **k):
+            n_conn[0] += 1
+            return real(*a, **k)
+
+        D.aiosqlite.connect = counting
+        try:
+            for pc in ("PC-A", "PC-B", "PC-C"):
+                await D.log_buffer_put(pc, [("info", "%s-%d" % (pc, i)) for i in range(20)])
+            ok("W434-a ★버퍼에 쌓는 동안 DB 연결 0번★", n_conn[0] == 0 and D.log_stats()["buffered"] == 60, str(n_conn[0]))
+            n = await D.flush_logs()
+        finally:
+            D.aiosqlite.connect = real
+        c = _sq.connect(D.DB_PATH)
+        ok("W434-b ★3개 PC 60줄이 연결 1번으로 저장(예전: PC 묶음마다 1번씩 3번)★", n == 60 and n_conn[0] == 1
+           and c.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 60, "%s %s" % (n, n_conn[0]))
+        rows = c.execute("SELECT message FROM logs WHERE pc_id='PC-B' ORDER BY id").fetchall()
+        ok("W434-c PC 별 순서가 보존된다", [r[0] for r in rows] == ["PC-B-%d" % i for i in range(20)])
+        ok("W434-d 빈 버퍼 flush 는 아무 일도 안 한다", await D.flush_logs() == 0)
+        # 상한: 가장 오래된 줄부터 버림
+        old_max = D.LOG_BUF_MAX
+        D.LOG_BUF_MAX = 5
+        try:
+            await D.log_buffer_put("PC-D", [("info", "d%d" % i) for i in range(8)])
+            ok("W434-e 상한(5) 넘으면 오래된 3줄을 버리고 센다", D.log_stats()["buffered"] == 5 and D.log_stats()["dropped"] >= 3, str(D.log_stats()))
+        finally:
+            D.LOG_BUF_MAX = old_max
+        # 실패하면 줄이 되돌아온다
+        real_conn = D.connect_db
+
+        def boom(*a, **k):
+            raise RuntimeError("db down")
+        D.connect_db = boom
+        try:
+            r = await D.flush_logs()
+        finally:
+            D.connect_db = real_conn
+        ok("W434-f ★flush 실패 시 줄을 잃지 않고 되돌린다 · last_err 기록★", r == 0 and D.log_stats()["buffered"] == 5 and D.log_stats()["last_err"], str(D.log_stats()))
+        ok("W434-g 다시 flush 하면 저장된다", await D.flush_logs() == 5 and D.log_stats()["last_err"] is None)
+        # 카드 삭제 시 버퍼의 줄이 되살아나지 않는다
+        await D.log_buffer_put("PC-Z", [("info", "z")])
+        await D.log_buffer_put("PC-Z.upd", [("info", "zu")])
+        await D.delete_pc_all_data("PC-Z")
+        ok("W434-h 삭제한 PC 의 버퍼 줄도 지워진다", all(r[0] not in ("PC-Z", "PC-Z.upd") for r in D._LOG_BUF))
+        # 즉시 모드
+        D.LOG_FLUSH_S = 0
+        await D.log_buffer_put("PC-I", [("info", "now")])
+        ok("W434-i LOG_FLUSH_S=0 이면 예전처럼 바로 저장(버퍼 0)",
+           D.log_stats()["buffered"] == 0 and _sq.connect(D.DB_PATH).execute("SELECT COUNT(*) FROM logs WHERE pc_id='PC-I'").fetchone()[0] == 1)
+        D.LOG_FLUSH_S = 3.0
+        await D.log_buffer_put("PC-J", [("info", "dump")])
+        dump = await D.get_pc_dump("PC-J")
+        ok("W434-j 카드 덤프는 버퍼 줄까지 싣는다", any("dump" in str(x) for x in dump.get("logs", [])), str(list(dump))[:200])
+        # keeper
+        await D.keeper_open()
+        ok("W434-k keeper 연결이 열리고 닫힌다 · 두 번 열어도 하나", D._KEEPER is not None and await D.keeper_open() is None)
+        await D.keeper_close()
+        ok("W434-l keeper 닫힘", D._KEEPER is None)
+        # 모든 연결 NORMAL
+        async with D.connect_db() as db:
+            async with db.execute("PRAGMA synchronous") as cur:
+                v = (await cur.fetchone())[0]
+        ok("W434-m ★아무 연결이나 synchronous=NORMAL(1)★", v == 1, str(v))
+        rep = D.held_report()
+        ok("W434-n held_report 에 분당 쓰기 수·log_buf·db_sync", all(k in rep for k in ("write_txns_per_min", "log_buf", "db_sync", "keeper")), str(list(rep)))
+    finally:
+        D.DB_PATH, D.LOG_FLUSH_S = old_path, old_fl
+        D._LOG_BUF.clear()
+    src = inspect_src(main.macro_websocket)
+    ok("W434-o WS 로그 갈래는 log_buffer_put 을 쓴다(insert_logs 직접 호출 없음)", "log_buffer_put" in src and "insert_logs(" not in src)
 
 
 async def t_432f():
@@ -248,7 +331,7 @@ def inspect_src(f):
 
 
 def test_all():
-    run_all([t_all, t_432, t_432b, t_432f])
+    run_all([t_all, t_432, t_432b, t_434, t_432f])
     finish("test_ws_dblock", MIN_CHECKS)
 
 

@@ -20,6 +20,14 @@ DB_BUSY_S = float(os.getenv("DB_BUSY_S", "30"))
 HOT_SYNC = os.getenv("HOT_SYNC", "NORMAL").strip().upper()
 if HOT_SYNC not in ("NORMAL", "FULL", "OFF"):
     HOT_SYNC = "NORMAL"
+# ★#434 (2026-10-04) fsync 줄이기★ 실측(아이온2): 볼륨 fsync 가 폭주 구간에 0.4~1.9초 — 쓰기 잠금 폭풍은 «전부 같이 기다림»이었다.
+#   ① 모든 연결을 synchronous=NORMAL 로(WAL 에서는 커밋마다 fsync 안 함 · 앱이 죽어도 안 깨지고, 호스트 전원이 나가면 마지막 몇 커밋만 잃는다).
+#      이 DB 는 설정·명령 큐·장부 등이라 «마지막 몇 초» 손실이 허용 범위인지는 주인님 몫 → 되돌림: Railway env DB_SYNC=FULL.
+#   ② 마지막 연결이 닫힐 때마다 SQLite 가 체크포인트+WAL 삭제(fsync 여러 번)를 한다 → 상주 연결(keeper) 하나로 막는다. env DB_KEEPER=0 으로 끔.
+DB_SYNC = os.getenv("DB_SYNC", "NORMAL").strip().upper()
+if DB_SYNC not in ("NORMAL", "FULL", "OFF"):
+    DB_SYNC = "NORMAL"
+_KEEPER = None
 TIMING: dict = {}      # 이름 → {n, ms_total, ms_max} — /diag/perf db_timing
 
 
@@ -41,7 +49,11 @@ HELD_SLOW_MS = float(os.getenv("HELD_SLOW_MS", "800"))
 _WRITE_HEADS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER", "DROP", "BEGIN IMM")
 
 
+HELD_TOTAL = {"txns": 0, "since": time.time()}      # ★#434★ 쓰기 연결(≈커밋) 총수 — 분당 값은 held_report 가 계산
+
+
 def _held_note(label: str, t_wall0: float, ms: float) -> None:
+    HELD_TOTAL["txns"] += 1
     s = HELD.get(label)
     if s is None:
         if len(HELD) >= 120:
@@ -82,6 +94,11 @@ class _Conn:
             await db.set_trace_callback(self._trace)
         except Exception:
             pass
+        if DB_SYNC != "FULL":
+            try:
+                await db.execute("PRAGMA synchronous=" + DB_SYNC)
+            except Exception:
+                pass
         return db
 
     async def __aexit__(self, *a):
@@ -101,12 +118,38 @@ def connect_db(path: str | None = None, timeout: float | None = None):
     return _Conn(path or DB_PATH, DB_BUSY_S if timeout is None else timeout, label)
 
 
+async def keeper_open() -> None:
+    """상주 연결 하나 — 다른 연결이 전부 닫혀도 «마지막 연결 닫힘 = 체크포인트+WAL 삭제» 가 일어나지 않게 한다."""
+    global _KEEPER
+    if _KEEPER is not None or os.getenv("DB_KEEPER", "1") == "0":
+        return
+    try:
+        k = await aiosqlite.connect(DB_PATH, timeout=DB_BUSY_S)
+        await k.execute("SELECT 1")
+        _KEEPER = k
+    except Exception as e:
+        print(f"[DB] keeper 연결 실패(무시): {e.__class__.__name__}: {e}")
+
+
+async def keeper_close() -> None:
+    global _KEEPER
+    k, _KEEPER = _KEEPER, None
+    if k is not None:
+        try:
+            await k.close()
+        except Exception:
+            pass
+
+
 def held_report() -> dict:
     top = sorted(((k, dict(v, ms_avg=round(v["ms_total"] / max(1, v["n"]), 1), ms_max=round(v["ms_max"], 1))) for k, v in HELD.items()),
                  key=lambda kv: -kv[1]["ms_total"])[:25]
     for _, v in top:
         v.pop("ms_total", None)
-    return {"by_writer_top_total": dict(top), "slow_events": HELD_EVENTS[-25:], "slow_ms": HELD_SLOW_MS,
+    _min = max(1.0, (time.time() - HELD_TOTAL["since"]) / 60.0)
+    return {"write_txns_total": HELD_TOTAL["txns"], "write_txns_per_min": round(HELD_TOTAL["txns"] / _min, 1),
+            "db_sync": DB_SYNC, "keeper": _KEEPER is not None, "log_buf": log_stats(),
+            "by_writer_top_total": dict(top), "slow_events": HELD_EVENTS[-25:], "slow_ms": HELD_SLOW_MS,
             "note": "쓰기 문 시작→연결 닫힘(잠금 대기 포함). 시각은 UTC. 겹친 느린 구간 중 가장 먼저 시작한 것이 쥔 쪽."}
 
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -132,6 +175,7 @@ def _finite(v):
 async def init_db() -> None:
     _ST_MEM.clear()
     _ST_DIRTY.clear()
+    _LOG_BUF.clear()
     async with connect_db() as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
@@ -424,7 +468,7 @@ async def flush_statuses() -> int:
     t0 = time.monotonic()
     try:
         async with connect_db() as db:
-            if HOT_SYNC != "FULL":
+            if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
                 await db.execute("PRAGMA synchronous=" + HOT_SYNC)
             await db.executemany("INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)", rows)
             await db.commit()
@@ -467,7 +511,7 @@ async def _upsert_status_db(pc_id: str, data: dict) -> None:
     _t = time.monotonic()
     async with connect_db() as db:
         _tnote("upsert_connect", _t)
-        if HOT_SYNC != "FULL":
+        if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         # dead 전환(edge) 감지용으로 이전 상태를 먼저 읽는다.
         prev_status = None
@@ -572,6 +616,7 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     """pc_id 관련 모든 테이블 데이터 삭제 (완전 제거). purge_all=True(은퇴)면 슬롯 필터·악몽 진행까지."""
     _ST_MEM.pop(pc_id, None)
     _ST_DIRTY.discard(pc_id)
+    _LOG_BUF[:] = [r for r in _LOG_BUF if r[0] not in (pc_id, pc_id + ".upd")]      # ★#434★ 버퍼의 줄이 지운 뒤 되살아나지 않게
     async with connect_db() as db:
         await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
@@ -608,6 +653,7 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
 #   보다 넉넉한 5000 으로 잘라 무제한 테이블 사고(2026-09-11류)를 막는다.
 async def get_pc_dump(pc_id: str) -> dict:
     await flush_statuses()          # ★#432-d★ 메모리에만 있는 상태 행을 먼저 저장해야 덤프에 실린다
+    await flush_logs()              # ★#434★ 버퍼에 있는 로그 줄도
     async with connect_db() as db:
         db.row_factory = aiosqlite.Row
 
@@ -979,7 +1025,7 @@ async def insert_log(pc_id: str, level: str, message: str,
             _LOG_SINCE_PRUNE.pop(_k, None)
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     async with connect_db() as db:
-        if HOT_SYNC != "FULL":
+        if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         await db.execute(
             "INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)",
@@ -1013,7 +1059,7 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
     _LOG_SINCE_PRUNE[pc_id] = 0 if _prune else _n
     now = created_at or _now()
     async with connect_db() as db:
-        if HOT_SYNC != "FULL":
+        if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
             await db.execute("PRAGMA synchronous=" + HOT_SYNC)
         _t = time.monotonic()
         await db.executemany(
@@ -1031,6 +1077,93 @@ async def insert_logs(pc_id: str, entries: list, created_at: str | None = None) 
             )
         await db.commit()
         _tnote("logs_batch_write", _t)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ★#434 (2026-10-04) WS 로그는 «모든 소켓 합쳐 LOG_FLUSH_S 초마다 트랜잭션 하나»★ — 소켓(PC)마다 묶음을 따로 커밋하면
+#   24대 × 분당 수 회 = 분당 수백 트랜잭션이 같은 쓰기 잠금을 줄 서서 상태·업데이터 쓰기와 서로 기다렸다(2026-10-04 폭풍: insert_logs 542건이 잠김).
+#   메모리 버퍼에 쌓고 한 트랜잭션(executemany, PC 별 정리 포함)으로 쓴다. 읽는 쪽(대시보드 로그)은 최대 LOG_FLUSH_S 초 늦다.
+#   ★잃는 것★ 서버가 죽을 때 마지막 flush 이후 LOG_FLUSH_S 초치 — 종료(SIGTERM)는 마지막 flush 를 한다. 되돌림: env LOG_FLUSH_S=0 (예전처럼 바로).
+LOG_FLUSH_S = float(os.getenv("LOG_FLUSH_S", "3"))
+LOG_BUF_MAX = int(os.getenv("LOG_BUF_MAX", "5000"))
+_LOG_BUF: list = []          # (pc_id, level, message, created_at)
+LOG_STATS: dict = {"flushes": 0, "rows": 0, "last_rows": 0, "last_ms": 0.0, "max_ms": 0.0, "dropped": 0, "last_err": None}
+
+
+def log_stats() -> dict:
+    return dict(LOG_STATS, buffered=len(_LOG_BUF), flush_s=LOG_FLUSH_S)
+
+
+async def log_buffer_put(pc_id: str, entries: list) -> None:
+    """WS 로그 묶음을 버퍼에 쌓는다(LOG_FLUSH_S<=0 이면 예전처럼 바로 insert_logs). DB 를 기다리지 않는다."""
+    if LOG_FLUSH_S <= 0:
+        return await insert_logs(pc_id, entries)
+    now = _now()
+    for l, m in entries:
+        _LOG_BUF.append((pc_id, str(l or "info"), str(m), now))
+    over = len(_LOG_BUF) - LOG_BUF_MAX
+    if over > 0:                         # DB 가 오래 막힌 비상 — 가장 오래된 줄부터 버린다
+        del _LOG_BUF[:over]
+        LOG_STATS["dropped"] += over
+
+
+async def flush_logs() -> int:
+    """버퍼 전체를 트랜잭션 하나로. 실패하면 줄을 앞쪽에 되돌린다(상한 안에서)."""
+    if not _LOG_BUF:
+        return 0
+    rows = _LOG_BUF[:]
+    del _LOG_BUF[:len(rows)]
+    per: dict = {}
+    for r in rows:
+        per[r[0]] = per.get(r[0], 0) + 1
+    prune = []
+    for pid, c in per.items():
+        n = _LOG_SINCE_PRUNE.get(pid, LOG_PRUNE_EVERY - 1) + c
+        if pid not in _LOG_SINCE_PRUNE and len(_LOG_SINCE_PRUNE) >= LOG_SINCE_PRUNE_MAX:
+            for k in list(_LOG_SINCE_PRUNE)[:len(_LOG_SINCE_PRUNE) - LOG_SINCE_PRUNE_MAX + 1]:
+                _LOG_SINCE_PRUNE.pop(k, None)
+        if n >= LOG_PRUNE_EVERY:
+            prune.append(pid)
+            _LOG_SINCE_PRUNE[pid] = 0
+        else:
+            _LOG_SINCE_PRUNE[pid] = n
+    t0 = time.monotonic()
+    try:
+        async with connect_db() as db:
+            await db.executemany("INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)", rows)
+            for pid in prune:
+                await db.execute(
+                    "DELETE FROM logs WHERE pc_id=? AND id NOT IN (SELECT id FROM logs WHERE pc_id=? ORDER BY id DESC LIMIT ?)",
+                    (pid, pid, LOG_KEEP_PER_PC))
+            await db.commit()
+        LOG_STATS["last_err"] = None
+    except Exception as e:
+        _LOG_BUF[:0] = rows
+        over = len(_LOG_BUF) - LOG_BUF_MAX
+        if over > 0:
+            del _LOG_BUF[:over]
+            LOG_STATS["dropped"] += over
+        LOG_STATS["last_err"] = "%s: %s" % (e.__class__.__name__, str(e)[:100])
+        return 0
+    ms = (time.monotonic() - t0) * 1000
+    LOG_STATS.update(flushes=LOG_STATS["flushes"] + 1, rows=LOG_STATS["rows"] + len(rows), last_rows=len(rows), last_ms=round(ms, 1))
+    if ms > LOG_STATS["max_ms"]:
+        LOG_STATS["max_ms"] = round(ms, 1)
+    return len(rows)
+
+
+async def log_flush_loop() -> None:
+    if LOG_FLUSH_S <= 0:
+        return
+    try:
+        while True:
+            await asyncio.sleep(LOG_FLUSH_S)
+            try:
+                await flush_logs()
+            except Exception as e:
+                LOG_STATS["last_err"] = "loop %s" % e.__class__.__name__
+    except asyncio.CancelledError:
+        pass
 
 
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────

@@ -180,7 +180,7 @@ async def t_held():
         import inspect
         ok("S432e-g /diag/perf 에 db_held", '"db_held"' in inspect.getsource(main.diag_perf))
         left = [f for f in inspect.getsource(D).splitlines() if "aiosqlite.connect(" in f and "def " not in f]
-        ok("S432e-h database.py 의 모든 연결이 connect_db 를 거친다(남은 직접 연결은 래퍼 자신뿐)", len(left) == 1, str(left))
+        ok("S432e-h database.py 의 모든 연결이 connect_db 를 거친다(남은 직접 연결은 래퍼 자신 + 상주 연결(keeper) 뿐 — #434)", len(left) == 2, str(left))
 
 
 async def t_433():

@@ -234,6 +234,7 @@ async def t_ws_frames():
         await asyncio.sleep(0.02)
         if (await db.get_status("PC-C3")) and await db.get_logs("PC-C3", limit=1):
             break
+    await db.flush_logs()            # #434 WS 로그는 모아서 저장 — 주기 flush 를 기다리지 않고 비운다
     st = await db.get_status("PC-C3")
     lg = await db.get_logs("PC-C3", limit=5)
     ws.die()

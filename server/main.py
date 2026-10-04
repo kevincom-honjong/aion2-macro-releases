@@ -23,7 +23,7 @@ from database import (
     delete_pc_all_data, get_pc_dump, get_death_counts_since, get_all_death_events,
     insert_command, get_pending_command, get_pending_commands,
     ack_command, cancel_command, get_logs,
-    insert_log, insert_logs, get_recent_commands, get_command_pc, get_updater_command_pc, latest_command_after,
+    insert_log, insert_logs, log_buffer_put, get_recent_commands, get_command_pc, get_updater_command_pc, latest_command_after,
     set_setting, get_setting,
     upsert_updater_status, get_all_updater_statuses,
     insert_updater_command, get_pending_updater_command, ack_updater_command,
@@ -1610,6 +1610,8 @@ async def lifespan(app: FastAPI):
     ka_task = asyncio.create_task(_dash_keepalive())         # #271 숨은 대시보드 ping
     scout_task = asyncio.create_task(_scout_loop())          # #288 🔭 스카우터 알람(서버 안)
     stflush_task = asyncio.create_task(_database_mod.status_flush_loop())   # #432-d 상태 보고 모아 저장
+    logflush_task = asyncio.create_task(_database_mod.log_flush_loop())     # #434 WS 로그 모아 저장
+    await _database_mod.keeper_open()                                       # #434 마지막 연결 닫힘 체크포인트 방지
     try:
         yield
     finally:
@@ -1621,7 +1623,7 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task, stflush_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task, stflush_task, logflush_task):
             if _t:
                 _t.cancel()
                 try:
@@ -1632,8 +1634,13 @@ async def lifespan(app: FastAPI):
             await _database_mod.flush_statuses()      # #432-d 모아 둔 상태 보고를 종료 전에 한 번 더 저장
         except Exception as _fe:
             print(f"[종료] 상태 flush 실패: {_fe}")
+        try:
+            await _database_mod.flush_logs()          # #434 모아 둔 로그 줄
+        except Exception as _fe:
+            print(f"[종료] 로그 flush 실패: {_fe}")
         if _abyss_dirty[0]:                # 모아 두던 gain 을 재배포 전에 한 번 더 저장
             await _abyss_persist()
+        await _database_mod.keeper_close()
 
 
 app = FastAPI(lifespan=lifespan, title="혼종 사령부 — AION2 관제")
@@ -11876,7 +11883,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
             try:
                 logs = _lm.get("logs", [])
                 _ents = [e for e in logs if isinstance(e, dict)]
-                await insert_logs(nspc, [(e.get("level", "info"), e.get("message", "")) for e in _ents])   # ★#432★ 연결 하나·커밋 하나
+                await log_buffer_put(nspc, [(e.get("level", "info"), e.get("message", "")) for e in _ents])   # ★#434★ 소켓 합쳐 몇 초에 한 트랜잭션
                 for entry in _ents:
                     _m = entry.get("message", "")
                     # ★매크로 프로세스가 새로 떴는가★ — 순환 해제 판정 근거.
