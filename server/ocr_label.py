@@ -128,7 +128,13 @@ _DHASH_RE = re.compile(r"^(?:[0-9a-f]{16}|[0-9a-f]{64})\Z")   # 64비트(16자�
 _PHASH_RE = re.compile(r"^[0-9a-f]{16}\Z")
 _PSHA_RE = re.compile(r"^[0-9a-f]{6,40}\Z")                     # 매크로 prompt_sha1 = sha1(prompt)[:12]
 _CSHA_RE = re.compile(r"^[0-9a-f]{40}\Z")                       # 매크로 sha1 = sha1(img_b64 ★문자열★)
+try:
+    import ocr_names as _snap_names
+except Exception:      # 패키지로 불릴 때
+    from . import ocr_names as _snap_names
+
 OCR_SITE_RAW_MAX = 200
+OCR_HISTORY_MAX = 500          # ★#436★ /ocr/history 한 쪽 상한(예전 200) — 끝까지는 offset 으로
 OCR_BAD_LABEL = "bad image"
 # ★자동 닫기 (2026-09-25 주인님 #218 «OCR 판별 — 홍옥의 섬 계속 올라오네»)★ — 맵 이름(analytics.py:_map_loop)은 답이 16개로 닫혀 있다.
 #   묶음의 ★모든 이미지★ 제미나이 답(앞뒤 공백만 걷고)이 ★한 이름과 글자 그대로 같으면★ 사람 대기열에 안 올리고 status "auto" 로 닫는다.
@@ -141,6 +147,15 @@ OCR_AUTO_SITES = {
         "어비스 회랑", "데바 생체 연구기지", "갈라진 남쪽 추락지", "갈라진 북쪽 추락지", "라 미렌 요새 남쪽 잔해",
         "라 미렌 요새 북쪽 잔해", "붉은 가시 왕관섬", "영원의 섬", "아울라우 부락")),
 }
+# ★#436 (2026-10-04 주인님 «OCR 쌓인 걸로 프로그램 개선»)★ 답이 닫힌 목록인 각성전 두 자리도 같은 자동 닫기 — 단 ★공백을 무시★ 하고 맞춘다
+#   (매크로가 공백을 지워 읽는 자리: lc/ocr_policy.py CLOSED_SETS · lc/awakening.py DIFF_NAMES). 라벨은 목록의 ★정식 표기★ 로 저장한다.
+#   목록 밖 답·빈 답·«텍스트 없음» 류는 그대로 사람 몫(예전과 같다).
+OCR_AUTO_LOOSE = {
+    "awakening_py__read_objective": ("방안의몬스터를모두처치", "다음방의입구를열기", "보스를처치하기"),
+    "awakening_py__read_diff_label": ("쉬움", "보통", "어려움", "극한", "절망", "지옥", "파멸"),
+}
+for _k, _v in OCR_AUTO_LOOSE.items():
+    OCR_AUTO_SITES[_k] = frozenset(_v)
 # ★믿을 만한 자리 자동 닫기 (2026-09-25 주인님 #228 «OCR 80개 찼다»)★ — read_server_kina_open 이 사람 라벨 240·불일치 0 인데
 #   대기 80 중 40 을 차지했다. 사람 라벨이 OCR_TRUST_MIN_LABELED 이상이고 ★최근 OCR_TRUST_WINDOW 장★(사람이 라벨 준 묶음의
 #   이미지 중 제미나이 답이 있는 것, 라벨 시각 최신순 — /ocr/stats 불일치율과 같은 비교 norm_answer)이 전부 일치하는 site 는
@@ -428,9 +443,14 @@ def _norm_label(v) -> str:
     return s.strip()[:OCR_LABEL_MAX]
 
 
+_MAP_SITE = "analytics_py__map_loop"
+
+
 def norm_answer(s) -> str:
-    """불일치율 비교용 — 전각/반각·대소문자·공백 차이는 같은 답으로 본다."""
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s if isinstance(s, str) else "")).lower()
+    """불일치율 비교용 — 전각/반각·대소문자·공백 차이는 같은 답으로 본다.
+    ★#436★ 끝의 «%» 도 무시한다 — 진행도 «25» 와 «25%» 를 제미나이 오답으로 세지 않는다(숫자 자리는 % 유무가 뜻이 아니다)."""
+    t = re.sub(r"\s+", "", unicodedata.normalize("NFKC", s if isinstance(s, str) else "")).lower()
+    return re.sub(r"%+$", "", t)
 
 
 def hamming(a: str, b: str) -> int:
@@ -552,6 +572,12 @@ def auto_label(site: str, answers) -> "str | None":
     names = OCR_AUTO_SITES.get(site)
     if not names:
         return None
+    if site in OCR_AUTO_LOOSE:                      # ★#436★ 공백 무시 — 정식 표기로 돌려준다
+        got = {re.sub(r"\s+", "", unicodedata.normalize("NFKC", a if isinstance(a, str) else "")) for a in answers}
+        if len(got) != 1:
+            return None
+        (one,) = got
+        return one if one in names else None
     got = {(a if isinstance(a, str) else "").strip() for a in answers}
     if len(got) != 1:
         return None
@@ -1461,14 +1487,14 @@ def _cid(b: dict) -> int:
     return n
 
 
-async def _cluster_items(db, tenant, where, args, order, limit):
+async def _cluster_items(db, tenant, where, args, order, limit, offset=0):
     cur = await db.execute(
         "SELECT c.id, c.rep_img, c.site, c.status, c.label, c.created, c.labeled_at, "
         "       (SELECT COALESCE(SUM(count),0) FROM ocr_img WHERE cluster_id=c.id), "
         "       (SELECT COUNT(*) FROM ocr_img WHERE cluster_id=c.id), "
         "       r.prompt, r.gemini, r.local, r.pc_id, r.on_disk "
         "FROM ocr_cluster c LEFT JOIN ocr_img r ON r.id=c.rep_img "
-        "WHERE c.tenant=? AND " + where + " ORDER BY " + order + " LIMIT ?", (tenant, *args, limit))
+        "WHERE c.tenant=? AND " + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", (tenant, *args, limit, offset))
     items = []
     for (cid, rep, site, st, lb, cr, la, hits, mem, pr, gm, lc, pc, od) in await cur.fetchall():
         c2 = await db.execute("SELECT id FROM ocr_img WHERE cluster_id=? AND on_disk=1 AND id<>? ORDER BY id DESC LIMIT 6",
@@ -1594,11 +1620,31 @@ async def undo_core(tenant: str) -> dict:
     return {"ok": True, "id": cid, "status": pst, "label": plb if pst == "labeled" else None}
 
 
-async def history_core(tenant: str, lim: int) -> dict:
+async def history_core(tenant: str, lim: int, offset: int = 0) -> dict:
+    """★#436★ offset 으로 끝까지 훑을 수 있다(분석용 전량 내보내기). 응답에 total · next_offset(끝이면 null) 이 덧붙는다 — 예전 키 items 는 그대로.
+    순서는 «라벨 시각 최신순» 이라 훑는 사이 라벨이 늘면 쪽 경계가 밀린다(중복은 id 로 거른다)."""
     await ensure_tables()
     async with _db.connect_db(_dbp(), _busy_s()) as db:
-        items = await _cluster_items(db, tenant, "c.status IN ('labeled','bad')", (), "c.labeled_at DESC, c.id DESC", lim)
-    return {"items": items}
+        items = await _cluster_items(db, tenant, "c.status IN ('labeled','bad')", (), "c.labeled_at DESC, c.id DESC", lim, offset)
+        cur = await db.execute("SELECT COUNT(*) FROM ocr_cluster WHERE tenant=? AND status IN ('labeled','bad')", (tenant,))
+        total = int((await cur.fetchone())[0])
+    nxt = offset + len(items)
+    return {"items": items, "total": total, "offset": offset, "next_offset": nxt if items and nxt < total else None}
+
+
+def _offset(v, strict: bool) -> int:
+    """offset: 0 이상 정수. 팜뷰(strict)는 틀리면 400, 화면은 0 으로."""
+    if v in (None, ""):
+        return 0
+    try:
+        n = int(str(v).strip())
+        if n < 0 or n > 10 ** 9:
+            raise ValueError
+        return n
+    except (TypeError, ValueError):
+        if strict:
+            raise OcrError(400, "offset 은 0 이상의 정수여야 합니다")
+        return 0
 
 
 async def stats_core(tenant: str) -> dict:
@@ -1623,6 +1669,8 @@ async def stats_core(tenant: str) -> dict:
                                "WHERE i.tenant=? AND c.status='labeled'", (tenant,))
         for site, gm, lc, lb in await cur.fetchall():
             d, want = S(site), norm_answer(lb)
+            if site == _MAP_SITE and isinstance(gm, str):
+                gm = _snap_names.snap(gm.strip())      # ★#436★ 매크로는 snap 한 값을 쓴다 — 원문 한 글자 오독이 불일치로 안 세어지게
             for k, v in (("gemini", gm), ("local", lc)):
                 if norm_answer(v):
                     d[k + "_compared"] += 1
@@ -1739,8 +1787,8 @@ async def ocr_undo(request: Request):
 
 
 @router.get("/ocr/history")
-async def ocr_history(request: Request, limit: str = "30"):
-    return await _web_call(request, lambda t: history_core(t, _limit(limit, 30, 200, False)))
+async def ocr_history(request: Request, limit: str = "30", offset: str = "0"):
+    return await _web_call(request, lambda t: history_core(t, _limit(limit, 30, OCR_HISTORY_MAX, False), _offset(offset, False)))
 
 
 @router.get("/ocr/stats")
@@ -1806,8 +1854,8 @@ async def fv_ocr_restore_site(request: Request):
 
 
 @router.get("/api/fv/ocr/history")
-async def fv_ocr_history(request: Request, limit: str = "30"):
-    return await _fv_call(request, lambda t: history_core(t, _limit(limit, 30, 200, True)))
+async def fv_ocr_history(request: Request, limit: str = "30", offset: str = "0"):
+    return await _fv_call(request, lambda t: history_core(t, _limit(limit, 30, OCR_HISTORY_MAX, True), _offset(offset, True)))
 
 
 @router.get("/api/fv/ocr/stats")

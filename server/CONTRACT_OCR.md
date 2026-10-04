@@ -143,3 +143,10 @@
 ## #417 site 치우기 · 대기 상한 (2026-10-03)
 - `POST /ocr/dismiss_site {site}` (세션) — 그 site 의 대기(pending) 묶음 전부 → `dismissed`. 라벨·나쁨 통계에 안 세고 매크로 `/ocr/labels` 에도 안 나간다. 파일은 디스크 부족 때 나쁨·auto 처럼 먼저 비운다. `POST /ocr/restore_site {site}` 가 되돌린다. 둘 다 멱등.
 - site 별 대기 상한 `OCR_SITE_PENDING_CAP`(기본 300, 0=끔): 넘으면 *새 묶음만* `dup:"dropped"`(200)로 버리고 `sites[].dropped` 에 센다(메모리 · 재배포 때 0). 이미 있는 묶음에 붙는 제출은 그대로 받는다.
+
+
+## #436 (2026-10-04) 분석용 서버 변경
+- `GET /ocr/history`·`/api/fv/ocr/history` — `offset` 쪽매김. 응답에 `total`·`offset`·`next_offset`(끝이면 null) 덧붙음(예전 키 `items` 그대로). limit 상한 200 → 500.
+- `norm_answer` — 끝의 `%` 무시(진행도 «25» == «25%»). 불일치율·#228 믿음 판정 모두 같은 함수.
+- `/ocr/stats` — 맵 이름 site(`analytics_py__map_loop`)의 제미나이 답은 매크로 snap(`ocr_names.snap` = lc/map_names.py 사본, tests/test_ocr_436.py 가 같은지 지킴) 뒤 값으로 라벨과 비교.
+- 자동 닫기(auto) 사이트 추가: `awakening_py__read_objective`(3문구)·`awakening_py__read_diff_label`(7이름) — 공백 무시 정확 일치만, 라벨은 정식 표기. 목록 밖·빈 답은 pending. 맵 이름은 예전처럼 글자 그대로(strip 만).
