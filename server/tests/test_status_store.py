@@ -13,7 +13,7 @@ import tempfile
 from _harness import main, ok, Req, run_all, finish   # noqa: E402
 import database as D                                   # noqa: E402
 
-MIN_CHECKS = 29
+MIN_CHECKS = 33
 
 
 def _rows(sql, args=()):
@@ -81,12 +81,15 @@ async def t_store():
         D.PC_PERSIST_MAX_S = 60.0
         await D.flush_statuses()
 
-        # 사망 전환은 바로 DB + death_events
+        # 사망 전환: 화면(메모리)이 먼저, 저장은 뒤에서
         await D.upsert_status("PC-A", {"status": "dead"})
-        ok("S432d-i ★사망 전환은 바로 DB 에(행 + death_events 1건) — flush 를 기다리지 않는다★",
+        ok("S432d-i ★사망 전환은 메모리에 즉시 반영된다(DB 쓰기를 기다리지 않는다)★", (await D.get_status("PC-A"))["status"] == "dead")
+        await asyncio.gather(*list(D._BG))
+        ok("S432d-i2 뒤에서 행 + death_events 1건이 저장된다",
            json.loads(_rows("SELECT data FROM pc_status WHERE pc_id='PC-A'")[0][0])["status"] == "dead"
            and _rows("SELECT COUNT(*) FROM death_events WHERE pc_id='PC-A'")[0][0] == 1 and "PC-A" not in D._ST_DIRTY)
         await D.upsert_status("PC-A", {"status": "dead"})
+        await asyncio.gather(*list(D._BG))
         ok("S432d-j 계속 dead 인 반복 보고는 사망 이벤트를 또 만들지 않는다", _rows("SELECT COUNT(*) FROM death_events WHERE pc_id='PC-A'")[0][0] == 1)
 
         # 삭제
@@ -180,6 +183,59 @@ async def t_held():
         ok("S432e-h database.py 의 모든 연결이 connect_db 를 거친다(남은 직접 연결은 래퍼 자신뿐)", len(left) == 1, str(left))
 
 
+async def t_433():
+    """#433 — PC-06 사망이 대시보드에 20초+ 늦던 원인: 상태 처리가 DB 쓰기 잠금을 기다렸다(사망 전환 쓰기·오류 줄 저장·어비스 설정 저장)."""
+    import time as _t
+    with _Fresh():
+        await D.init_db()
+        await D.upsert_status("PC-D", {"status": "hunting"})
+        await D.flush_statuses()
+        D.DB_BUSY_S_OLD = D.DB_BUSY_S
+        D.DB_BUSY_S = 3.0
+        hold = sqlite3.connect(D.DB_PATH, isolation_level=None)
+        hold.execute("BEGIN IMMEDIATE")                    # 다른 쓰기가 잠금을 쥔 상황
+        try:
+            t0 = _t.monotonic()
+            await D.upsert_status("PC-D", {"status": "dead"})
+            dt = _t.monotonic() - t0
+            ok("S433-a ★남이 쓰기 잠금을 쥐고 있어도 사망 전환 보고는 즉시 돌아온다(<0.3초)★", dt < 0.3, "%.2f" % dt)
+            ok("S433-b 화면(읽기)은 바로 dead", (await D.get_status("PC-D"))["status"] == "dead")
+        finally:
+            hold.execute("ROLLBACK")
+            hold.close()
+        await asyncio.gather(*list(D._BG))
+        ok("S433-c 잠금이 풀리면 뒤에서 저장이 끝난다(사망 이벤트 1건)",
+           _rows("SELECT COUNT(*) FROM death_events WHERE pc_id='PC-D'")[0][0] == 1, str(D.st_stats()))
+        D.DB_BUSY_S = D.DB_BUSY_S_OLD
+
+
+async def t_433_ws():
+    import time as _t
+    import test_ws_dblock as W
+    seen = []
+    old_il = W.main.insert_log
+
+    async def slow_insert_log(pc, lvl, msg, *a, **k):
+        await asyncio.sleep(2.0)
+        seen.append(msg)
+
+    async def fast_up(pc, payload):
+        seen.append("status")
+
+    W.main.insert_log = slow_insert_log
+    try:
+        msgs = [json.dumps({"type": "status", "payload": {"status": "dead", "errors": ["사망", "x"]}}),
+                json.dumps({"type": "pong"})]
+        t0 = _t.monotonic()
+        ws = await W._drive(msgs, fast_up)
+        dt = _t.monotonic() - t0
+    finally:
+        W.main.insert_log = old_il
+    ok("S433-d ★오류 줄 저장이 느려도(2초) 상태 처리·다음 메시지는 기다리지 않는다★", "status" in seen and not ws.msgs and dt < 1.5, "%.2f %s" % (dt, seen))
+    import inspect
+    ok("S433-e 어비스 설정 저장은 상태 처리에서 기다리지 않는다(백그라운드)", "ensure_future(_abyss_persist())" in inspect.getsource(W.main._abyss_note))
+
+
 async def t_diag():
     import inspect
     ok("S432d-s /diag/perf 에 status_store", '"status_store"' in inspect.getsource(main.diag_perf))
@@ -199,7 +255,7 @@ async def t_diag():
 
 
 def test_all():
-    run_all([t_store, t_held, t_diag])
+    run_all([t_store, t_held, t_433, t_433_ws, t_diag])
     finish("test_status_store", MIN_CHECKS)
 
 

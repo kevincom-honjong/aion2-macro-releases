@@ -214,7 +214,7 @@ async def t_432b():
     finally:
         D.DB_PATH = old_path
     src = inspect_src(main.macro_websocket)
-    ok("W432b-e 상태 갈래가 단계별로 잰다(ws_st_upsert·abyss·push)", all(k in src for k in ("ws_st_upsert", "ws_st_abyss", "ws_st_push", "ws_st_errlog")))
+    ok("W432b-e 상태 갈래가 단계별로 잰다(ws_st_upsert·abyss·push)", all(k in src for k in ("ws_st_upsert", "ws_st_abyss", "ws_st_push")))
     ok("W432b-f /diag/perf 에 db_timing", '"db_timing"' in inspect_src(main.diag_perf))
 
 

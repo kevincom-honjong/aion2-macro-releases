@@ -12029,11 +12029,11 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                         await _abyss_note(nspc, payload)    # ★어비스 수익 오늘 합계(2026-09-23 장부 #104)★
                         _perf_note("ws_st_abyss", (time.monotonic() - _ts) * 1000)
                         errors = payload.get("errors") or []
-                        _ts = time.monotonic()
-                        for e in errors[:3]:
-                            await insert_log(nspc, "warn", str(e))
-                        if errors:
-                            _perf_note("ws_st_errlog", (time.monotonic() - _ts) * 1000)
+                        if errors:      # ★#433★ 오류 줄 저장은 로그 일꾼에게 — 상태 처리가 DB 쓰기 잠금을 기다리지 않는다
+                            try:
+                                _logq.put_nowait({"type": "log", "logs": [{"level": "warn", "message": str(e)} for e in errors[:3]]})
+                            except asyncio.QueueFull:
+                                pass
                         _ts = time.monotonic()
                         await push_state(tenant)
                         _perf_note("ws_st_push", (time.monotonic() - _ts) * 1000)
@@ -17779,11 +17779,16 @@ def _abyss_ingest(nspc: str, data: dict, now: float = None) -> str:
     return how
 
 
+_ABYSS_BG: set = set()
+
+
 async def _abyss_note(nspc: str, data: dict) -> None:
     """/report·WS status 두 입구에서 부른다. 구간이 바뀐(은행 입금) 때만 바로 저장, 나머지는 모아서."""
     try:
         if _abyss_ingest(nspc, data) == "bank":
-            await _abyss_persist()
+            _t = asyncio.ensure_future(_abyss_persist())      # ★#433★ 상태 처리가 설정 저장(DB 쓰기)을 기다리지 않는다
+            _ABYSS_BG.add(_t)
+            _t.add_done_callback(_ABYSS_BG.discard)
     except Exception as e:
         print(f"[어비스] 수익 집계 실패(보고는 저장됨): {nspc} {e}")
 

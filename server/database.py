@@ -358,6 +358,21 @@ def _st_sig(data: dict) -> str:
     return json.dumps({k: v for k, v in data.items() if k not in _ST_VOLATILE}, ensure_ascii=False, sort_keys=True, default=str)
 
 
+_BG: set = set()          # 뒤에서 도는 저장 작업(가비지 수거 방지)
+
+
+async def _dead_write(pc_id: str, data: dict) -> None:
+    for i in range(3):
+        try:
+            await _upsert_status_db(pc_id, data)
+            return
+        except Exception as e:
+            ST_STATS["last_err"] = "dead_write %s: %s" % (e.__class__.__name__, str(e)[:80])
+            await asyncio.sleep(2 * (i + 1))
+    if pc_id in _ST_MEM:
+        _ST_DIRTY.add(pc_id)            # 사망 이벤트는 놓쳤어도 행은 flush 가 저장한다
+
+
 async def upsert_status(pc_id: str, data: dict) -> None:
     if PC_FLUSH_S <= 0:
         return await _upsert_status_db(pc_id, data)
@@ -371,11 +386,15 @@ async def upsert_status(pc_id: str, data: dict) -> None:
     else:
         prev_exists, prev_status = True, mem["status"]
     if prev_exists and prev_status != "dead" and data.get("status") == "dead":
+        # ★#433★ 사망 전환: 화면(메모리)이 먼저, 사망 이벤트+행 저장은 ★뒤에서★ — 예전엔 여기서 DB 쓰기 잠금을 기다려
+        #   (최대 30초×재시도) 그 소켓의 다음 메시지·화면 갱신이 같이 멈췄다. 저장이 끝내 실패하면 dirty 로 넘겨 flush 가 행을 저장한다.
         ST_STATS["write_through"] += 1
-        await _upsert_status_db(pc_id, data)           # 사망 이벤트는 바로 — 같은 트랜잭션
-        _ST_DIRTY.discard(pc_id)
         _ST_MEM[pc_id] = {"data": json.dumps(data, ensure_ascii=False), "at": _now(), "status": "dead",
                           "sig": _st_sig(data), "saved": time.monotonic()}
+        _ST_DIRTY.discard(pc_id)
+        t = asyncio.ensure_future(_dead_write(pc_id, data))
+        _BG.add(t)
+        t.add_done_callback(_BG.discard)
         return
     sig = _st_sig(data)
     now_m = time.monotonic()
