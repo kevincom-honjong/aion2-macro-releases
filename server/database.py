@@ -140,6 +140,12 @@ def connect_db(path: str | None = None, timeout: float | None = None):
 HOT_DB = os.getenv("HOT_DB", "1").strip() != "0"
 HOT_DB_PATH = os.getenv("HOT_DB_PATH", "/tmp/hot.db")
 HOT_STATE: dict = {"fallback": None}      # 부팅 때 /tmp 를 못 열어 단일 DB 로 떨어졌으면 까닭
+HOT_SNAP_S = float(os.getenv("HOT_SNAP_S", "300"))       # ★#438-b★ 뜨거운 상태 표를 /data 로 되적는 주기(초). 0 = 끔
+HOT_SNAP: dict = {"runs": 0, "skipped_busy": 0, "last_at": None, "last_rows": 0, "last_ms": None, "max_ms": 0.0, "last_err": None,
+                  "running": False, "unchanged_skipped": 0}
+HOT_SEED: dict = {"done": False, "runs": 0, "rows": 0, "ms": None, "err": None, "at": None, "skipped_deleted": 0}
+_SNAP_LAST: dict = {}          # {("pc_status"|"updater_status", pc_id): (data, updated_at)} — 마지막으로 /data 에 적은(또는 시드로 읽은) 값
+_DELETED_IDS: set = set()      # 이번 부팅 중 지운 카드 — 시드가 /data 의 옛 행으로 되살리지 않게
 
 
 def hot_path() -> str:
@@ -225,8 +231,124 @@ def db_files() -> dict:
         "main": {"path": DB_PATH, "bytes": _fsize(DB_PATH), "tables": "commands settings ledgers(kina_*·char_info) pc_clock … (+ HOT_DB=0 이면 아래 넷도)", "write_txns": tm("main")},
         "hot": {"enabled": HOT_DB, "path": hp, "bytes": _fsize(hp), "wal_bytes": _fsize(hp + "-wal"),
                 "tables": "logs pc_status updater_status death_events", "write_txns": tm("hot"),
-                "fallback": HOT_STATE["fallback"], "env": {"HOT_DB": os.getenv("HOT_DB", "(기본 1)"), "HOT_DB_PATH": HOT_DB_PATH}},
+                "fallback": HOT_STATE["fallback"], "env": {"HOT_DB": os.getenv("HOT_DB", "(기본 1)"), "HOT_DB_PATH": HOT_DB_PATH, "HOT_SNAP_S": HOT_SNAP_S},
+                "snapshot": dict(HOT_SNAP), "seed": dict(HOT_SEED)},
     }
+
+
+_STATUS_TABLES = ("pc_status", "updater_status")
+
+
+async def seed_hot_from_main() -> int:
+    """★#438-b★ 부팅 뒤 백그라운드로 — /data 의 pc_status·updater_status 를 뜨거운 DB 로 복사한다.
+    /tmp 는 배포마다 비므로 보고가 없는 카드(매크로 꺼진 PC·b/c/d 계정 카드)는 이 복사가 없으면 대시보드에서 사라진다.
+    이미 뜨거운 DB 에 있는 행이 더 새로우면(updated_at) 그쪽이 이긴다. 메모리 상태는 getter 가 따로 덮으므로 건드리지 않는다."""
+    if not HOT_DB:
+        return 0
+    t0 = time.monotonic()
+    HOT_SEED["runs"] += 1
+    try:
+        got: dict = {}
+        async with connect_db() as mdb:
+            mdb.row_factory = aiosqlite.Row
+            for tb in _STATUS_TABLES:
+                async with mdb.execute("SELECT pc_id, data, updated_at FROM %s" % tb) as cur:
+                    got[tb] = [(r["pc_id"], r["data"], r["updated_at"]) for r in await cur.fetchall()]
+        n = 0
+        async with connect_hot() as hdb:
+            for tb in _STATUS_TABLES:
+                rows = []
+                for pid, data, at in got[tb]:
+                    if pid in _DELETED_IDS:
+                        HOT_SEED["skipped_deleted"] += 1
+                        continue
+                    rows.append((pid, data, at))
+                    _SNAP_LAST[(tb, pid)] = (data, at)        # 방금 /data 에서 읽은 값 — 되적을 필요 없다
+                if rows:
+                    await hdb.executemany(
+                        "INSERT INTO %s(pc_id, data, updated_at) VALUES(?,?,?) "
+                        "ON CONFLICT(pc_id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at "
+                        "WHERE excluded.updated_at > %s.updated_at" % (tb, tb), rows)
+                    n += len(rows)
+            await hdb.commit()
+        read_cache_clear()                                    # 읽기 캐시에 «빈 목록» 이 남아 있으면 10초 더 안 보인다
+        HOT_SEED.update(done=True, rows=n, ms=round((time.monotonic() - t0) * 1000, 1), err=None, at=_now())
+        print(f"[DB] 뜨거운 DB 시드: /data 에서 상태 {n}행 복사 ({HOT_SEED['ms']} ms)", flush=True)
+        return n
+    except Exception as e:
+        HOT_SEED["err"] = "%s: %s" % (e.__class__.__name__, str(e)[:120])
+        HOT_SEED["ms"] = round((time.monotonic() - t0) * 1000, 1)
+        print(f"[DB] 뜨거운 DB 시드 실패: {HOT_SEED['err']}", flush=True)
+        return -1
+
+
+async def seed_hot_task() -> None:
+    """성공할 때까지 30초 간격으로 다시(최대 20번). 앱이 뜬 뒤 백그라운드 — 헬스체크를 늦추지 않는다."""
+    try:
+        for _ in range(20):
+            if await seed_hot_from_main() >= 0:
+                return
+            await asyncio.sleep(30)
+    except asyncio.CancelledError:
+        pass
+
+
+async def snapshot_hot_to_main() -> int:
+    """★#438-b★ 뜨거운 pc_status·updater_status 를 /data 로 한 트랜잭션 upsert — 다음 배포가 이 값으로 카드를 되살린다.
+    이전 실행이 아직 돌면 건너뛴다. 바뀌지 않은 행((data, updated_at) 같음)은 쓰지 않는다. 요청·WS 경로에서는 부르지 않는다."""
+    if not HOT_DB:
+        return 0
+    if HOT_SNAP["running"]:
+        HOT_SNAP["skipped_busy"] += 1
+        return 0
+    HOT_SNAP["running"] = True
+    t0 = time.monotonic()
+    try:
+        await flush_statuses()                                # 메모리에만 있는 행도 먼저 뜨거운 DB 로
+        rows: dict = {}
+        async with connect_hot() as hdb:
+            hdb.row_factory = aiosqlite.Row
+            for tb in _STATUS_TABLES:
+                async with hdb.execute("SELECT pc_id, data, updated_at FROM %s" % tb) as cur:
+                    rows[tb] = [(r["pc_id"], r["data"], r["updated_at"]) for r in await cur.fetchall()]
+        todo = {}
+        for tb in _STATUS_TABLES:
+            todo[tb] = [r for r in rows[tb] if _SNAP_LAST.get((tb, r[0])) != (r[1], r[2])]
+        n = sum(len(v) for v in todo.values())
+        HOT_SNAP["unchanged_skipped"] += sum(len(v) for v in rows.values()) - n
+        if n:
+            async with connect_db() as mdb:
+                for tb in _STATUS_TABLES:
+                    if todo[tb]:
+                        await mdb.executemany(
+                            "INSERT INTO %s(pc_id, data, updated_at) VALUES(?,?,?) "
+                            "ON CONFLICT(pc_id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at" % tb, todo[tb])
+                await mdb.commit()
+            for tb in _STATUS_TABLES:
+                for pid, data, at in todo[tb]:
+                    _SNAP_LAST[(tb, pid)] = (data, at)
+        ms = round((time.monotonic() - t0) * 1000, 1)
+        HOT_SNAP.update(runs=HOT_SNAP["runs"] + 1, last_at=_now(), last_rows=n, last_ms=ms, max_ms=max(HOT_SNAP["max_ms"], ms), last_err=None)
+        return n
+    except Exception as e:
+        HOT_SNAP["last_err"] = "%s: %s" % (e.__class__.__name__, str(e)[:120])
+        HOT_SNAP["last_ms"] = round((time.monotonic() - t0) * 1000, 1)
+        return -1
+    finally:
+        HOT_SNAP["running"] = False
+
+
+async def hot_snapshot_loop() -> None:
+    if not HOT_DB or HOT_SNAP_S <= 0:
+        return
+    try:
+        while True:
+            await asyncio.sleep(HOT_SNAP_S)
+            t = asyncio.ensure_future(snapshot_hot_to_main())      # 느린 볼륨에서 한 번이 30~90초 — 다음 바퀴를 막지 않는다(겹치면 건너뜀)
+            _BG.add(t)
+            t.add_done_callback(_BG.discard)
+    except asyncio.CancelledError:
+        pass
 
 
 async def keeper_open() -> None:
@@ -790,6 +912,8 @@ async def delete_status(pc_id: str) -> None:
     _ST_MEM.pop(pc_id, None)
     _ST_DIRTY.discard(pc_id)
     read_cache_clear("pc_status")
+    _DELETED_IDS.add(pc_id)
+    _SNAP_LAST.pop(("pc_status", pc_id), None)
     async with connect_hot() as db:
         await db.execute("DELETE FROM pc_status WHERE pc_id=?", (pc_id,))
         await db.commit()
@@ -802,6 +926,9 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     _UPD_MEM.pop(pc_id, None)
     _UPD_DIRTY.discard(pc_id)
     read_cache_clear()                                  # ★#435★ 방송 조립용 읽기 캐시 전부
+    _DELETED_IDS.add(pc_id)                             # ★#438-b★ 시드가 /data 의 옛 행으로 되살리지 않게
+    for _tb in _STATUS_TABLES:
+        _SNAP_LAST.pop((_tb, pc_id), None)
     _LOG_BUF[:] = [r for r in _LOG_BUF if r[0] not in (pc_id, pc_id + ".upd")]      # ★#434★ 버퍼의 줄이 지운 뒤 되살아나지 않게
     # ★#438★ 뜨거운 표(로컬 파일)와 주 DB 는 연결을 따로 — HOT_DB=0 이면 둘이 같은 파일이라 예전과 같다.
     async with connect_hot() as hdb:
@@ -816,6 +943,8 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
         await hdb.commit()
         _char_info_bump()                  # 커밋 바로 뒤 — (SF-10) 안 지우는 표여도 세대는 한 번 더 올려도 무해
     async with connect_db() as db:
+        await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))        # ★#438-b★ /data 에 되적어 둔 사본도(다음 배포 시드가 되살리지 않게)
+        await db.execute("DELETE FROM updater_status   WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM commands         WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM updater_commands WHERE pc_id=?", (pc_id,))
         await db.execute("DELETE FROM char_info        WHERE pc_id=?", (pc_id,))

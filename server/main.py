@@ -1612,6 +1612,8 @@ async def lifespan(app: FastAPI):
     stflush_task = asyncio.create_task(_database_mod.status_flush_loop())   # #432-d 상태 보고 모아 저장
     logflush_task = asyncio.create_task(_database_mod.log_flush_loop())     # #434 WS 로그 모아 저장
     await _database_mod.keeper_open()                                       # #434 마지막 연결 닫힘 체크포인트 방지
+    seed_task = asyncio.create_task(_database_mod.seed_hot_task())          # #438-b /data 상태 표 → 뜨거운 DB (앱이 뜬 뒤 백그라운드)
+    snap_task = asyncio.create_task(_database_mod.hot_snapshot_loop())      # #438-b 5분마다 뜨거운 상태 표 → /data
     try:
         yield
     finally:
@@ -1623,13 +1625,17 @@ async def lifespan(app: FastAPI):
                   f"mem_last={_MEM_SERIES[-1] if _MEM_SERIES else None}", flush=True)
         except Exception:
             pass
-        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task, stflush_task, logflush_task):
+        for _t in (tg_task, rot_task, eff_task, wd_task, lan_task, maint_task, abyss_task, bugsweep_task, ka_task, scout_task, stflush_task, logflush_task, seed_task, snap_task):
             if _t:
                 _t.cancel()
                 try:
                     await _t
                 except (asyncio.CancelledError, Exception):
                     pass
+        try:
+            await asyncio.wait_for(_database_mod.snapshot_hot_to_main(), 6)     # #438-b 종료 전 한 번 — 다음 배포가 더 새 카드로 시작(느리면 포기)
+        except Exception:
+            pass
         try:
             await _database_mod.flush_statuses()      # #432-d 모아 둔 상태 보고를 종료 전에 한 번 더 저장
         except Exception as _fe:

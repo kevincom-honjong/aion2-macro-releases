@@ -16,7 +16,7 @@ import tempfile
 
 from _harness import main, db as D, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 25
+MIN_CHECKS = 38
 HOT_T = ("logs", "pc_status", "updater_status", "death_events")
 
 
@@ -54,6 +54,8 @@ class Cfg:
         D.HOT_STATE["fallback"] = None
         D._LOG_BUF.clear()
         D.HELD_FILE.clear()
+        D._SNAP_LAST.clear(); D._DELETED_IDS.clear()
+        D.HOT_SEED.update(done=False, rows=0, err=None, runs=0, skipped_deleted=0); D.HOT_SNAP.update(runs=0, skipped_busy=0, last_rows=0, last_err=None, running=False, unchanged_skipped=0)
         return self
 
     def __exit__(self, *a):
@@ -235,8 +237,109 @@ async def t_no_cross_file_sql():
     ok("H-25 ★뜨거운 연결로 장부·명령·설정 표를 건드리는 함수가 없다★", not cold_in_hot, str(cold_in_hot))
 
 
+def _put(path, table, pid, data, at):
+    c = sqlite3.connect(path)
+    try:
+        c.execute("INSERT OR REPLACE INTO %s(pc_id, data, updated_at) VALUES(?,?,?)" % table, (pid, data, at))
+        c.commit()
+    finally:
+        c.close()
+
+
+def _get(path, table, pid):
+    c = sqlite3.connect(path)
+    try:
+        return c.execute("SELECT data, updated_at FROM %s WHERE pc_id=?" % table, (pid,)).fetchone()
+    finally:
+        c.close()
+
+
+async def t_seed_and_snapshot():
+    import json
+    with Cfg(True) as c:
+        await D.init_db()
+        # /data 에만 있는 카드들(매크로 꺼진 PC · b/c/d 계정 카드) — 옛 배포가 남긴 사본
+        for pid in ("PC-02", "PC-03", "PC-04b"):
+            _put(c.main, "pc_status", pid, json.dumps({"pc_id": pid, "status": "idle"}), "2026-10-04T10:00:00")
+        _put(c.main, "updater_status", "PC-02", json.dumps({"pc_id": "PC-02", "macro_state": "off"}), "2026-10-04T10:00:00")
+        _put(c.main, "pc_status", "PC-LIVE", json.dumps({"pc_id": "PC-LIVE", "status": "old"}), "2026-10-04T09:00:00")
+        _put(c.main, "pc_status", "PC-NEWMAIN", json.dumps({"pc_id": "PC-NEWMAIN", "status": "main-newer"}), "2026-10-04T12:00:00")
+        _put(c.main, "pc_status", "PC-GONE", json.dumps({"pc_id": "PC-GONE", "status": "idle"}), "2026-10-04T10:00:00")
+        # 배포 후 라이브로 들어온 행(뜨거운 DB 에 더 새로운 값)
+        _put(c.hot, "pc_status", "PC-LIVE", json.dumps({"pc_id": "PC-LIVE", "status": "live"}), "2026-10-04T14:50:00")
+        _put(c.hot, "pc_status", "PC-NEWMAIN", json.dumps({"pc_id": "PC-NEWMAIN", "status": "hot-older"}), "2026-10-04T08:00:00")
+        D._DELETED_IDS.add("PC-GONE")                      # 부팅 뒤 지운 카드는 되살리지 않는다
+        D.read_cache_clear()
+        before = [x["pc_id"] for x in await D.get_all_statuses()]
+        n = await D.seed_hot_from_main()
+        names = [x["pc_id"] for x in await D.get_all_statuses()]
+        ok("H-26 ★시드 전엔 /data 전용 카드가 안 보인다(재현) · 시드 뒤엔 전부 보인다(읽기 캐시 갱신)★",
+           "PC-02" not in before and {"PC-02", "PC-03", "PC-04b", "PC-LIVE", "PC-NEWMAIN"} <= set(names), str((before, names)))
+        ok("H-27 시드가 /data 의 상태·업데이터 상태 행을 전부 복사(되살리지 말 것은 제외)",
+           _get(c.hot, "pc_status", "PC-04b") and _get(c.hot, "updater_status", "PC-02") and _get(c.hot, "pc_status", "PC-GONE") is None
+           and D.HOT_SEED["done"] and D.HOT_SEED["rows"] == n == 6 and D.HOT_SEED["skipped_deleted"] >= 1, str((n, D.HOT_SEED)))
+        ok("H-28 ★라이브 행(더 새 updated_at)이 시드된 옛 행을 이긴다 · 반대로 /data 가 더 새로우면 /data 가★",
+           json.loads(_get(c.hot, "pc_status", "PC-LIVE")[0])["status"] == "live"
+           and json.loads(_get(c.hot, "pc_status", "PC-NEWMAIN")[0])["status"] == "main-newer")
+        D._ST_MEM["PC-MEM"] = {"data": json.dumps({"pc_id": "PC-MEM", "status": "hunting"}), "at": "2026-10-04T15:00:00", "status": "hunting",
+                               "sig": "x", "saved": 0.0}
+        D._ST_DIRTY.add("PC-MEM")
+        got = {x["pc_id"]: x for x in await D.get_all_statuses()}
+        ok("H-29 메모리 상태는 시드가 덮지 않는다(getter 가 메모리를 위에)", got["PC-MEM"]["status"] == "hunting" and got["PC-LIVE"]["status"] == "live")
+        # ── 스냅샷
+        _put(c.hot, "pc_status", "PC-S1", json.dumps({"pc_id": "PC-S1", "status": "hunting"}), "2026-10-04T15:01:00")
+        _put(c.hot, "updater_status", "PC-S1", json.dumps({"pc_id": "PC-S1", "v": "3"}), "2026-10-04T15:01:00")
+        w = await D.snapshot_hot_to_main()
+        ok("H-30 ★스냅샷이 뜨거운 상태 표를 /data 로 upsert(한 트랜잭션) · 시드로 읽은 그대로인 행은 안 쓴다★",
+           w >= 3 and _get(c.main, "pc_status", "PC-S1") and _get(c.main, "updater_status", "PC-S1")
+           and json.loads(_get(c.main, "pc_status", "PC-LIVE")[0])["status"] == "live"
+           and json.loads(_get(c.main, "pc_status", "PC-MEM")[0])["status"] == "hunting", str((w, D.HOT_SNAP)))
+        ok("H-31 스냅샷 통계: 시각·행·ms", D.HOT_SNAP["runs"] == 1 and D.HOT_SNAP["last_at"] and D.HOT_SNAP["last_rows"] == w
+           and D.HOT_SNAP["last_ms"] is not None and D.HOT_SNAP["last_err"] is None)
+        w2 = await D.snapshot_hot_to_main()
+        ok("H-32 두 번째는 바뀐 게 없으면 0행(쓰기 없음)", w2 == 0 and D.HOT_SNAP["unchanged_skipped"] > 0, str(D.HOT_SNAP))
+        D.HOT_SNAP["running"] = True
+        w3 = await D.snapshot_hot_to_main()
+        D.HOT_SNAP["running"] = False
+        ok("H-33 ★이전 실행이 도는 중이면 건너뛴다★", w3 == 0 and D.HOT_SNAP["skipped_busy"] == 1)
+        # 이전 스냅샷이 끝나기 전 쓰기 경로는 안 막힌다: 스냅샷 중에도 상태 upsert 가 바로 끝난다
+        async def slow_snap():
+            await D.snapshot_hot_to_main()
+        _put(c.hot, "pc_status", "PC-S2", json.dumps({"pc_id": "PC-S2"}), "2026-10-04T15:05:00")
+        t = asyncio.ensure_future(slow_snap())
+        await D.upsert_status("PC-S3", {"status": "idle"})
+        await t
+        ok("H-34 스냅샷은 백그라운드 — 동시에 상태 upsert 도 완료", (await D.get_status("PC-S3")) is not None and _get(c.main, "pc_status", "PC-S2") is not None)
+        # 카드 삭제는 /data 사본도 지운다(다음 배포 시드가 되살리지 않게)
+        await D.delete_pc_all_data("PC-S1")
+        ok("H-35 ★카드 삭제가 /data 의 상태 사본까지 지우고 시드 대상에서도 뺀다★",
+           _get(c.main, "pc_status", "PC-S1") is None and _get(c.main, "updater_status", "PC-S1") is None and "PC-S1" in D._DELETED_IDS)
+        f = D.db_files()["hot"]
+        ok("H-36 db_files 에 스냅샷·시드 통계", f["snapshot"]["runs"] >= 2 and "last_at" in f["snapshot"] and f["seed"]["done"] is True
+           and "HOT_SNAP_S" in f["env"], str(f)[:300])
+        await D.snapshot_hot_to_main()                     # PC-S3 처럼 스냅샷 뒤에 들어온 행도 한 번 더 적힌다
+        # 재배포: 뜨거운 파일이 비어도 /data 사본으로 카드가 돌아온다
+        for suf in ("", "-wal", "-shm"):
+            if os.path.exists(c.hot + suf):
+                os.remove(c.hot + suf)
+        D._ST_MEM.clear(); D._ST_DIRTY.clear(); D._UPD_MEM.clear(); D._UPD_DIRTY.clear(); D._SNAP_LAST.clear(); D._DELETED_IDS.clear(); D.read_cache_clear()
+        await D.init_db()
+        await D.seed_hot_from_main()
+        names = {x.get("pc_id") for x in await D.get_all_statuses()}
+        ok("H-37 ★재배포(빈 /tmp) 후 시드 → 스냅샷으로 /data 에 적어 둔 카드가 돌아온다★",
+           {"PC-02", "PC-04b", "PC-LIVE", "PC-MEM", "PC-S2"} <= names and _get(c.hot, "pc_status", "PC-S3") is not None and "PC-S1" not in names and "PC-GONE" in names, str(names))
+    with Cfg(False) as c:
+        await D.init_db()
+        _put(c.main, "pc_status", "PC-X", json.dumps({"pc_id": "PC-X"}), "2026-10-04T10:00:00")
+        a = await D.seed_hot_from_main()
+        b = await D.snapshot_hot_to_main()
+        ok("H-38 ★HOT_DB=0: 시드·스냅샷은 아무것도 안 한다(예전 그대로)★",
+           a == 0 and b == 0 and D.HOT_SEED["runs"] == 0 and D.HOT_SNAP["runs"] == 0 and not os.path.exists(c.hot)
+           and [x["pc_id"] for x in await D.get_all_statuses()] == ["PC-X"])
+
+
 def test_all():
-    run_all([t_routing_on, t_routing_off, t_empty_hot_start, t_fallback, t_report, t_no_cross_file_sql])
+    run_all([t_routing_on, t_routing_off, t_empty_hot_start, t_fallback, t_report, t_no_cross_file_sql, t_seed_and_snapshot])
     finish("test_hot_db", MIN_CHECKS)
 
 
