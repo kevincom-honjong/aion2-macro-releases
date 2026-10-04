@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 50
+MIN_CHECKS = 66
 
 
 class Feed(FakeWS):
@@ -346,6 +346,80 @@ async def t_434():
     ok("W434-o WS 로그 갈래는 log_buffer_put 을 쓴다(insert_logs 직접 호출 없음)", "log_buffer_put" in src and "insert_logs(" not in src)
 
 
+async def t_435():
+    """#435 — 방송 조립 읽기 캐시(stale-while-revalidate) · 업데이터 상태 write-behind."""
+    import tempfile, os as _os, sqlite3 as _sq
+    old_path, old_rc = D.DB_PATH, D.READ_CACHE_S
+    D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "t3.db")
+    D.READ_CACHE_S = 5.0
+    try:
+        await D.init_db()
+        n = [0]
+
+        async def loader():
+            n[0] += 1
+            return [{"a": n[0]}]
+        v1 = await D.cached_read("k", loader)
+        v2 = await D.cached_read("k", loader)
+        ok("W435-a ★두 번째 읽기는 DB(loader)를 안 부른다 · 복사본을 준다★", n[0] == 1 and v1 == v2 and v1 is not v2, str(n))
+        v2[0]["a"] = 99
+        ok("W435-b 호출부가 고쳐도 캐시는 그대로", (await D.cached_read("k", loader))[0]["a"] == 1)
+        D._RC["k"][1] -= 10                       # 만료시킨다
+        v3 = await D.cached_read("k", loader)
+        ok("W435-c ★만료돼도 옛 값을 바로 준다(기다리지 않음)★", v3[0]["a"] == 1, str(v3))
+        await asyncio.sleep(0.05)
+        ok("W435-d 갱신은 뒤에서 끝난다 · 다음 읽기는 새 값", (await D.cached_read("k", loader))[0]["a"] == 2 and n[0] == 2, str(n))
+        D.read_cache_clear("k")
+        ok("W435-e 무효화하면 다시 읽는다", (await D.cached_read("k", loader))[0]["a"] == 3)
+        # 쓰는 쪽 무효화
+        await D.cached_read("char_info", loader)
+        D._char_info_bump()
+        ok("W435-f char_info 쓰기(bump)가 캐시를 비운다", "char_info" not in D._RC)
+        await D.cached_read("slot_filters", loader)
+        await D.upsert_slot_filters("PC-F", {"a": 1})
+        ok("W435-g 슬롯 필터 쓰기가 캐시를 비운다", "slot_filters" not in D._RC)
+        await D.cached_read("deaths", loader)
+        await D.delete_pc_all_data("PC-F")
+        ok("W435-h 카드 삭제는 전체 캐시를 비운다", not D._RC)
+        # 끄면 매번 읽는다
+        D.READ_CACHE_S = 0
+        m0 = n[0]
+        await D.cached_read("z", loader); await D.cached_read("z", loader)
+        ok("W435-i READ_CACHE_S=0 이면 매번 읽는다", n[0] == m0 + 2)
+        D.READ_CACHE_S = 5.0
+        # get_all_statuses: DB 몫은 캐시, 메모리 보고는 즉시 보인다
+        await D._upsert_status_db("PC-DB", {"status": "idle"})
+        a1 = await D.get_all_statuses()
+        await D._upsert_status_db("PC-DB2", {"status": "idle"})       # 캐시 뒤 DB 에만 생김
+        await D.upsert_status("PC-MEM", {"status": "hunting"})        # 메모리
+        a2 = await D.get_all_statuses()
+        ids2 = [x.get("pc_id") or x.get("_updated_at") for x in a2]
+        ok("W435-j ★메모리 보고(PC-MEM)는 캐시와 상관없이 바로 보인다 · DB 에만 새로 생긴 행은 캐시가 풀릴 때까지 안 보인다★",
+           any(x.get("status") == "hunting" for x in a2) and len(a2) == len(a1) + 1, "%d %d" % (len(a1), len(a2)))
+        # 업데이터 상태 write-behind
+        con = lambda: _sq.connect(D.DB_PATH)
+        await D.upsert_updater_status("PC-U", {"pc_id": "PC-U", "macro_state": "running", "updater_version": "3.1"})
+        ok("W435-k ★업데이터 보고는 DB 에 안 쓰고(메모리) 바로 읽힌다★",
+           con().execute("SELECT COUNT(*) FROM updater_status WHERE pc_id='PC-U'").fetchone()[0] == 0
+           and any(x.get("pc_id") == "PC-U" for x in await D.get_all_updater_statuses()))
+        await D.flush_statuses()
+        ok("W435-l flush 가 업데이터 행을 같은 트랜잭션으로 저장", con().execute("SELECT COUNT(*) FROM updater_status WHERE pc_id='PC-U'").fetchone()[0] == 1)
+        t_before = D._UPD_MEM["PC-U"]["at"]
+        await asyncio.sleep(1.1)
+        await D.upsert_updater_status("PC-U", {"pc_id": "PC-U", "macro_state": "running", "updater_version": "3.1"})
+        ok("W435-m ★같은 값 재보고는 저장 대상이 아니다(dirty 0) · 그래도 «받은 시각» 은 갱신★",
+           not D._UPD_DIRTY and D._UPD_MEM["PC-U"]["at"] > t_before and D.ST_STATS.get("upd_unchanged_skipped", 0) >= 1)
+        await D.upsert_updater_status("PC-U", {"pc_id": "PC-U", "macro_state": "stopped", "updater_version": "3.1"})
+        ok("W435-n 값이 바뀌면 저장 대상", "PC-U" in D._UPD_DIRTY)
+        await D.delete_pc_all_data("PC-U")
+        ok("W435-o 카드 삭제는 업데이터 메모리도 지운다", "PC-U" not in D._UPD_MEM and "PC-U" not in D._UPD_DIRTY)
+    finally:
+        D.DB_PATH, D.READ_CACHE_S = old_path, old_rc
+        D._UPD_MEM.clear(); D._UPD_DIRTY.clear(); D._ST_MEM.clear(); D._ST_DIRTY.clear(); D.read_cache_clear()
+    src = inspect_src(main._build_full_state_inner)
+    ok("W435-p 방송 조립은 char_info·slot_filters·deaths 를 cached_read 로 읽는다", src.count("cached_read(") >= 3, str(src.count("cached_read(")))
+
+
 async def t_432f():
     """#432-f — 하트비트(옛 last_active)는 지연 표본이 아니다: status 가 바뀐 보고만 recv/stored 로 센다."""
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
@@ -376,7 +450,7 @@ def inspect_src(f):
 
 
 def test_all():
-    run_all([t_all, t_432, t_432b, t_434, t_432f])
+    run_all([t_all, t_432, t_432b, t_434, t_435, t_432f])
     finish("test_ws_dblock", MIN_CHECKS)
 
 

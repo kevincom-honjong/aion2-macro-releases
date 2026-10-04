@@ -16,6 +16,7 @@ os.environ.setdefault("DB_PATH", os.path.join(_TMP, "t.db"))
 os.environ.setdefault("BUGS_DIR", os.path.join(_TMP, "bugs"))
 os.environ.setdefault("DASHBOARD_PASSWORD", "harness")
 os.environ.setdefault("API_KEY", "testkey")
+os.environ.setdefault("READ_CACHE_S", "0")          # #435 읽기 캐시는 끄고 시험한다(캐시 자체는 test_status_store 가 켜서 시험)
 os.environ.setdefault("TTS_DIR", os.path.join(_TMP, "tts"))
 
 SRV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

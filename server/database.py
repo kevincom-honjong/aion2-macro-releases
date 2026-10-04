@@ -175,6 +175,9 @@ def _finite(v):
 async def init_db() -> None:
     _ST_MEM.clear()
     _ST_DIRTY.clear()
+    _UPD_MEM.clear()
+    _UPD_DIRTY.clear()
+    read_cache_clear()
     _LOG_BUF.clear()
     async with connect_db() as db:
         await db.execute("PRAGMA journal_mode=WAL")
@@ -452,9 +455,55 @@ async def upsert_status(pc_id: str, data: dict) -> None:
     _ST_MEM[pc_id] = ent
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ★#435 (2026-10-04) 대시보드 방송 조립은 DB 를 기다리지 않는다★ — _build_full_state 가 방송마다(초당 ≤1) 표 5개를 읽었다
+#   (pc_status·updater_status·char_info·slot_filters·death_events, 연결 5개). 볼륨이 느린 구간에 그 읽기가 몇 초~20초 걸려
+#   «저장은 <1초인데 전달(send)만 20초» 가 됐다. 읽기 결과를 READ_CACHE_S 초 캐시하고, 만료되면 ★옛 값을 바로 주고 갱신은 뒤에서★(stale-while-revalidate).
+#   쓰는 쪽이 아는 곳은 즉시 무효화(char_info·slot_filters·death_events·카드 삭제). 상태·업데이터 상태는 메모리가 DB 위에 덮인다(아래).
+#   READ_CACHE_S=0 이면 끔(예전처럼 매번 읽음) — 시험 하네스는 0.
+READ_CACHE_S = float(os.getenv("READ_CACHE_S", "10"))
+_RC: dict = {}            # 키 → [값, 읽은 monotonic, 갱신 과제]
+RC_STATS: dict = {"hit": 0, "cold": 0, "refresh": 0, "refresh_err": 0}
+
+
+def read_cache_clear(*keys) -> None:
+    for k in (keys or list(_RC)):
+        _RC.pop(k, None)
+
+
+async def cached_read(key: str, loader):
+    """loader() 코루틴 함수의 결과를 캐시한다. 값은 복사해 준다(호출부가 고쳐 써도 캐시가 안 변하게)."""
+    if READ_CACHE_S <= 0:
+        return await loader()
+    import copy
+    e = _RC.get(key)
+    now = time.monotonic()
+    if e is None:
+        RC_STATS["cold"] += 1
+        v = await loader()
+        _RC[key] = [v, time.monotonic(), None]
+        return copy.deepcopy(v)
+    if now - e[1] >= READ_CACHE_S and (e[2] is None or e[2].done()):
+        async def _refresh(k=key, ent=e):
+            try:
+                v = await loader()
+                if _RC.get(k) is ent:          # 그 사이 무효화됐으면 버린다
+                    ent[0], ent[1] = v, time.monotonic()
+                RC_STATS["refresh"] += 1
+            except Exception:
+                RC_STATS["refresh_err"] += 1
+        e[2] = asyncio.ensure_future(_refresh())
+    RC_STATS["hit"] += 1
+    return copy.deepcopy(e[0])
+
+
+_UPD_MEM: dict = {}       # pc_id → {"data","at","sig","saved"} — 업데이터 상태 보고(30초마다, 거의 안 바뀜) 메모리 정본
+_UPD_DIRTY: set = set()
+
+
 async def flush_statuses() -> int:
     """바뀐 상태 행을 한 트랜잭션으로 저장. 실패하면 다시 dirty 로(다음 바퀴)."""
-    if not _ST_DIRTY:
+    if not _ST_DIRTY and not _UPD_DIRTY:
         return 0
     ids = list(_ST_DIRTY)
     rows = []
@@ -463,29 +512,44 @@ async def flush_statuses() -> int:
         if m is not None:
             rows.append((pid, m["data"], m["at"]))
     _ST_DIRTY.difference_update(ids)
-    if not rows:
+    uids = list(_UPD_DIRTY)                  # ★#435★ 업데이터 상태 행도 같은 트랜잭션에
+    urows = []
+    for pid in uids:
+        m = _UPD_MEM.get(pid)
+        if m is not None:
+            urows.append((pid, m["data"], m["at"]))
+    _UPD_DIRTY.difference_update(uids)
+    if not rows and not urows:
         return 0
     t0 = time.monotonic()
     try:
         async with connect_db() as db:
             if HOT_SYNC != "FULL" and HOT_SYNC != DB_SYNC:
                 await db.execute("PRAGMA synchronous=" + HOT_SYNC)
-            await db.executemany("INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)", rows)
+            if rows:
+                await db.executemany("INSERT OR REPLACE INTO pc_status(pc_id, data, updated_at) VALUES(?,?,?)", rows)
+            if urows:
+                await db.executemany("INSERT OR REPLACE INTO updater_status(pc_id, data, updated_at) VALUES(?,?,?)", urows)
             await db.commit()
         for pid, _, _ in rows:
             m = _ST_MEM.get(pid)
             if m is not None:
                 m["saved"] = time.monotonic()
+        for pid, _, _ in urows:
+            m = _UPD_MEM.get(pid)
+            if m is not None:
+                m["saved"] = time.monotonic()
         ST_STATS["last_err"] = None
     except Exception as e:
         _ST_DIRTY.update(r[0] for r in rows)
+        _UPD_DIRTY.update(r[0] for r in urows)
         ST_STATS["last_err"] = "%s: %s" % (e.__class__.__name__, str(e)[:100])
         return 0
     ms = (time.monotonic() - t0) * 1000
-    ST_STATS.update(flushes=ST_STATS["flushes"] + 1, rows=ST_STATS["rows"] + len(rows), last_ms=round(ms, 1), last_rows=len(rows))
+    ST_STATS.update(flushes=ST_STATS["flushes"] + 1, rows=ST_STATS["rows"] + len(rows) + len(urows), last_ms=round(ms, 1), last_rows=len(rows) + len(urows))
     if ms > ST_STATS["max_ms"]:
         ST_STATS["max_ms"] = round(ms, 1)
-    return len(rows)
+    return len(rows) + len(urows)
 
 
 async def status_flush_loop() -> None:
@@ -553,6 +617,7 @@ async def _upsert_status_db(pc_id: str, data: dict) -> None:
                 await db.execute(
                     "INSERT INTO death_events(pc_id, created_at) VALUES(?,?)", (pc_id, _now())
                 )
+                read_cache_clear("deaths")
                 # 테이블 비대화 방지 — 6시간 지난 이벤트 정리(30분 집계엔 넉넉).
                 cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
                 await db.execute("DELETE FROM death_events WHERE created_at < ?", (cutoff,))
@@ -582,14 +647,19 @@ async def get_all_death_events() -> list[dict]:
     return [{"pc_id": r[0], "created_at": r[1]} for r in rows]
 
 
-async def get_all_statuses() -> list[dict]:
+async def _load_status_rows() -> list:
     async with connect_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM pc_status ORDER BY pc_id"
         ) as cur:
             rows = await cur.fetchall()
-    by = {row["pc_id"]: (row["data"], row["updated_at"]) for row in rows}
+    return [(row["pc_id"], row["data"], row["updated_at"]) for row in rows]
+
+
+async def get_all_statuses() -> list[dict]:
+    rows = await cached_read("pc_status", _load_status_rows)      # ★#435★ DB 몫은 캐시 — 최신은 아래 메모리가 덮는다
+    by = {r[0]: (r[1], r[2]) for r in rows}
     for pid, m in _ST_MEM.items():            # ★#432-d★ 메모리가 DB 보다 새롭다
         by[pid] = (m["data"], m["at"])
     result = []
@@ -607,6 +677,7 @@ async def get_all_statuses() -> list[dict]:
 async def delete_status(pc_id: str) -> None:
     _ST_MEM.pop(pc_id, None)
     _ST_DIRTY.discard(pc_id)
+    read_cache_clear("pc_status")
     async with connect_db() as db:
         await db.execute("DELETE FROM pc_status WHERE pc_id=?", (pc_id,))
         await db.commit()
@@ -616,6 +687,9 @@ async def delete_pc_all_data(pc_id: str, purge_all: bool = False) -> None:
     """pc_id 관련 모든 테이블 데이터 삭제 (완전 제거). purge_all=True(은퇴)면 슬롯 필터·악몽 진행까지."""
     _ST_MEM.pop(pc_id, None)
     _ST_DIRTY.discard(pc_id)
+    _UPD_MEM.pop(pc_id, None)
+    _UPD_DIRTY.discard(pc_id)
+    read_cache_clear()                                  # ★#435★ 방송 조립용 읽기 캐시 전부
     _LOG_BUF[:] = [r for r in _LOG_BUF if r[0] not in (pc_id, pc_id + ".upd")]      # ★#434★ 버퍼의 줄이 지운 뒤 되살아나지 않게
     async with connect_db() as db:
         await db.execute("DELETE FROM pc_status        WHERE pc_id=?", (pc_id,))
@@ -1185,7 +1259,7 @@ async def log_flush_loop() -> None:
 
 # ── 업데이터 상태 ─────────────────────────────────────────────────────────────
 
-async def upsert_updater_status(pc_id: str, data: dict) -> None:
+async def _upsert_updater_status_db(pc_id: str, data: dict) -> None:
     async with connect_db() as db:
         await db.execute(
             "INSERT OR REPLACE INTO updater_status(pc_id, data, updated_at) VALUES(?,?,?)",
@@ -1194,20 +1268,44 @@ async def upsert_updater_status(pc_id: str, data: dict) -> None:
         await db.commit()
 
 
-async def get_all_updater_statuses() -> list[dict]:
+async def upsert_updater_status(pc_id: str, data: dict) -> None:
+    """★#435★ 업데이터 보고는 30초마다 거의 같은 값이다 — 메모리가 정본, 바뀌었거나 PC_PERSIST_MAX_S 마다만 모아 저장(상태 보고와 같은 flush)."""
+    if PC_FLUSH_S <= 0:
+        return await _upsert_updater_status_db(pc_id, data)
+    sig = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
+    mem = _UPD_MEM.get(pc_id)
+    saved = mem["saved"] if mem else 0.0
+    changed = mem is None or mem["sig"] != sig
+    _UPD_MEM[pc_id] = {"data": json.dumps(data, ensure_ascii=False), "at": _now(), "sig": sig, "saved": saved}
+    if changed or time.monotonic() - saved >= PC_PERSIST_MAX_S:
+        _UPD_DIRTY.add(pc_id)
+    else:
+        ST_STATS["upd_unchanged_skipped"] = ST_STATS.get("upd_unchanged_skipped", 0) + 1
+
+
+async def _load_updater_rows() -> list:
     async with connect_db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT pc_id, data, updated_at FROM updater_status ORDER BY pc_id"
         ) as cur:
             rows = await cur.fetchall()
+    return [(row["pc_id"], row["data"], row["updated_at"]) for row in rows]
+
+
+async def get_all_updater_statuses() -> list[dict]:
+    rows = await cached_read("updater_status", _load_updater_rows)
+    by = {r[0]: (r[1], r[2]) for r in rows}
+    for pid, m in _UPD_MEM.items():            # ★#435★ 메모리가 DB 보다 새롭다
+        by[pid] = (m["data"], m["at"])
     result = []
-    for row in rows:
+    for pid in sorted(by):
+        raw, at = by[pid]
         try:
-            d = json.loads(row["data"])
+            d = json.loads(raw)
         except Exception:
             d = {}
-        d["_updated_at"] = row["updated_at"]
+        d["_updated_at"] = at
         result.append(d)
     return result
 
@@ -1776,6 +1874,7 @@ def char_info_gen() -> int:
 
 def _char_info_bump() -> None:
     _CHAR_INFO_GEN[0] += 1
+    read_cache_clear("char_info")                 # ★#435★ 방송 조립용 캐시도
 KINA_SEQ_JUMP_MAX = 10 ** 6    # 한 번에 이만큼 넘게 뛴 순번은 믿지 않는다(순번 없이 시각으로만 가른다)
 KINA_FUTURE_S = 300            # 판독 시각이 보낸 시각(sent_at, 없으면 서버 수신)보다 이만큼 넘게 뒤면 판독을 버린다
 KINA_TIE_S = 10                # 서버 시계로 옮긴 두 판독이 이만큼 안쪽이면 순번(있으면)이 순서를 정한다(두 전송의 지연 차이만큼 흔들린다)
@@ -2421,6 +2520,7 @@ async def upsert_slot_filters(pc_id: str, filters: dict) -> None:
             (pc_id, json.dumps(filters)),
         )
         await db.commit()
+    read_cache_clear("slot_filters")
 
 
 async def get_slot_filters(pc_id: str) -> dict:

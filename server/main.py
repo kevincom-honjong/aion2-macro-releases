@@ -2050,14 +2050,15 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
     #   불러 SQLite 연결을 새로 열고 있었다(카드 72장 = 연결 72개 = 실측 124ms).
     #   한 번에 읽어 dict 로 들고 간다. 이 파일의 _fv_char_agg 가 이미 그 규칙을
     #   주석으로 적어놨는데(「카드마다 쿼리 금지」) 여기만 안 지켰다.
-    _ci_all = {r.get("pc_id"): r for r in (await get_all_char_info() or [])}
+    #   ★#435★ 아래 읽기 셋은 캐시(만료돼도 옛 값을 바로 주고 갱신은 뒤에서) — 방송 조립이 느린 볼륨을 기다리지 않는다.
+    _ci_all = {r.get("pc_id"): r for r in (await _database_mod.cached_read("char_info", get_all_char_info) or [])}
     updater_statuses = _mine(await get_all_updater_statuses())
-    _filters_raw = await get_all_slot_filters()
+    _filters_raw = await _database_mod.cached_read("slot_filters", get_all_slot_filters)
     all_filters = {split_ns(k)[1]: v for k, v in _filters_raw.items() if ns_of(k) == tenant}
 
     # 최근 30분 사망 횟수 (pc_id별)
     _death_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
-    _deaths_raw = await get_death_counts_since(_death_cutoff)
+    _deaths_raw = await _database_mod.cached_read("deaths", lambda: get_death_counts_since(_death_cutoff))
     death_counts = {split_ns(k)[1]: v for k, v in _deaths_raw.items() if ns_of(k) == tenant}
 
     updater_map: dict[str, dict] = {}
