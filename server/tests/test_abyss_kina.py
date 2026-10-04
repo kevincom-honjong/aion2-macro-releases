@@ -153,6 +153,9 @@ async def t_persist_and_report():
     await main.receive_report("PC-04", Req(body=dict(_rep(s, 7000, 2_500_000, 30), status="abyss")))
     ok("A4-e 복원 뒤 재전송(같은 구간·옛 구간)이 다시 입금하지 않는다(7300)", _today(now=_t.time())["today"] == 7300)
     # 볼륨이 없어도(설정이 깨진 JSON) 죽지 않는다
+    #   ★#433 이후 receive_report 가 설정 저장을 백그라운드로 돌린다★ — 위 두 보고가 띄운 저장이 아직 돌면 깨진 값을 덮어써
+    #   A4-f 가 부하 때 가끔 실패했다(전체 검증 중 1회). 끝날 때까지 기다린 뒤 깨뜨린다.
+    await asyncio.gather(*list(main._ABYSS_BG), return_exceptions=True)
     await db.set_setting(main.ABYSS_ACC_KEY, "{깨짐")
     main.ABYSS_ACC.clear()
     try:
