@@ -14,7 +14,7 @@ watchPatterns = ["server/**", "!server/version.json"]
 [deploy]
 startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/login"
-healthcheckTimeout = 10
+healthcheckTimeout = 120   # ★#433 2026-10-04★ 볼륨이 느린 판(4KB fsync 0.77s)에 10초 헬스체크로 새 배포가 실패→옛 컨테이너도 내려가 서버 다운
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
