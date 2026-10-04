@@ -1090,6 +1090,19 @@ _LOG_BUF: list = []          # (pc_id, level, message, created_at)
 LOG_STATS: dict = {"flushes": 0, "rows": 0, "last_rows": 0, "last_ms": 0.0, "max_ms": 0.0, "dropped": 0, "last_err": None}
 
 
+_FLUSH_MIN: list = []        # 지금 저장 중인 flush 마다 «가장 이른 줄 시각» — 커밋이 끝나면 뺀다
+
+
+def log_pending_min() -> str | None:
+    """★#434 보강★ 아직 DB 에 안 들어간 로그 줄(버퍼 + 저장 중)의 가장 이른 시각 — 팜뷰 /api/fv/events 와 /logs/since 가
+    커서를 이 시각 «미만» 까지만 내주게 한다. 안 그러면 줄 시각은 쌓은 때(created_at)인데 커밋은 몇 초 뒤라, 그 사이 커서가 지나가
+    뒤늦게 들어온 줄이 `> since` 에 영영 안 걸린다(B-FV3 와 같은 구멍)."""
+    c = [m for m in _FLUSH_MIN if m]
+    if _LOG_BUF:
+        c.append(min(r[3] for r in _LOG_BUF))
+    return min(c) if c else None
+
+
 def log_stats() -> dict:
     return dict(LOG_STATS, buffered=len(_LOG_BUF), flush_s=LOG_FLUSH_S)
 
@@ -1128,6 +1141,8 @@ async def flush_logs() -> int:
         else:
             _LOG_SINCE_PRUNE[pid] = n
     t0 = time.monotonic()
+    _fm = min(r[3] for r in rows)
+    _FLUSH_MIN.append(_fm)
     try:
         async with connect_db() as db:
             await db.executemany("INSERT INTO logs(pc_id, level, message, created_at) VALUES(?,?,?,?)", rows)
@@ -1145,6 +1160,8 @@ async def flush_logs() -> int:
             LOG_STATS["dropped"] += over
         LOG_STATS["last_err"] = "%s: %s" % (e.__class__.__name__, str(e)[:100])
         return 0
+    finally:
+        _FLUSH_MIN.remove(_fm)
     ms = (time.monotonic() - t0) * 1000
     LOG_STATS.update(flushes=LOG_STATS["flushes"] + 1, rows=LOG_STATS["rows"] + len(rows), last_rows=len(rows), last_ms=round(ms, 1))
     if ms > LOG_STATS["max_ms"]:

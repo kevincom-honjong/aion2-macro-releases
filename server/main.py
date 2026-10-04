@@ -11094,6 +11094,9 @@ async def _logs_since_core(tenant: str, since: str, limit, pc_ns: "str | None" =
     until = (datetime.now(timezone.utc) - timedelta(seconds=FV_EVENT_SETTLE_S)).strftime(_FV_TS_FMT)
     if _FV_INFLIGHT:
         until = min(until, min(_FV_INFLIGHT))
+    _lp = _database_mod.log_pending_min()         # ★#434★ 버퍼에 있거나 저장 중인 WS 로그 줄 — 그 시각 미만까지만
+    if _lp:
+        until = min(until, _lp)
     if until > _FV_HORIZON_HI[0]:
         _FV_HORIZON_HI[0] = until
     nsp = "" if tenant == "main" else tenant
@@ -12396,6 +12399,7 @@ async def telegram_mute_list(request: Request):
                                    if v > now and ns_of(k) == tenant}})
 
 
+_ALARM_BG: set = set()         # #434 백그라운드 저장 과제가 수거되지 않게 붙들어 둔다
 ALARM_EVENT_PREFIX = "[알람]"     # 팜뷰 alarmvoice.py 가 이 머리로 알람을 알아본다(FV_API «[알람] 이벤트», #128)
 
 
@@ -12431,7 +12435,16 @@ async def _alarm_event(tenant: str, name: str, text: str, tg_failed: bool = Fals
         body += " (텔레그램 실패)"
     body += timing or ""
     try:
-        await insert_log(ns(tenant, name), "info", f"{ALARM_EVENT_PREFIX} {name} | {body}")
+        # ★#434 (2026-10-04) DB 를 기다리지 않는다★ — 느린 볼륨에서 insert_log 가 쓰기 잠금을 기다리는 동안 /telegram/send 응답이
+        #   막혔다(PC-06 사망 알람 ~14초). 버퍼에 쌓고(메모리, 즉시) 저장은 백그라운드로 바로 시작한다 — 팜뷰가 줍는 시각은 저장이 끝난 직후.
+        #   저장이 끝나기 전엔 log_pending_min 이 팜뷰 커서를 붙들어 줄을 놓치지 않는다.
+        if _database_mod.LOG_FLUSH_S > 0:
+            await _database_mod.log_buffer_put(ns(tenant, name), [("info", f"{ALARM_EVENT_PREFIX} {name} | {body}")])
+            _t = asyncio.ensure_future(_database_mod.flush_logs())
+            _ALARM_BG.add(_t)
+            _t.add_done_callback(_ALARM_BG.discard)
+        else:
+            await insert_log(ns(tenant, name), "info", f"{ALARM_EVENT_PREFIX} {name} | {body}")
     except Exception as e:
         print(f"[알람] 이벤트 기록 실패 {name}: {e}", flush=True)
 
@@ -18322,6 +18335,9 @@ async def fv_events(request: Request, since: str = "", limit: str = "500"):
     #   위 끝도 거기서 멈춘다: 그 사이 새로 찍히는 줄은 ≥ 위 끝 ≥ until 이라 이번 판에 안 섞인다. await 없이 한 틱에.
     if _FV_INFLIGHT:
         until = min(until, min(_FV_INFLIGHT))
+    _lp = _database_mod.log_pending_min()         # ★#434★ 버퍼에 있거나 저장 중인 WS 로그 줄 — 그 시각 미만까지만
+    if _lp:
+        until = min(until, _lp)
     if until > _FV_HORIZON_HI[0]:
         _FV_HORIZON_HI[0] = until
     _nsp = "" if FV_TENANT == "main" else FV_TENANT   # 남의 테넌트 행이 LIMIT 을 먹지 않게 SQL 에서 거른다

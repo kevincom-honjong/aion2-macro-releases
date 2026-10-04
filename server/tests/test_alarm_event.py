@@ -5,6 +5,7 @@
 
     cd updater/server && python -X utf8 tests/test_alarm_event.py
 """
+import asyncio
 import json
 import os
 import re
@@ -39,7 +40,15 @@ class _FormReq(Req):
 _TIMING = re.compile(r" \(⏱ [^()]*\)$")
 
 
+async def _settle():
+    """#434 [알람] 줄은 버퍼 → 백그라운드 저장 — 시험은 저장이 끝난 뒤에 읽는다."""
+    if main._ALARM_BG:
+        await asyncio.gather(*list(main._ALARM_BG), return_exceptions=True)
+    await db.flush_logs()
+
+
 async def _alarms_raw(pc):
+    await _settle()
     return [x["message"] for x in await db.get_logs(pc, limit=50) if (x.get("message") or "").startswith("[알람]")]
 
 
@@ -49,6 +58,7 @@ async def _alarms(pc):
 
 
 async def _fv_alarm_events(pc):
+    await _settle()
     main.FV_TOKEN = TOK
     main.FV_TENANT = "main"
     old = main.FV_EVENT_SETTLE_S

@@ -11,7 +11,7 @@ import sqlite3
 from _harness import main, ok, FakeWS, run_all, finish   # noqa: E402
 import database as D                                         # noqa: E402
 
-MIN_CHECKS = 44
+MIN_CHECKS = 50
 
 
 class Feed(FakeWS):
@@ -221,7 +221,7 @@ async def t_432b():
 
 async def t_434():
     """#434 — WS 로그는 소켓 합쳐 트랜잭션 하나 · 상주 연결 · 모든 연결 NORMAL."""
-    import tempfile, os as _os, sqlite3 as _sq
+    import tempfile, os as _os, sqlite3 as _sq, time as _t
     old_path, old_fl = D.DB_PATH, D.LOG_FLUSH_S
     D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "t.db")
     D.LOG_FLUSH_S = 3.0
@@ -297,6 +297,51 @@ async def t_434():
     finally:
         D.DB_PATH, D.LOG_FLUSH_S = old_path, old_fl
         D._LOG_BUF.clear()
+    # ── 보강: 버퍼 줄은 팜뷰 커서를 붙든다 · 알람 줄은 DB 를 안 기다린다
+    old_path2 = D.DB_PATH
+    D.DB_PATH = _os.path.join(tempfile.mkdtemp(), "t2.db")
+    D.LOG_FLUSH_S = 3.0
+    try:
+        await D.init_db()
+        ok("W434-p 비었으면 pending_min 없음", D.log_pending_min() is None)
+        await D.log_buffer_put("PC-P", [("info", "p")])
+        pm = D.log_pending_min()
+        ok("W434-q ★버퍼에 줄이 있으면 pending_min = 그 줄 시각★", pm == D._LOG_BUF[0][3], str(pm))
+        seen_mid = []
+        real_ins = D.connect_db
+
+        def spy(*a, **k):
+            seen_mid.append(D.log_pending_min())
+            return real_ins(*a, **k)
+        D.connect_db = spy
+        try:
+            await D.flush_logs()
+        finally:
+            D.connect_db = real_ins
+        ok("W434-r ★저장 중에도 pending_min 이 유지되고 끝나면 None★", seen_mid and seen_mid[0] == pm and D.log_pending_min() is None, str(seen_mid))
+        # 알람 줄: DB(flush)가 느려도 _alarm_event 는 바로 돌아온다
+        real_fl = D.flush_logs
+
+        async def slow_flush():
+            await asyncio.sleep(0.8)
+            return 0
+        D.flush_logs = slow_flush
+        try:
+            t0 = _t.monotonic()
+            await main._alarm_event("main", "PC-06", "사망 알람")
+            el = _t.monotonic() - t0
+        finally:
+            D.flush_logs = real_fl
+        ok("W434-s ★_alarm_event 는 느린 저장(0.8초)을 기다리지 않는다·줄은 버퍼에 있다★",
+           el < 0.3 and any("[알람] PC-06" in r[2] for r in D._LOG_BUF), "%.2f %s" % (el, D._LOG_BUF[-1:]))
+        await asyncio.sleep(0.9)
+        await D.flush_logs()
+        rows = _sq.connect(D.DB_PATH).execute("SELECT message FROM logs WHERE message LIKE '[알람] PC-06%'").fetchall()
+        ok("W434-t 알람 줄은 결국 저장된다", len(rows) == 1, str(rows))
+    finally:
+        D.DB_PATH = old_path2
+        D._LOG_BUF.clear()
+    ok("W434-u 팜뷰 이벤트·로그 조회 둘 다 버퍼 줄 시각 미만까지만 낸다", "log_pending_min" in inspect_src(main.fv_events) and inspect_src(main).count("log_pending_min()") >= 2)
     src = inspect_src(main.macro_websocket)
     ok("W434-o WS 로그 갈래는 log_buffer_put 을 쓴다(insert_logs 직접 호출 없음)", "log_buffer_put" in src and "insert_logs(" not in src)
 
