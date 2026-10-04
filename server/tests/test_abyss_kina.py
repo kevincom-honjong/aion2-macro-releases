@@ -17,6 +17,7 @@
 
     cd updater/server && python -X utf8 tests/test_abyss_kina.py
 """
+import asyncio
 import json
 from datetime import datetime
 
@@ -136,6 +137,7 @@ async def t_persist_and_report():
     await main.receive_report("PC-04", Req(body=dict(_rep(s, 7000, 2_500_000, 30), status="abyss")))
     ok("A4-a /report 입구가 쌓는다(PC-04 gain 7000)", (main.ABYSS_ACC.get("PC-04") or {}).get("gain") == 7000,
        str(main.ABYSS_ACC.get("PC-04")))
+    await asyncio.gather(*list(main._ABYSS_BG))        # #433 설정 저장은 상태 처리 뒤 백그라운드 — 끝날 때까지 기다린 뒤 본다
     raw = await db.get_setting(main.ABYSS_ACC_KEY)
     ok("A4-b 새 구간(입금 사건)은 바로 볼륨 DB 설정에 저장", bool(raw) and "PC-04" in json.loads(raw), str(raw)[:120])
     await main.receive_report("PC-04", Req(body=dict(_rep(s2, 300, 0, 0, "waiting"), status="abyss")))
