@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.1044",
+    "version": "1.1.1045",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "1e319f2089be47a4b014a59d333713b0c0c9db1e00146cbac821eda15e390927",
+    "sha256": "ee2f70ed6d8e1fe46f33eb03b336096e84303f0f06b3b8b728b4edf3c96c8dd0",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -25,6 +25,7 @@
     "attendance.png": "7c03914cbf9308c53fb0129781fcdd80d2cca2f24134f3998b491f35196b7622",
     "attendance_close.png": "cde2541b7f726126a62e8bf9aea724a70dd843b57ada9fadc6ad5bab70023294",
     "attendance_reward_btn.png": "b45c12cbb5bd3f1be4b4f682464276fd7893eb7ad251c677299470b6047219df",
+    "awakening_fprompt.png": "cc7fe1acaa40564eb776625e29b9b03b0198ac178c03f05d0fccff61dbfb2099",
     "awakening_portal.png": "fae798532f756badd7cc6a9323ffee794369e595872183a5386403dbe52afa60",
     "awakening_result.png": "e5313b35f90169efd51416104d8c28d4a02a7756b578318d72f993c73be96a85",
     "awakening_title.png": "478fcb8ad63ce3e390075b86e43b81ffb2d226e499a7862515c972e77b9ab2b5",
@@ -503,11 +504,11 @@
     "sha256": "6088c4395952833e24d05d197bc63f238b7c342864c808e0e9058dcc9fcf7f4e",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20261002142537",
-  "updated_at": "2026-10-09T13:21:31",
+  "images_version": "20261009134846",
+  "updated_at": "2026-10-09T13:48:46",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.1044",
+    "version": "1.1.1045",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
