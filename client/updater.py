@@ -31,7 +31,7 @@ from PIL import ImageGrab  # pip install pillow
 # ==================================================
 # 설정
 # ==================================================
-UPDATER_VERSION  = "3.1.14"
+UPDATER_VERSION  = "3.1.15"
 
 UPDATE_SERVER    = "https://web-production-8d4c.up.railway.app"
 CONTROL_SERVER   = "https://web-production-8d4c.up.railway.app"
@@ -563,13 +563,36 @@ def seed_slow_reason(written: int, elapsed: float, since_progress: float = 0.0) 
     return ""
 
 
-def _download_from_seed(url: str, dest_path: str, expected_sha256) -> bool:
-    """★내부망 시드 1회 시도(v3.0.8)★ — 실패하면 빨리 GitHub로 폴백하는 게 목적이라 재시도 없음.
+# ★2026-09-27 languard 반증 후속 (a)★ 시드 503 = 「동시 2대 자리가 꽉 찼다」(seed_server 사고 530·554) — 실패가 아니다.
+#   옛: 「시드 실패(503 Server Error…) → GitHub 폴백」 으로 찍고 곧장 GitHub(74MB, Railway·GitHub 이그레스).
+#   → 「시드 바쁨」 으로 적고 Retry-After(시드는 30) 만큼 기다려 ★한 번만★ 더 시드 → 그래도 바쁘면 GitHub.
+SEED_BUSY_RETRY_MAX_S = 60.0     # Retry-After 가 이보다 길거나 없으면/못 읽으면 기다리지 않고 GitHub
+
+
+def _retry_after_s(v):
+    try:
+        f = float(str(v).strip())
+    except Exception:
+        return None
+    return f if 0 <= f <= SEED_BUSY_RETRY_MAX_S else None
+
+
+def _download_from_seed(url: str, dest_path: str, expected_sha256, busy_retry: bool = True) -> bool:
+    """★내부망 시드 1회 시도(v3.0.8)★ — 실패하면 빨리 GitHub로 폴백하는 게 목적이라 재시도 없음(503 바쁨만 한 번 더).
     SHA256은 서버 /check가 준 값으로 검증하므로 시드가 엉뚱한/변조된 파일을 줘도 여기서 기각된다.
     ★사고 481★ 느린 시드는 ★속도로★ 버린다 — 끊기기를 기다리지 않는다."""
     tmp_path = dest_path + ".seed.tmp"
     try:
         r = requests.get(url, stream=True, timeout=(3, SEED_STALL_S))   # 읽기 타임아웃 = 멈춤 판정과 같은 값
+        if r.status_code == 503:     # ★(a)★ 시드 바쁨 — 실패로 안 찍는다
+            _ra = _retry_after_s(r.headers.get("Retry-After"))
+            r.close()
+            if busy_retry and _ra is not None:
+                log(f"[다운로드] 시드 바쁨(503) → {_ra:.0f}초 뒤 시드 한 번 더")
+                time.sleep(_ra)
+                return _download_from_seed(url, dest_path, expected_sha256, busy_retry=False)
+            log("[다운로드] 시드 바쁨(503) → GitHub")
+            return False
         r.raise_for_status()
         _d = os.path.dirname(dest_path)
         if _d:                       # 상대 경로면 dirname='' — makedirs('')는 WinError 3
@@ -996,6 +1019,7 @@ def check_and_update() -> bool:
                 "image_hashes":    local_image_hashes,
                 "updater_version": UPDATER_VERSION,
                 "edition":         EDITION,   # v3.0.7: rental이면 서버가 렌탈 채널 exe 응답
+                "pc_id":           pc_id,     # ★2026-10-11★ 서버 시험 핀(exe_test_pin)이 이 PC 한 대만 고른다(CONTRACTS_대시보드 §20)
             },
             # ★v3.1.0: 키를 동봉한다★ — 서버가 '자칭 edition'이 아니라 ★키★로 채널을 정한다.
             #   (렌탈 이용자가 info.txt에서 edition 줄만 지워 킬스위치 없는 본판 exe를 받아가던
