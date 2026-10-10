@@ -222,6 +222,7 @@ function mkEl(id){
 const document = { getElementById: mkEl };
 const STATUS_CFG = {hunting:{online:true}, offline:{online:false}};
 const ACCT_SUFFIX = 'bcdefghi';
+function acctNumOf(pcid){ const i = ACCT_SUFFIX.indexOf((pcid||'').slice(-1)); return i >= 0 ? i + 2 : 1; }   // #451 groupChars 폴백용(실제는 acctNoOfSuf)
 function isDungeonDone(){ return true; }
 function dpDone(){ return false; }
 function parseOddEnergy(v){ return Number(v) || 0; }
@@ -241,7 +242,7 @@ let CHAR_TABLE_AT = 0, CORRIDOR_AT = 0;
 
 _JS_FUNCS = ("isAcctSuf", "baseId", "isFakePc", "sumClock", "ageNote", "serverSum", "serverSumNote",
              "summaryPcs", "redrawSummary", "loadServerSummary", "refreshSummary", "updateCorridorTile",
-             "dkHero", "nmTicketText", "nmTicketFull", "nmTicketWarn", "isExcludedPc")
+             "dkHero", "nmTicketText", "nmTicketFull", "nmTicketWarn", "isExcludedPc", "groupChars", "serverSumStale")
 _JS_CONSTS = ("const SERVER_SUMMARY_TTL_MS", "const FAKE_PC_BASES", "const NIGHTMARE_TICKET_MAX")
 
 FAKE_IDS = ["PC-TEST", "pc-test", "PC-TESTb", "pc-testb", "PC-DEMOc", " PC-TEST ", " pc-demo", "PC-DEMO",
@@ -276,16 +277,19 @@ refreshSummary([]); out.A = snap();
 // B. 서버값 신선 · 읽었는데 0
 SERVER_SUMMARY = {trade_kina:0, awakening_ticket:0, odd_energy:0, total_kina:0};
 refreshSummary([]); out.B = snap();
-// C. 서버값 61초 묵음 → 화면 계산으로
+// C. 서버값 61초 묵음 → ★#454: 마지막 서버값 유지(화면 계산으로 안 갈아탄다)★
 SERVER_SUMMARY = {trade_kina:999, awakening_ticket:99, odd_energy:99, total_kina:99};
 SERVER_SUMMARY_AT = sumClock() - 61000;
 refreshSummary([]); out.C = snap();
 out.C_sum = serverSum();
-// C2. 폴백 재료(캐릭 표)가 10분 묵었으면 툴팁이 그 나이를 말한다
-CHAR_TABLE_AT = sumClock() - 600000;
-out.C2_note = serverSumNote();
-CHAR_TABLE_AT = sumClock();
-out.C3_note = serverSumNote();
+out.C_note = serverSumNote(); out.C_stale = serverSumStale();
+// C2. 폴백 재료(캐릭 표)가 10분 묵었으면 툴팁이 그 나이를 말한다 — ★서버값을 한 번도 못 받은 «대기 중» 일 때만 폴백이다★
+{ const _sv = SERVER_SUMMARY; SERVER_SUMMARY = null;
+  CHAR_TABLE_AT = sumClock() - 600000;
+  out.C2_note = serverSumNote();
+  CHAR_TABLE_AT = sumClock();
+  out.C3_note = serverSumNote();
+  SERVER_SUMMARY = _sv; }
 // C4. 빈 문자열은 폴백에서도 「못 읽음」
 SERVER_SUMMARY = null;
 charTableData = [{trade_kina: '', awakening_ticket: ''}];
@@ -325,7 +329,7 @@ globalThis.clearTimeout = _ct;
 out.G1 = {at: SERVER_SUMMARY_AT > 0, sum: !!serverSum(), trade: els['cnt-trade-kina'].textContent,
           subOn: els['dk-h-sub-on'].textContent,
           // 성공 직후 시각이 sumClock 기준이어야 TTL 이 실제로 끝난다(Date.now 로 찍으면 영원히 신선)
-          ttl59: !!serverSum(sumClock() + 59000), ttl61: serverSum(sumClock() + 61000) === null,
+          ttl59: serverSumStale(sumClock() + 59000) === false, ttl61: serverSumStale(sumClock() + 61000) === true && !!serverSum(sumClock() + 61000),
           cleared: _clr};
 // G2. HTTP 500 — 낡은 값이면 폴백으로 다시 그린다
 SERVER_SUMMARY_AT = sumClock() - 61000;
@@ -433,9 +437,10 @@ def t_js():
     ok("JS-1e 칸 툴팁에 출처 「서버 계산」", "서버 계산" in o["A"]["trTitle"], o["A"]["trTitle"])
     ok("JS-2 서버 0 → 거래키나 K0·각성전 0", o["B"]["trade"] == "K0" and o["B"]["aw"] == "0", str(o["B"]))
     ok("JS-2b 서버 0 → 히어로 거래키나 0(null 아님)", o["B"]["dkTrade"] == 0)
-    ok("JS-3 61초 묵은 서버값은 버리고 화면 계산(K9)", o["C"]["trade"] == "K9" and o["C_sum"] is None, str(o["C"]))
-    ok("JS-3b 그때 툴팁이 「끊김」 을 말한다", "끊김" in o["C"]["trTitle"], o["C"]["trTitle"])
-    ok("JS-3c 각성전도 화면 계산(1)", o["C"]["aw"] == "1")
+    ok("JS-3 ★#454 61초 묵은 서버값도 버리지 않는다 — 마지막 서버값(K999) 유지, 화면 계산(K9)으로 안 갈아탄다★",
+       o["C"]["trade"] == "K999" and o["C_sum"] is not None and o["C_stale"] is True, str(o["C"]))
+    ok("JS-3b 그때 툴팁이 「갱신 지연 · 마지막 서버값 N초 전 유지」 를 말한다", "갱신 지연" in o["C"]["trTitle"] and "61초 전" in o["C"]["trTitle"], o["C"]["trTitle"])
+    ok("JS-3c 각성전도 서버값 유지(99)", o["C"]["aw"] == "99")
     ok("JS-3d 폴백 재료가 10분 묵었으면 「캐릭 표 10분째 못 받음」", "캐릭 표 10분째" in o["C2_note"], o["C2_note"])
     ok("JS-3e 방금 받은 캐릭 표면 나이를 안 붙인다", "캐릭 표" not in o["C3_note"], o["C3_note"])
     ok("JS-3f 폴백도 빈 문자열은 「–」(서버 _seen 과 같은 뜻)",
@@ -445,19 +450,19 @@ def t_js():
     ok("JS-5b 회랑 툴팁 = 서버 내역(2대 남은 3 / 1대 남은 4)",
        "2대: 남은 3" in o["E"]["title"] and "1대: 남은 4" in o["E"]["title"], o["E"]["title"])
     ok("JS-5c 서버 회랑 null → 「–」", o["E2"] == "–", o["E2"])
-    ok("JS-6 서버 끊기면 회랑 숫자·툴팁 둘 다 화면 계산(40)",
-       o["F"]["num"] == "40" and "1대: 남은 40" in o["F"]["title"], str(o["F"]))
-    ok("JS-6b 그때 회랑 목록 나이(20분)도 적는다", "회랑 목록 20분째" in o["F"]["title"], o["F"]["title"])
+    ok("JS-6 ★#454 서버가 늦어도 회랑 숫자·툴팁 둘 다 마지막 서버값(7 · 2대 남은 3 / 1대 남은 4)★",
+       o["F"]["num"] == "7" and "2대: 남은 3" in o["F"]["title"] and "1대: 남은 4" in o["F"]["title"], str(o["F"]))
+    ok("JS-6b 그때 툴팁이 「갱신 지연」 을 말한다(화면 캐시 나이는 폴백이 아니니 안 적는다)", "갱신 지연" in o["F"]["title"] and "회랑 목록 20분째" not in o["F"]["title"], o["F"]["title"])
     ok("JS-8 loadServerSummary 성공 → 시각 찍음·서버값 유효·다시 그림(K5)",
        o["G1"]["at"] and o["G1"]["sum"] and o["G1"]["trade"] == "K5", str(o["G1"]))
     ok("JS-8b 성공 뒤 히어로 구독 O 는 서버값(3)", str(o["G1"]["subOn"]) == "3", str(o["G1"]))
-    ok("JS-8c HTTP 500 이어도 다시 그린다 → 낡았으니 화면 계산(K9)", o["G2"]["trade"] == "K9", str(o["G2"]))
-    ok("JS-8d 서버값이 낡으면 히어로 구독도 화면 계산(dkSubCount 9)", str(o["G2"]["subOn"]) == "9", str(o["G2"]))
-    ok("JS-8e 네트워크 예외여도 다시 그린다", o["G3"] == "K9", o["G3"])
-    ok("JS-8f 응답이 안 오면 타이머가 끊고 다시 그린다", o["G4"]["how"] == "done" and o["G4"]["trade"] == "K9",
+    ok("JS-8c ★#454 HTTP 500 이어도 다시 그리지만 값은 마지막 서버값(K5) 그대로★", o["G2"]["trade"] == "K5", str(o["G2"]))
+    ok("JS-8d 서버값이 낡아도 히어로 구독도 서버값(3) 유지", str(o["G2"]["subOn"]) == "3", str(o["G2"]))
+    ok("JS-8e 네트워크 예외여도 다시 그리고 값은 그대로(K5)", o["G3"] == "K5", o["G3"])
+    ok("JS-8f 응답이 안 오면 타이머가 끊고 다시 그린다 — 값은 그대로(K5)", o["G4"]["how"] == "done" and o["G4"]["trade"] == "K5",
        str(o["G4"]))
     g1 = o["G1"]
-    ok("JS-8g 성공 뒤 59초는 신선, 61초면 serverSum null(TTL 이 실제로 끝난다)", g1["ttl59"] and g1["ttl61"], str(g1))
+    ok("JS-8g 성공 뒤 59초는 신선, 61초면 «낡음» 표시(값은 유지 — TTL 은 표시용으로만 남는다)", g1["ttl59"] and g1["ttl61"], str(g1))
     ok("JS-8h 성공이어도 타임아웃 타이머를 치운다(clearTimeout)", g1["cleared"] >= 1, str(g1))
     ok("JS-8i 끊는 타이머는 10초 이하", bool(o["G4"]["ms"]) and all(0 < m <= 10000 for m in o["G4"]["ms"]), str(o["G4"]["ms"]))
     ok("JS-8j redrawSummary — 전광판 칸 하나가 던져도 회랑은 그린다",
@@ -488,7 +493,7 @@ def t_js():
     ok("JS-11c 악몽 티켓 14 하드코딩 0곳", not nm_hard, str(nm_hard[:3]))
     # 정적 — SERVER_SUMMARY 를 serverSum() 밖에서 직접 읽는 곳이 없어야 한다(낡음 우회 금지)
     allowed = ("let SERVER_SUMMARY", "if(!SERVER_SUMMARY)", "? SERVER_SUMMARY : null", "return SERVER_SUMMARY",
-               "SERVER_SUMMARY = await r.json()")
+               "SERVER_SUMMARY = await r.json()", "!!SERVER_SUMMARY", "if(SERVER_SUMMARY &&")
     word = re.compile("\\" + "bSERVER_SUMMARY" + "\\" + "b")      # \b 를 문자열 조합으로 — 파일 도구가 먹지 않게
     stray, seen_any = [], 0
     for ln in src.splitlines():

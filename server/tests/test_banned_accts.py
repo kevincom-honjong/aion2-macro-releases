@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from _harness import main, db, ok, run_all, finish, HTTPException   # noqa: E402
 
-MIN_CHECKS = 66
+MIN_CHECKS = 76
 C = TestClient(main.app, raise_server_exceptions=False)
 M = main
 IDS = {"1": "id1", "2": "id2", "3": "id3"}
@@ -370,8 +370,78 @@ console.log(JSON.stringify({
        and '<i class="tout">OUT</i>' in src and ".acct-tab-out{" in src)
 
 
+async def t_macro_live():
+    """#441 — 정지 슬롯에서 매크로가 실제로 도는데(최근 수신/WS) status 가 no_account 로 비워져 대시보드가 명령을 전부 막던 회귀."""
+    from datetime import datetime, timedelta, timezone
+    with _Keep():
+        await db.upsert_status("PC-43", {"pc_id": "PC-43", "status": "no_account", "acct_id": "x"})     # 매크로가 정지 슬롯에서 스스로 보고
+        await db.upsert_status("PC-44", {"pc_id": "PC-44", "status": "no_account", "acct_id": "x"})
+        await db.upsert_status("PC-45", {"pc_id": "PC-45", "status": "idle"})
+        old = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
+        db._ST_MEM["PC-44"]["at"] = old                                                                  # 10분 전 마지막 보고 = 죽은 카드
+        for pid in ("PC-43", "PC-44"):
+            M.BANNED_ACCTS.add(M.ns("main", pid))
+        rows = {r["pc_id"]: r for r in await M._build_full_state("main")}
+        a, b, o = rows.get("PC-43") or {}, rows.get("PC-44") or {}, rows.get("PC-45") or {}
+        ok("ML-1 ★정지 카드 + 방금 보고한 매크로 → macro_live=true (status 는 표시용 no_account 그대로)★",
+           a.get("macro_live") is True and a.get("banned") is True and a.get("status") == "no_account" and a.get("acct_id") == "",
+           str(a)[:240])
+        ok("ML-2 정지 카드인데 10분째 조용하면 macro_live=false", b.get("macro_live") is False and b.get("banned") is True, str(b)[:240])
+        ok("ML-3 정지가 아닌 카드엔 macro_live 를 싣지 않는다(예전 모양 그대로)", "macro_live" not in o)
+        M.BANNED_ACCTS.discard(M.ns("main", "PC-44"))
+        for p in ("PC-43", "PC-44", "PC-45"):
+            await db.delete_status(p)
+
+
+async def t_js_route():
+    """#441 — 대시보드 JS: macro_live 인 정지 카드는 «살아 있는 카드», 아니면 예전처럼 «도는 매크로가 없습니다»."""
+    src = main.HTML_DASHBOARD
+    node = shutil.which("node")
+    ok("JR-0 node 가 있어야 한다", bool(node))
+    if not node:
+        return
+    js = _obj(src, "const STATUS_CFG = {") + chr(10) + chr(10).join(_fn(src, n) for n in ("isAcctSuf", "baseId", "cardOnline", "liveCardOf", "cmdTargetOf")) + r"""
+const ACCT_SUFFIX = "bcd";
+let state = {};
+const T = (st) => { state = st; return {
+  live: (liveCardOf('PC-23')||{}).pc_id || null,
+  tgtB: cmdTargetOf('PC-23b'), tgtBase: cmdTargetOf('PC-23'),
+  onB: cardOnline(state['PC-23b']) }; };
+const o = {};
+o.banLive = T({'PC-23': {pc_id:'PC-23', status:'offline'}, 'PC-23b': {pc_id:'PC-23b', status:'no_account', banned:true, macro_live:true}});
+o.banDead = T({'PC-23': {pc_id:'PC-23', status:'offline'}, 'PC-23b': {pc_id:'PC-23b', status:'no_account', banned:true, macro_live:false}});
+o.banNoField = T({'PC-23': {pc_id:'PC-23', status:'offline'}, 'PC-23b': {pc_id:'PC-23b', status:'no_account', banned:true}});
+o.plainNoAcct = T({'PC-23': {pc_id:'PC-23', status:'offline'}, 'PC-23b': {pc_id:'PC-23b', status:'no_account', macro_live:true}});
+o.normal = T({'PC-23': {pc_id:'PC-23', status:'offline'}, 'PC-23b': {pc_id:'PC-23b', status:'hunting'}});
+console.log(JSON.stringify(o));
+"""
+    d = tempfile.mkdtemp(prefix="banjs2_")
+    pth = os.path.join(d, "t.js")
+    open(pth, "w", encoding="utf-8").write(js)
+    rr = subprocess.run([node, pth], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    try:
+        o = json.loads(rr.stdout.strip().splitlines()[-1])
+    except Exception:
+        o = None
+    err = rr.stderr[-300:]
+    ok("JR-1 ★macro_live 인 정지 카드가 liveCardOf 에 잡힌다 → 그 카드로 명령이 간다(전환·시작·정지)★",
+       o is not None and o["banLive"]["live"] == "PC-23b" and o["banLive"]["tgtB"] == "PC-23b" and o["banLive"]["tgtBase"] == "PC-23b"
+       and o["banLive"]["onB"] is True, str(o or err))
+    ok("JR-2 macro_live 가 거짓이거나 없으면 예전과 같다(살아 있는 카드 없음)",
+       o is not None and o["banDead"]["live"] is None and o["banNoField"]["live"] is None and o["banDead"]["onB"] is False, str(o or err))
+    ok("JR-3 정지 표식이 없는 no_account 는 macro_live 가 있어도 살아 있는 카드로 치지 않는다(PC-24류 «계정 없음» 보존)",
+       o is not None and o["plainNoAcct"]["live"] is None, str(o or err))
+    ok("JR-4 보통 카드는 그대로", o is not None and o["normal"]["live"] == "PC-23b")
+    i = src.index("async function sendCmd(")
+    body = src[i:i + 9000]
+    ok("JR-5 sendCmd 의 온라인 판정이 cardOnline 을 쓴다(상태 문자열만 보던 자리 제거)",
+       "const _on307 = cardOnline(state[pc_id]);" in body and "STATUS_CFG[_st307]" not in body.split("const _on307")[1][:80],
+       body[body.find("_on307") - 20: body.find("_on307") + 120])
+    ok("JR-6 일괄 대상 고르기 세 곳도 cardOnline", src.count("const on = cardOnline(state[id]);") == 3)
+
+
 def test_all():
-    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_delivery, t_loaded, t_endpoints, t_js])
+    run_all([t_names, t_seed, t_cards, t_rotation, t_rot_guard, t_guard, t_delivery, t_loaded, t_endpoints, t_js, t_macro_live, t_js_route])
     finish("test_banned_accts", MIN_CHECKS)
 
 

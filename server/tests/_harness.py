@@ -34,6 +34,11 @@ from fastapi import HTTPException, WebSocketDisconnect   # noqa: E402
 __all__ = ["main", "db", "aiosqlite", "ok", "FakeWS", "Req", "run_all", "finish",
            "HTTPException", "WebSocketDisconnect", "ConnCounter", "TG_SENT"]
 
+# ★#255 /check 의 미리 채우기(GitHub 77MB)는 시험에서 안 나간다★ — /check 를 부르는 시험(test_sec_b2 등)이
+#   진짜 GitHub 을 받으러 가지 않게. 채우기 자체는 test_gh_relay 가 main._dl_get 으로 직접 시험한다.
+main._dl_prewarm_real = main._dl_prewarm
+main._dl_prewarm = lambda ver, asset: None
+
 # ★텔레그램은 밖으로 안 나간다★ — 시험이 진짜 봇 API 를 두드리면 느리고(404) 사람 폰에 갈 수도 있다.
 #   기본은 기록만 한다. 특정 시험이 실패를 흉내내려면 main.tg_send_text 를 잠깐 바꾸고 되돌린다.
 TG_SENT: list = []

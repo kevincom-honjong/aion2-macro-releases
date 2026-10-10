@@ -85,10 +85,11 @@ async def t_submit():
     r2 = sub("  정령의 섬 \n", far(1))
     ok("A-2 앞뒤 공백·줄바꿈만 걷는다 → auto(정령의 섬)", (await _st(r2["cluster"])) == ("auto", "정령의 섬"), str(r2))
     bad = {}
-    for i, g in enumerate(["홍옥의섬", "홍옥의 섬입니다", "", "홍옥의  섬", "Hongok", "홍옥의 섬 / 정령의 섬"]):
+    # #436-c(2026-10-11): 띄어쓰기만 다른 «홍옥의섬»·«홍옥의  섬» 은 이제 스냅 규칙으로 auto 다(test_ocr_auto_436b M-3). 여기엔 꼬리·빈 답·두 이름만 남긴다.
+    for i, g in enumerate(["홍옥의 섬입니다", "", "Hongok", "홍옥의 섬 / 정령의 섬"]):
         rr = sub(g, far(10 + i))
         bad[g] = rr.get("status")
-    ok("A-3 글자가 하나라도 다르면(띄어쓰기·꼬리·빈 답·두 이름) pending — 짐작해 맞추지 않는다",
+    ok("A-3 글자가 다르면(꼬리·빈 답·영문·두 이름) pending — 짐작해 맞추지 않는다(띄어쓰기·한 글자 오독은 #436-c 스냅이 닫는다)",
        all(v == "pending" for v in bad.values()), str(bad))
     r3 = sub("홍옥의 섬", far(30), site="info_collector.py:_harvest")
     ok("A-4 다른 site 는 같은 답이어도 pending(맵 이름 site 만)", r3.get("status") == "pending", str(r3))
@@ -209,7 +210,7 @@ def t_rule_unit():
     ok("A-18 규칙: 답이 없으면(빈 목록) None", f(SITE, []) is None, "")
     ok("A-19 규칙: None·숫자 답은 빈 답으로 — 하나라도 섞이면 None", f(SITE, ["홍옥의 섬", None]) is None, "")
     ok("A-20 규칙: 16개 이름 그대로(주인님 목록) · 다른 site 는 None",
-       len(OL.OCR_AUTO_SITES[SITE]) == 16 and f("x", ["홍옥의 섬"]) is None and f(SITE, ["어비스 회랑"]) == "어비스 회랑", "")
+       len(set(OL.OCR_AUTO_SITES[SITE]) - set(OL.OCR_AUTO_MAP_EXTRA)) == 16 and f("x", ["홍옥의 섬"]) is None and f(SITE, ["어비스 회랑"]) == "어비스 회랑", "")
 
 
 def test_all():

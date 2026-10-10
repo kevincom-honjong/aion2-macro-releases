@@ -110,7 +110,9 @@ def t_stats_snap():
 
 
 def t_names_sync():
-    ok("S-4 서버 사본 = 17개 이름, 자동 닫기 16개는 그 부분집합", len(ON.MAP_NAMES) == 17 and set(OL.OCR_AUTO_SITES[MAP]) <= set(ON.MAP_NAMES))
+    base = set(OL.OCR_AUTO_SITES[MAP]) - set(OL.OCR_AUTO_MAP_EXTRA)      # #436-b: 사람 라벨에서 뽑은 추가 이름은 스냅 목록(lc 사본) 밖이다
+    ok("S-4 서버 사본 = 17개 이름, 자동 닫기 16개(추가분 제외)는 그 부분집합", len(ON.MAP_NAMES) == 17 and len(base) == 16 and base <= set(ON.MAP_NAMES),
+       str(sorted(base - set(ON.MAP_NAMES))))
     src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "lc", "map_names.py")
     if os.path.exists(src):
         txt = open(src, encoding="utf8").read()
@@ -132,9 +134,9 @@ async def t_auto():
     r2 = sub(OBJ_RAW, "보스를처치하기", far(21))
     ok("A-2 공백 없는 답도 auto", (await _st(r2["cluster"]))[0] == "auto")
     bad = {}
-    for i, g in enumerate(["텍스트 없음", "", "보스를 처치하기 시작", "방안의몬스터를모두처치 / 보스를처치하기", "다음 방의 입구를 열어"]):
+    for i, g in enumerate(["텍스트 없음", "", "보스를 처치하기 시작", "방안의몬스터를모두처치 / 보스를처치하기", "지지하기"]):
         bad[g] = sub(OBJ_RAW, g, far(30 + i)).get("status")
-    ok("A-3 목록 밖·빈 답·«텍스트 없음»·두 문구는 예전처럼 pending", all(v == "pending" for v in bad.values()), str(bad))
+    ok("A-3 목록 밖·빈 답·«텍스트 없음»·두 문구·말이 덧붙은 문장은 예전처럼 pending(#436-b: 한두 글자 오독은 test_ocr_auto_436b 가 닫는다)", all(v == "pending" for v in bad.values()), str(bad))
     d = sub(DIF_RAW, "극한", far(40))
     ok("A-4 난이도 라벨: 7이름 정확히 맞으면 auto", (await _st(d["cluster"])) == ("auto", "극한"), str(d))
     d2 = sub(DIF_RAW, "극한▼", far(41))
@@ -144,8 +146,8 @@ async def t_auto():
     n2 = sub(OBJ_RAW, "엉뚱한 문구", near)
     ok("A-6 ★near-dup 규칙 유지: auto 묶음에 다른 답이 붙으면 같은 묶음이 pending 으로★",
        n2["cluster"] == r["cluster"] and (await _st(r["cluster"]))[0] == "pending", "%s %s" % (n2, await _st(r["cluster"])))
-    ok("A-7 규칙(단위): 두 사이트 이름 수 3 · 7 / 공백 무시는 이 둘뿐(맵은 예전처럼 글자 그대로)",
-       len(OL.OCR_AUTO_SITES[OBJ]) == 3 and len(OL.OCR_AUTO_SITES[DIF]) == 7 and OL.auto_label(MAP, ["홍옥의섬"]) is None
+    ok("A-7 규칙(단위): 두 사이트 이름 수 3 · 7 / 공백 무시 목록은 LOOSE 사이트들(맵은 별도 스냅 규칙)",
+       len(OL.OCR_AUTO_SITES[OBJ]) == 3 and len(OL.OCR_AUTO_SITES[DIF]) == 7 and OL.auto_label(MAP, ["홍옥의섬"]) == "홍옥의 섬"      # #436-c: 맵 이름은 스냅 규칙(띄어쓰기만 다르면 같은 이름)
        and OL.auto_label(OBJ, ["보스를 처치하기"]) == "보스를처치하기")
 
 

@@ -417,7 +417,10 @@ bad
 badge
 balance
 banned
+banned.add
+banned.has
 banned:true
+banned_slots
 bar
 base
 base:b
@@ -755,6 +758,9 @@ cfg.bg
 cfg.border
 cfg.label
 cfg.text
+cg
+cg.n
+cg.out
 changed
 char-filter
 char-table-arrow
@@ -1150,6 +1156,7 @@ failed.slice
 fallback
 false
 farmview/alarmvoice.speak_text
+fb
 fetch
 fg
 filename
@@ -1671,6 +1678,7 @@ m[dst][k]
 m[k]
 m[s.top.pc_id]
 macro
+macro_live
 macro_version
 mail
 mail_count
@@ -1679,6 +1687,7 @@ main.py
 main:has
 man
 map
+map[k]
 maps
 maps.ids
 maps.ids[k]
@@ -1809,6 +1818,7 @@ msg.speak
 msg.total_kina
 msg.type
 msg.ver
+msg.ver!
 mt-0.5
 mt-1
 mt-1.5
@@ -1899,12 +1909,18 @@ ok:false
 oks
 oks.filter
 old
+old.close
 old.includes
+old.onclose
+old.onerror
+old.onmessage
+old.onopen
 old:[...old
 on
 once
 onchange
 onclick
+onclose
 oncontextmenu
 oninput
 onkeydown
@@ -1978,12 +1994,15 @@ p.acct_names
 p.acct_servers
 p.acct_servers[n]
 p.acct_total
+p.banned
+p.banned_slots
 p.chars
 p.chars.length
 p.daily_progress
 p.efficiency
 p.focus
 p.last_active
+p.macro_live
 p.macro_version
 p.pc_id
 p.status
@@ -2320,6 +2339,7 @@ ru]
 running
 s%60
 s.base
+s.list
 s.list.map
 s.n
 s.top
@@ -2769,6 +2789,7 @@ tot
 total
 total:v.total
 total_kina
+totals.dungeon_left
 tour
 tour_seq
 tout
@@ -2971,10 +2992,12 @@ wrap.children.length
 wrap.prepend
 wrapper
 ws
+ws-age
 ws-dot
 ws.onclose
 ws.onmessage
 ws.onopen
+ws.send
 wss
 x.awakening_ticket
 x.base

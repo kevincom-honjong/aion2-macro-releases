@@ -285,9 +285,10 @@ console.log(JSON.stringify({sent}));
 """)
     o, err = _node(js)
     ok("W-10 화면 JS 는 숨음/보임이 ★바뀔 때만★ 한 번씩 알린다(크기 0 도 숨음)", o is not None and o["sent"] == [1, 0, 1, 0], str(o or err))
-    ok("W-11 접속 주소에 숨김·iframe 여부를 싣고, 숨은 동안엔 감시견이 180초로 느슨해진다(끄지 않는다)",
+    ok("W-11 접속 주소에 숨김·iframe 여부를 싣고, 숨은 동안엔 감시견이 90초로 느슨해진다(끄지 않는다, #448: 숨어도 서버가 20초마다 ping)",
        "/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}" in src
-       and "Date.now()-_wsLastMsg>(_wsHid()?180000:90000)" in src, "")
+       and "Date.now()-_wsLastMsg>(_wsHid()?WS_DEAD_HIDDEN_MS:WS_DEAD_MS)" in src
+       and "WS_DEAD_MS=45000, WS_DEAD_HIDDEN_MS=90000" in src, "")
 
 
 def test_all():

@@ -311,6 +311,9 @@ async def _banned_restore() -> bool:
     return _BANNED_LOADED[0]
 
 
+MACRO_LIVE_S = 120      # #441 macro_live — 살아 있는 매크로의 서버 수신 나이 실측 최대 47초(하트비트 30초)의 여유
+
+
 def _blank_acct_fields(_pc: dict) -> None:
     """계정 칸만 비운다(컴퓨터·업데이터 정보는 그대로) — 계정없음·정지 공용."""
     _pc["status"] = "no_account"
@@ -684,7 +687,11 @@ os.makedirs(TTS_DIR, exist_ok=True)
 #     이미 있는 명령 큐(captcha_code)로 해당 PC에 꽂아준다. 봇은 영원히 1개면 된다.
 # ★토큰은 Railway 환경변수로만 둔다(코드·저장소 금지 — 2026-07-27 보안감사).★
 TELEGRAM_BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TG_REPLY_WINDOW      = int(os.getenv("TELEGRAM_REPLY_WINDOW", "1800"))  # 답장 없이 코드만 왔을 때 추론 유효시간(초)
+# ★60초 (2026-09-30 주인님 #351→#352 «5분이 아니라 1분이면 끝나요»)★ — 캡차 하나는 1분이면 끝난다. 1800초일 땐 끝난 캡차(PC-02b 22:26)의 대기가 남아
+#   22:51 에 온 PC-03b 코드가 «어느 PC인지 알 수 없습니다 … 대기 중: PC-02b, PC-03b» 로 거절됐다.
+#   ★60초는 «가장 최근 사진» 부터 센다★ — 리셋(오답 재전송)마다 사진이 새로 나가 tg_map 행이 새 시각으로 쌓인다.
+#   매크로가 캡차를 끝내면 POST /telegram/captcha_over/{pc_id} 로 대기를 바로 걷는다(아래).
+TG_REPLY_WINDOW      = int(os.getenv("TELEGRAM_REPLY_WINDOW", "60"))  # 답장 없이 코드만 왔을 때 추론 유효시간(초)
 TG_CODE_RE           = re.compile(r"^[A-Za-z0-9]{3,16}$")
 TG_API               = "https://api.telegram.org/bot"
 # 폴러 리스: 인스턴스가 둘 이상 떠도 한 놈만 getUpdates를 잡게(중복 소비 시 메시지 유실)
@@ -2347,6 +2354,14 @@ async def _build_full_state_inner(tenant: str = "main") -> list[dict]:
                 #   순환은 _rot_active=None 으로 영원히 멈췄다. 계정 칸·합계 재료는 어느 쪽이든 비운다.
                 _live = str(_pc.get("status") or "") not in ("other_account", "offline", "no_account", "")
                 _st = _pc.get("status")
+                # ★#441 (2026-10-04)★ status 문자열과 별개로 «매크로가 지금 이 슬롯에서 돌고 있나» — WS 접속이거나 최근 수신(≤MACRO_LIVE_S).
+                #   매크로가 정지 슬롯에서 스스로 no_account 등을 보고하면 위 _live 가 거짓이 돼 대시보드가 명령을 전부 막았다(PC-23b).
+                #   표시·합계는 그대로 비우고(아래), 이 한 칸만 라우팅용으로 싣는다.
+                try:
+                    _sil441 = int(_pc.get("_macro_silent_s", -1))
+                except Exception:
+                    _sil441 = -1
+                _pc["macro_live"] = bool(_pc.get("_ws_live")) or (0 <= _sil441 <= MACRO_LIVE_S)
                 _blank_acct_fields(_pc)
                 if _live:
                     _pc["status"] = _st
@@ -2473,7 +2488,20 @@ async def push_state(tenant: str = "main"):
 PUSH_MIN_GAP_S = 1.0     # 대시보드 상태 방송 최소 간격(초) — 보고가 몰려도 초당 한 번
 PUSH_BUILD_TIMEOUT_S = 30.0   # 한 판 조립·발행 상한 — 넘으면 그 판만 버리고 일꾼은 산다
 RESYNC_MIN_GAP_S = 2.0   # 한 화면의 resync(전량 다시) 최소 간격
-STATE_PING_S = 25.0      # 바뀐 카드가 없어도 이만큼 조용하면 ping 한 통(화면 90초 감시견이 괜히 재접속 안 하게)
+STATE_PING_S = 20.0      # 바뀐 카드가 없어도 이만큼 조용하면 ping 한 통(화면 45초 감시견이 괜히 재접속 안 하게, #448)
+
+
+def _ping_msg(tenant: str) -> dict:
+    """★#448★ ping 은 «서버가 가진 최신 상태 판 번호» 를 싣는다(숫자 하나). 화면이 받은 판과 계속 다르면
+    «연결은 살아 있는데 상태가 안 들어오는» 반쪽 죽음이다 — 화면이 전량을 한 번 조르고 그래도 같으면 재접속한다."""
+    m = {"type": "ping"}
+    try:
+        v = (_FEED.get(tenant) or {}).get("ver")
+        if v:
+            m["ver"] = v
+    except Exception:
+        pass
+    return m
 UPDATER_STALE_S = 270    # 화면 buildCard 의 「업데이터 N분전」 문턱(_ustale) — 둘이 같아야 한다(test_push)
 STATE_VOLATILE = ("_macro_silent_s", "_updater_age_s")   # 매 조립마다 1초씩 커지는 칸 — 비교에서 뺀다
 _FEED: dict = {}         # tenant → {"ver","keys","full","diff","retired","latest","at"}
@@ -2614,7 +2642,7 @@ async def _push_state_now(tenant: str = "main"):
             f["at"] = now
         elif now - f["at"] >= STATE_PING_S:
             f["at"] = now
-            await manager.broadcast({"type": "ping"}, tenant)
+            await manager.broadcast(_ping_msg(tenant), tenant)
         else:
             _perf_count("push_state_unchanged")
         await manager.publish_state(tenant)      # 바뀐 게 없어도 — 새로 붙은 소켓은 전량을 받아야 한다
@@ -3064,7 +3092,9 @@ async def set_setting_ep(key: str, request: Request):
     #                 (직원분들이 "체크했는데 사라진다" 를 겪게 된다). 배포 전 게이트에서 잡음.
     # ★B-NEW1 (2026-09-23)★ ai_kina_sold 는 {"day","keys":[PC…]} JSON 이라 기본 100자면 PC 9대쯤에서
     #   잘려 ★깨진 JSON★ 이 저장되고 판매완료 체크가 통째로 풀렸다. (ops/02_서버_대시보드.py 에 _CAP 사본 있음)
-    _CAP = {"rental_kill": 1000, "ai_dungeon_done": 8000, "ai_kina_sold": 4000}
+    #   exe_test_pin : ★시험 exe 핀★ (2026-10-11) {"PC-01":{"version","sha256"(64),"until","seed"?}} — PC 하나가 ~175자, 24대여도 6000 안.
+    #                 기본 100자면 64자리 sha 에서 잘려 JSON 이 깨진다. 잘리면 핀이 통째로 무시된다(_pin_pick) — 안전한 쪽이지만 시험이 안 먹는다.
+    _CAP = {"rental_kill": 1000, "ai_dungeon_done": 8000, "ai_kina_sold": 4000, "exe_test_pin": 6000}
     val = val_raw[:_CAP.get(key, 100)]
     if len(val_raw) > len(val):
         print(f"[설정] ★{key} 값이 상한({_CAP.get(key,100)})을 넘어 잘렸다★ — {len(val_raw)}자")
@@ -3469,6 +3499,9 @@ async def health(request: Request):
         #   이미지 배포처를 raw 로 바꿔 놓고 재배포를 30분 기다렸는데, 배포가 됐는지
         #   안 됐는지 확인할 방법이 없어 /check 응답만 계속 찔러 봤다. 값을 내보내면 끝난다.
         "img_base": _GH_CDN.split("//", 1)[-1][:28],
+        # ★#255★ 서버가 GitHub 을 토큰으로 읽는가(값은 절대 안 준다) · 함대가 서버에서 받는가
+        "gh_token": GHR.token_state(),
+        "dl_relay": DL_RELAY,
         # ★★지금 /check 가 ★무슨 버전을 광고하고 있는지★ 를 밖에서 보이게 (사고 146)★★
         #   2026-08-22 실사고: 605·606·607 을 11분 안에 몰아 올렸더니 _version_cache(300초)
         #   + raw.githubusercontent 엣지 캐시가 겹쳐, 릴리스 후 ~10분간 /check 가 옛 버전을
@@ -4389,6 +4422,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
      → HTML 주석 안에 주석 기호를 절대 쓰지 않는다(이 문장을 쓰면서 또 그랬다).
      조작법은 파이썬 코드 주석(파일 상단 83~85행)에만 둔다. -->
     <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors" title="WebSocket"></span>
+    <span id="ws-age" class="text-xs text-gray-500" title="마지막으로 서버 소식을 받은 뒤 지난 시간"></span>
     <span id="pc-count" class="text-xs text-gray-500">PC 0대</span>
     <a href="/auth/logout" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">로그아웃</a>
   </div>
@@ -5810,16 +5844,21 @@ function sumClock(){ return (typeof performance !== 'undefined' && performance.n
 //   마지막 값이 무기한 남았다. 주기(20초)의 세 배가 지나면 서버값을 버리고 화면 계산(폴백)으로
 //   돌아간다. 요청 하나가 걸려도 10초에 끊는다.
 const SERVER_SUMMARY_TTL_MS = 60000;
+// ★#454 (2026-10-06 주인님 «새로고침 안 하면 숫자가 오르락내리락»)★ 한 칸 = 한 출처. 서버값은 ★마지막 값을 계속 쓴다★ —
+//   예전엔 60초 묵으면 버리고 화면 계산으로 갈아탔는데(/summary 두 번 실패면 충분), 두 계산이 달라 칸마다 숫자가 튀었다가 돌아왔다.
+//   화면 계산은 ★서버값을 한 번도 못 받은 첫 화면★ 에만. 늦으면 툴팁이 «N초 전 값 유지» 를 말한다(serverSumStale).
 function serverSum(now){
-  if(!SERVER_SUMMARY) return null;
-  return ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) < SERVER_SUMMARY_TTL_MS ? SERVER_SUMMARY : null;
+  return SERVER_SUMMARY || null;
+}
+function serverSumStale(now){
+  return !!SERVER_SUMMARY && ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) >= SERVER_SUMMARY_TTL_MS;
 }
 // 전광판 칸 툴팁에 붙일 출처 한 줄 — 서버값인지, 끊겨서 화면 계산인지 사람이 가를 수 있게.
 function serverSumNote(now){
   const t = (now == null ? sumClock() : now);
-  if(serverSum(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
+  if(SERVER_SUMMARY && !serverSumStale(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
   return SERVER_SUMMARY
-    ? '※ 서버 요약이 ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초째 끊김 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t)
+    ? '※ 서버 요약 갱신 지연 — ★마지막 서버값★ ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전 것을 유지 중(숫자는 안 바꿉니다)'
     : '※ 서버 요약 대기 중 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t);
 }
 // ★renderCards 와 같은 모집단(가짜 PC 제외)★ — 예전엔 20초마다 여기서만 PC-TEST 가 섞여
@@ -5840,7 +5879,7 @@ async function loadServerSummary(){
     SERVER_SUMMARY_AT = sumClock();
   }catch(e){ console.error('서버 전광판 요약 실패', e); }
   finally{ if(to) clearTimeout(to); }
-  redrawSummary();   // 실패해도 다시 그린다 — 낡았으면 serverSum() 이 null 이라 폴백으로 바뀐다
+  redrawSummary();   // 실패해도 다시 그린다 — 값은 마지막 서버값 그대로, 툴팁만 «N초 전 값 유지» (#454)
 }
 
 function dkHero(){
@@ -6851,26 +6890,17 @@ function buildStack(s){
   //   ★폴백★ 지도가 없으면(옛 매크로/수집 전) 카드별 daily_progress 길이를 더한다.
   //     그건 ★카드가 있는 계정만★ 세므로 실제보다 작을 수 있어 앰버로 알린다.
   // ══════════════════════════════════════════════════════════════════════
-  const nameMap = {};
-  s.list.forEach(p => Object.assign(nameMap, p.acct_names || {}));
-  let nChar = 0, nCharAcct = 0;
-  for (const k of Object.keys(nameMap)) {
-    const cnt = Object.values(nameMap[k] || {}).filter(v => String(v || '').trim()).length;
-    if (cnt > 0) { nChar += cnt; nCharAcct++; }
-  }
+  const _cg = groupChars(s.list);          // ★#451★ 전광판과 같은 한 함수(§A12)
+  let nChar = _cg.n, nCharAcct = _cg.accts + (_cg.outAccts || 0);     // OUT 계정은 «정보 있음» 으로 본다(갭 문구용)
   let charGap = '';
-  if (!nChar) {                      // 지도가 없다 → 카드에서 센다(모자랄 수 있다)
-    const seen = {};
-    s.list.forEach(p => { const k = acctNumOf(p.pc_id);
-      seen[k] = Math.max(seen[k] || 0, (p.daily_progress || []).length); });
-    nChar = Object.values(seen).reduce((a, b) => a + b, 0);
-    nCharAcct = Object.keys(seen).filter(k => seen[k] > 0).length;
+  if (!_cg.fromMap) {                // 지도가 없다 → 카드에서 센다(모자랄 수 있다)
     charGap = '캐릭 이름 정보가 없어 ★카드에 보인 슬롯만★ 셌습니다 (정보수집을 돌리면 정확해집니다)';
   } else if (nCharAcct < hiNum) {
     charGap = `계정 ${hiNum}개 중 ★${nCharAcct}개만★ 캐릭 정보가 있습니다 `
             + `(나머지는 정보수집이 안 됐거나 info.txt 에 캐릭 이름이 비어 있습니다)`;
   }
   const totTip = `이 PC 의 ★총 캐릭 ${nChar}명★ · 계정 ${hiNum}개`
+    + (_cg.out > 0 ? ` · 정지(OUT) 계정 캐릭 ${_cg.out}명 제외` : '')
     + (idNums.length && idNums.length !== hiNum ? ` (아이디 등록 ${idNums.length}개)` : '')
     + (charGap ? ` \u2014 ${charGap}` : '');
   const total = `<span class="acct-total${charGap ? ' acct-total-gap' : ''}" `
@@ -7014,6 +7044,36 @@ function parseOddEnergy(str) {
   return a + b;
 }
 
+// ★#451 (2026-10-05 주인님 「전광판 캐릭터수 맨날 바뀐다」 · 「지금 아웃시킨거 제외하고」)★ 한 물리 PC(묶음) 의 캐릭 수 — 카드 배지와 전광판이 ★같은 함수★ (§A12).
+//   정지(OUT) 슬롯(banned_slots, 묶음 카드들의 합집합 — 계정 탭 OUT 과 같은 목록)의 계정은 세지 않는다. 뺀 수는 out 으로 돌려준다.
+//   정본 = 묶음 안 모든 카드의 acct_names 를 합친 «전 계정 지도»({계정번호:{슬롯:캐릭이름}}, info.txt 출처) 의 이름 있는 칸 수.
+//   카드가 no_account/정지로 비워지거나 순환으로 계정이 바뀌어도 지도는 그대로라 숫자가 안 흔들린다.
+//   지도가 없을 때만(옛 매크로·수집 전) 카드의 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다.
+//   → {n, accts, fromMap, out, outAccts}
+function groupChars(list){
+  const map = {};
+  const banned = new Set();                         // ★정지(OUT) 슬롯(2026-10-05 주인님 «지금 아웃시킨거 제외하고»)★ — 계정 탭 OUT 과 같은 목록
+  (list || []).forEach(p => {
+    Object.assign(map, (p && p.acct_names) || {});
+    ((p && p.banned_slots) || []).forEach(x => banned.add(String(x)));
+  });
+  let n = 0, accts = 0, out = 0, outAccts = 0;
+  for (const k of Object.keys(map)) {
+    const cnt = Object.values(map[k] || {}).filter(v => String(v || '').trim()).length;
+    if (cnt <= 0) continue;
+    if (banned.has(String(k))) { out += cnt; outAccts++; continue; }      // OUT 계정의 캐릭은 세지 않는다(몇 명 뺐는지만 남긴다)
+    n += cnt; accts++;
+  }
+  if (n + out > 0) return {n, accts, fromMap: true, out, outAccts};    // 전부 OUT 이어도 지도가 있으니 폴백으로 가지 않는다(0)
+  const seen = {};
+  (list || []).forEach(p => { const k = acctNumOf((p && p.pc_id) || '');
+    const c = ((p && p.daily_progress) || []).length || ((p && p.chars) || []).length;
+    if (banned.has(String(k))) { out += c; return; }
+    seen[k] = Math.max(seen[k] || 0, c); });
+  const fb = Object.values(seen).reduce((a, b) => a + b, 0);
+  return {n: fb, accts: Object.keys(seen).filter(k => seen[k] > 0).length, fromMap: false, out, outAccts: 0};
+}
+
 function refreshSummary(pcs) {
   const c={online:0,offline:0,completedPcs:0,onlineChars:0,completedChars:0,totalKina:0};
   const seenPc = new Set();
@@ -7063,14 +7123,15 @@ function refreshSummary(pcs) {
     //   ★이 숫자는 '지금 몇 대가 켜져 있나' 가 아니라 '내가 굴리는 캐릭이 몇인가' 다.★
     //   PC 를 껐다고 캐릭터가 사라지는 게 아니므로 온라인 여부와 무관하게 전부 센다.
     //   (대수 정보는 아래 '온라인' 섹션 헤더와 이 칸 툴팁에 그대로 남는다)
-    let n = 0;
+    //   ★#451★ 묶음별로 groupChars(전 계정 지도) — 카드 합산(비워진 카드가 빠져 100 vs 149 로 흔들렸다)은 지도 없는 묶음의 폴백만.
+    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0;
     Object.values(grp).forEach(list => {
-      list.forEach(p => {
-        const dp = p.daily_progress || [];
-        n += dp.length || ((p.chars && p.chars.length) || 0);
-      });
+      const cg = groupChars(list);
+      n += cg.n; outN += cg.out || 0;
+      if (cg.fromMap) mapPcs++; else if (cg.n > 0) fbPcs++;
     });
     c.onlineChars = n;
+    c._charSrc = {mapPcs, fbPcs, outN};
   }
   // 오드에너지 + 각성전 티켓 + 거래키나 합산 (charTableData 기준, 거래키나는 캐릭터별 소지라 전 캐릭 합산)
   let totalOdd = 0, totalAwaken = 0, awakenSeen = false, totalTrade = 0, tradeSeen = false;
@@ -7084,11 +7145,25 @@ function refreshSummary(pcs) {
   elOn.textContent = c.onlineChars;
   // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
   elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
-             + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
+             + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`
+             + (c._charSrc.outN ? ` / ★정지(OUT) 계정 캐릭 ${c._charSrc.outN}명 제외★` : '')
+             + ` / 출처: 계정별 캐릭 명단(info.txt) ${c._charSrc.mapPcs}대` + (c._charSrc.fbPcs ? ` · 명단 없어 카드 합산으로 센 PC ${c._charSrc.fbPcs}대(모자랄 수 있음)` : '');
+  // ★#454 캐릭터·완료 칸도 서버값이 최종값★ (char_total·chars_done = 서버 _fv_group_chars/_dp_done — 화면 groupChars/dpDone 과 같은 규칙).
+  //   서버가 아직 안 준 첫 화면(또는 옛 서버)만 위에서 센 화면 계산.
+  const ssC = serverSum();
+  if (ssC && typeof ssC.char_total === 'number') {
+    c.onlineChars = ssC.char_total;
+    elOn.textContent = c.onlineChars;
+    elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
+               + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`
+               + (ssC.chars_out ? ` / ★정지(OUT) 계정 캐릭 ${ssC.chars_out}명 제외★` : '')
+               + ` / 출처: 서버(계정별 캐릭 명단 ${ssC.chars_map_pcs}대` + (ssC.chars_fb_pcs ? ` · 카드 합산 폴백 ${ssC.chars_fb_pcs}대(모자랄 수 있음)` : '') + ')'
+               + ' — ' + serverSumNote();
+  }
   // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
   //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
   //   ★서버 합계는 「한 카드도 못 읽은 칸」을 null 로 준다(반증 #2)★ — 0 과 모름을 가른다.
-  //   ★낡으면(60초) 서버값을 버린다(반증 #4)★ — serverSum() 이 null 을 준다.
+  //   ★#454: 낡아도 서버값을 버리지 않는다★ — 마지막 서버값 유지, 화면 계산은 첫 /summary 전에만(serverSum 머리 주석).
   const ss = serverSum();
   const ssNote = serverSumNote();
   const elOdd = document.getElementById('cnt-odd-energy');
@@ -7106,10 +7181,14 @@ function refreshSummary(pcs) {
     ? (ss.trade_kina != null ? fmtKinaKor(ss.trade_kina) : '–')
     : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
   elTr.title = ssNote;
-  document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
+  // ★#454 일일던전 남음도 서버값이 최종(totals.dungeon_left — isDungeonDone 과 같은 규칙, 마지막 서버값 유지)★ 서버가 아직 안 준 첫 화면만 화면 계산
+  const ssD = serverSum();
+  document.getElementById('cnt-dungeon-left').textContent = (ssD && typeof ssD.dungeon_left === 'number') ? String(ssD.dungeon_left) : (pcs.length ? String(dungeonLeft.size) : '–');
   const elDone = document.getElementById('cnt-completed');
+  if (ssC && typeof ssC.chars_done === 'number') { c.completedChars = ssC.chars_done; c.completedPcs = ssC.pcs_done || 0; }     // #454 서버값이 최종
   elDone.textContent = c.completedChars;
-  elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
+  elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`
+    + (ssC && typeof ssC.chars_done === 'number' ? ' — ' + serverSumNote() : '');
   const elTk = document.getElementById('cnt-total-kina');
   elTk.textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
   elTk.title = ssNote;
@@ -7200,7 +7279,7 @@ function selectAllPcs() {
 //   안 도는 카드면 같은 PC 의 살아 있는 카드로. 살아 있는 카드가 없으면 자기 자신(큐에 남는다).
 function cmdTargetOf(id){
   const st = (state[id]||{}).status || 'offline';
-  if ((STATUS_CFG[st]||STATUS_CFG.offline).online) return id;
+  if (cardOnline(state[id])) return id;
   const live = liveCardOf(baseId(id));
   return (live && live.pc_id) || id;
 }
@@ -7426,7 +7505,7 @@ async function sendCmd(pc_id, command, args={}) {
   //   (조용히 바꾸면 그것대로 §A2 위반이다).
   const _base307 = baseId(pc_id);
   const _st307 = ((state[pc_id]||{}).status) || 'offline';
-  const _on307 = (STATUS_CFG[_st307]||STATUS_CFG.offline).online;
+  const _on307 = cardOnline(state[pc_id]);          // ★#441★ 정지 카드라도 매크로가 지금 살아 있으면(macro_live) 그 카드가 명령을 받는다
   if (!_on307) {
     const _live307 = liveCardOf(_base307);
     if (_live307 && _live307.pc_id && _live307.pc_id !== pc_id) {
@@ -7850,7 +7929,7 @@ async function rotCmd(command) {
   const byBase = {};
   for (const id of selectedPcs) {
     const b = baseId(id);
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   const targets = Object.values(byBase).map(x => {
@@ -7895,7 +7974,7 @@ async function switchAccountSelected() {
   const byBase = {};
   for (const id of selectedPcs) {
     const b = baseId(id);
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   // ★이미 그 계정인 PC는 뺀다★ — 본컴을 괜히 한 번 더 돌리면 게임만 끊긴다
@@ -7932,7 +8011,7 @@ async function switchAllToFirst() {
   for (const id of Object.keys(state)) {
     const b = baseId(id);
     if (isFakePc(id)) continue;
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   // ★★주인님 지시 (2026-09-04) — 「뭐 하고 있는애들은 그냥 전환 안 시켜도돼」★★
@@ -8465,23 +8544,69 @@ function applyStateMsg(msg, sock){
   return true;
 }
 
-let _ws=null, _wsLastMsg=0, _wsVisSent=false;
+let _ws=null, _wsLastMsg=0, _wsVisSent=false, _wsFail=0, _wsTimer=null, _wsConnAt=0, _wsStaleSince=0, _wsRetryAt=0;
+// ★#448 (2026-10-05 주인님 「F5 안 눌러도 문제없게 · 서버 괴롭히지 말고」)★ 연결 살아 있음 감시.
+//   서버는 20초마다 ping(숨은 화면에도, 판 번호 ver 동봉)을 보낸다 → 45초(숨으면 90초) 아무것도 안 오면 죽은 소켓이다.
+//   재접속은 2→4→8…60초 + 지터(탭이 여럿이어도 한꺼번에 몰리지 않게). 첫 메시지를 받으면 백오프 초기화.
+//   페이지 새로고침·/status 반복 조회는 안 한다 — 재접속하면 서버가 전량 한 번을 준다(기존 길).
+const WS_DEAD_MS=45000, WS_DEAD_HIDDEN_MS=90000, WS_CONNECT_MAX_MS=15000, WS_STALE_VER_MS=20000;
 // ★#271 (2026-09-27 주인님 「라이브 안 쓰는데」)★ 숨은 화면(탭 뒤·최소화·크기 0 iframe)은 서버에 알려
 //   상태·로그를 안 받는다. 보이게 되면 알리고 서버가 전량 한 번. 알림(소리)·ping 은 숨어도 온다.
 function _wsHid(){ return document.hidden || innerWidth===0 || innerHeight===0; }
 function _wsVis(){ const h=_wsHid(); if(_ws && _ws.readyState===1 && h!==_wsVisSent){ try{ _ws.send(JSON.stringify({t:'vis',h:h?1:0})); _wsVisSent=h; if(!h) _wsLastMsg=Date.now(); }catch(err){} } }
 window.addEventListener('resize',_wsVis); setInterval(_wsVis,5000);
+function _wsDot(on){ const d=document.getElementById('ws-dot'); if(d) d.className='w-2.5 h-2.5 rounded-full '+(on?'bg-green-500':'bg-red-500')+' transition-colors'; }
+function _wsSchedule(){
+  if(_wsTimer) return;
+  const base=Math.min(60000, 2000*Math.pow(2,Math.min(_wsFail,5)));
+  const wait=Math.round(base+Math.random()*base*0.5);
+  _wsFail++; _wsRetryAt=Date.now()+wait;
+  _wsTimer=setTimeout(()=>{ _wsTimer=null; _wsRetryAt=0; connectWS(); }, wait);
+}
+// 반개방(close 이벤트가 안 오는) 소켓을 버린다 — close() 만 부르고 onclose 를 기다리면 브라우저에 따라 몇 분이 걸린다.
+function _wsAbandon(){
+  const old=_ws; _ws=null;
+  if(old){ old.onmessage=old.onclose=old.onerror=old.onopen=null; try{old.close();}catch(err){} }
+  _wsDot(false); _wsSchedule();
+}
+// 살아 있나(타이머·보이게 될 때·온라인 복귀 공통). stale 이면 버리고 재접속 예약, 소켓이 없는데 예약도 없으면 바로 접속.
+function _wsCheck(){
+  if(!_ws){ if(!_wsTimer){ _wsFail=0; connectWS(); } return; }
+  if(_ws.readyState===0){ if(Date.now()-_wsConnAt>WS_CONNECT_MAX_MS) _wsAbandon(); return; }
+  if(_ws.readyState!==1){ _wsAbandon(); return; }
+  if(Date.now()-_wsLastMsg>(_wsHid()?WS_DEAD_HIDDEN_MS:WS_DEAD_MS)) _wsAbandon();
+}
+// ping 의 ver 가 받은 판과 계속 다르면(연결은 사는데 상태 펌프가 죽은 경우) 전량을 한 번 조르고, 그래도 같으면 재접속.
+function _wsPing(msg, ws){
+  if(typeof msg.ver!=='number' || _wsHid() || msg.ver===STATE_VER){ _wsStaleSince=0; return; }
+  const now=Date.now();
+  if(!_wsStaleSince){ _wsStaleSince=now; return; }          // 처음 본 어긋남은 전송 중일 수 있다
+  if(now-_wsStaleSince<WS_STALE_VER_MS) return;
+  if(!_resyncAsked){ _resyncAsked=true; _wsStaleSince=now; try{ ws.send(JSON.stringify({type:'resync'})); }catch(err){} return; }
+  _wsStaleSince=0; _wsAbandon();
+}
+// 화면 한쪽의 «갱신 N초 전 / 재연결 중» — 텍스트 한 칸만 1초마다 갱신(서버 요청 없음)
+function _wsAgeTick(){
+  const el=document.getElementById('ws-age'); if(!el) return;
+  let t, warn=false;
+  if(!_ws || _ws.readyState!==1){ const w=_wsRetryAt?Math.max(0,Math.ceil((_wsRetryAt-Date.now())/1000)):0; t='재연결 중'+(w?' '+w+'초':'…'); warn=true; }
+  else { const a=Math.max(0,Math.round((Date.now()-_wsLastMsg)/1000)); t='갱신 '+a+'초 전'; warn=a>30; }
+  if(el.textContent!==t){ el.textContent=t; el.className='text-xs '+(warn?'text-amber-400':'text-gray-500'); }
+}
+setInterval(_wsAgeTick,1000);
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}`);
-  _ws=ws; _wsLastMsg=Date.now(); _wsVisSent=_wsHid();
+  _ws=ws; _wsLastMsg=Date.now(); _wsConnAt=Date.now(); _wsVisSent=_wsHid(); _wsStaleSince=0;
   // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
   //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
   STATE_VER = -1; _resyncAsked = false;
-  ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
+  ws.onopen=()=>{ if(_ws===ws) _wsDot(true); };
   ws.onmessage=(e)=>{
-    _wsLastMsg=Date.now();
+    if(_ws!==ws) return;
+    _wsLastMsg=Date.now(); _wsFail=0;
     const msg=JSON.parse(e.data);
+    if(msg.type==='ping'){ _wsPing(msg, ws); return; }
     if(msg.type==='state'||msg.type==='state_diff'){ if(applyStateMsg(msg, ws)){pendSweep();updResultSweep();scheduleRender();} }   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
@@ -8490,16 +8615,18 @@ function connectWS() {
     else if(msg.type==='alert'){handleAlert(msg);}
   };
   ws.onclose=(e)=>{
-    document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-red-500 transition-colors';
+    if(_ws!==ws) return;                              // 이미 버린 소켓의 늦은 close
+    _ws=null; _wsDot(false);
     if(e&&e.code===1008){location.reload();return;}   // 세션 무효(만료 등) → 새로고침으로 로그인 이동
-    setTimeout(connectWS,3000);
+    _wsSchedule();
   };
 }
 
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>(_wsHid()?180000:90000)){ try{_ws.close();}catch(err){} } },15000);   // 숨어도 서버가 25초마다 ping(#271) — 숨은 동안은 180초로 느슨하게
+setInterval(_wsCheck,5000);   // #448 45초(숨으면 90초) 무수신이면 버리고 재접속 — 숨어도 서버가 20초마다 ping(#271)
+window.addEventListener('online',()=>{ if(!_ws && _wsTimer){ clearTimeout(_wsTimer); _wsTimer=null; _wsRetryAt=0; _wsFail=0; connectWS(); } else _wsCheck(); });
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
@@ -10547,9 +10674,15 @@ function cmTarget(){
   }
   return live;
 }
+// ★#441 (2026-10-04)★ 명령 라우팅의 «살아 있는 카드» 판정 한 곳. 서버는 정지(OUT) 계정 카드를 표시·합계용으로 status=no_account 로 비우지만
+//   그 슬롯에서 매크로가 ★실제로 돌고 있으면★ macro_live=true 를 싣는다(WS 접속 또는 최근 보고) — 이 카드를 «없다» 로 치면
+//   정지 계정에서 다른 계정으로 전환하는 명령조차 «도는 매크로가 없습니다» 로 막힌다(PC-23b).
+function cardOnline(p){
+  p = p || {};
+  return !!((STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online) || !!(p.banned && p.macro_live === true);
+}
 function liveCardOf(base){
-  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
-  return Object.values(state).find(p => baseId(p.pc_id||'')===base && isOn(p)) || null;
+  return Object.values(state).find(p => baseId(p.pc_id||'')===base && cardOnline(p)) || null;
 }
 function currentAcctNum(base){
   const live = liveCardOf(base);
@@ -10947,8 +11080,8 @@ function handleCharInfoMsg(msg) {
     document.documentElement.classList.toggle('fx-off',document.hidden);
     if(!document.hidden){
       renderCards(); loadCharTable(); loadCmdHistory();
-      if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} }
-      else _wsVis();
+      _wsCheck();                                     // #448 낡았을 때만 재접속(멀쩡하면 건드리지 않는다)
+      _wsVis();
     } else _wsVis();
   });
 })();
@@ -11777,6 +11910,54 @@ async def banned_for_pc(pc_id: str, request: Request):
                          "label": BANNED_LABEL})
 
 
+FLEET_STUTTER_WINDOW_S = 180     # #453 «최근 보고» 창 — 매크로 하트비트 30초의 여유
+
+
+def _fleet_stutter_core(tenant: str, pc: str) -> dict:
+    """★#453 (사고 678)★ 함대 렉 집계 — 메모리 상태(_ST_MEM, 보고마다 갱신되는 뜨거운 캐시)만 훑는다(DB 없음).
+    reporting = 최근 FLEET_STUTTER_WINDOW_S 안에 /status 가 온 ★물리 PC★(baseId — b/c/d 카드는 한 대).
+    bad_others = 그 PC 중 ★나(pc 의 baseId)를 뺀★ 최신 보고의 stutter.bad 가 true 인 수.
+    모르는 pc·자료 없음 → 0/0 (매크로는 reporting==0 을 «함대 상태 모름 = 안 건드린다» 로 읽는다 — 건강한 척 채우지 않는다)."""
+    me = _base_pc(clean_pc_id(pc or ""))
+    newest: dict = {}                   # base → (수신 나이 초, data json)
+    known = False
+    for key, m in list(_database_mod._ST_MEM.items()):
+        t, raw = split_ns(key)
+        if t != tenant:
+            continue
+        base = _base_pc(raw)
+        if base.upper().startswith(FAKE_PC_BASES):
+            continue
+        if base == me:
+            known = True
+        age = _age_s(m.get("at"))
+        if age is None or age > FLEET_STUTTER_WINDOW_S:
+            continue
+        cur = newest.get(base)
+        if cur is None or age < cur[0]:
+            newest[base] = (age, m.get("data"))
+    if not me or not known or not newest:
+        return {"bad_others": 0, "reporting": 0}
+    bad = 0
+    for base, (_age, raw) in newest.items():
+        if base == me:
+            continue
+        try:
+            st = (json.loads(raw) or {}).get("stutter")
+        except Exception:
+            continue
+        if isinstance(st, dict) and st.get("bad") is True:
+            bad += 1
+    return {"bad_others": bad, "reporting": len(newest)}
+
+
+@app.get("/fleet/stutter")
+async def fleet_stutter(request: Request, pc: str = ""):
+    """#453 매크로(X-Api-Key)가 약 분당 한 번 묻는다 — 읽기 전용 · 메모리만. 계약: CONTRACTS_대시보드.md §18."""
+    tenant = _require_api_key(request)
+    return JSONResponse(_fleet_stutter_core(tenant, pc), headers={"Cache-Control": "no-store"})
+
+
 @app.get("/admin/banned_accts")
 async def admin_banned_list(request: Request):
     """#276 정지 계정 슬롯 목록(카드 id — 계정1 은 접미사 없음)."""
@@ -12367,6 +12548,19 @@ def _tg_retired_skip(nspc: str, text: str) -> JSONResponse:
     return JSONResponse({"ok": False, "muted": True, "reason": _TG_REASON_MUTED, "retired": True, "minutes_left": 0})
 
 
+@app.post("/telegram/captcha_over/{pc_id}")
+async def telegram_captcha_over(pc_id: str, request: Request):
+    """매크로 → 「이 PC 의 캡차가 끝났다」 — 코드 대기(tg_map)를 바로 걷는다(주인님 #351, 2026-09-30).
+    끝난 캡차의 대기가 남으면 다음 PC 의 코드가 «어느 PC인지 알 수 없습니다» 로 거절된다. ★멱등★ — 대기가 없어도 200.
+    지운 행은 kind='done' 으로 묻힌다(tg_map_delete_pc) — 그 사진에 늦게 단 답장은 「이미 처리됐거나 만료」."""
+    tenant = check_api_key(request)
+    if not tenant:
+        raise HTTPException(status_code=403)
+    key = ns(tenant, clean_pc_id(pc_id))
+    await tg_map_delete_pc(key)
+    return JSONResponse({"ok": True, "pc_id": clean_pc_id(pc_id)})
+
+
 @app.post("/telegram/mute/{pc_id}")
 async def telegram_mute(pc_id: str, request: Request):
     """PC 텔레그램 음소거. body: {"hours": 5}  / hours<=0 이면 해제.
@@ -12522,6 +12716,8 @@ async def telegram_send(pc_id: str, request: Request):
         return _tg_retired_skip(ns(tenant, pc_id), text)
     if _retired:
         _mark_retired_seen(ns(tenant, pc_id))
+    else:
+        _laya_label.seed_bg(tenant, name, text)     # 라야 라벨 씨앗(2026-10-11) — 백그라운드, 실패는 삼킨다
     _left = 0 if _hard else _tg_muted(tenant, pc_id)
     if _left > 0:
         return await _tg_mute_skip(tenant, pc_id, name, text, _left)
@@ -13251,7 +13447,7 @@ async def _bug_pins_load() -> None:
     _BUG_PINS_LOADED[0] = True
 
 
-DASH_KEEPALIVE_S = 25.0
+DASH_KEEPALIVE_S = 20.0      # #448 — 화면 감시견이 45초 무수신이면 재접속하므로 두 번 연속 빠져야 오탐
 
 
 async def _dash_keepalive() -> None:
@@ -13265,7 +13461,7 @@ async def _dash_keepalive() -> None:
             return
         try:
             for t in sorted({t for _w, t in list(manager.active)}):
-                await manager.broadcast({"type": "ping"}, t)
+                await manager.broadcast(_ping_msg(t), t)
         except Exception:
             pass
 
@@ -13583,6 +13779,17 @@ async def download_updater(request: Request):
     url = (ver.get("updater") or {}).get("download_url") or \
         "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
     fname = "updater.exe" if tenant == "main" else "rental_updater.exe"
+    # ★#255★ 비공개 저장소 대비 — 함대와 같은 검증 캐시(/dl)에서 먼저 준다. 못 구하면 아래 옛 스트리밍(토큰 실음).
+    _upath = None
+    _usha = GHR.expected_sha(ver, "updater.exe")
+    if _usha:
+        try:
+            _upath, _ = await _dl_get("updater.exe", _usha)
+        except Exception as e:
+            print(f"[updater.exe] 캐시 실패 → 스트리밍: {e.__class__.__name__}")
+            _upath = None
+    if _upath and tenant == "main":
+        return FileResponse(_upath, media_type="application/octet-stream", filename=fname)
 
     # ★렌탈은 exe + 채워진 info.txt를 ZIP으로 준다(2026-08-07 사용자 요청)★
     #   "인포 만들 때 알아서 키를 넣어놔라" — 그런데 업데이터는 main·rental 공용 단일 바이너리라
@@ -13597,12 +13804,16 @@ async def download_updater(request: Request):
             #   이 갈래만 ★동기★ 로 75MB 를 받고 압축했다(read=180초). 지인 하나가
             #   설치 파일을 받는 동안 전 함대의 WS 와 대시보드가 멈추는 구조였다(§A12).
             def _build_zip_sync():
-                with _hx2.Client(timeout=_hx2.Timeout(10.0, read=180.0),
-                                 follow_redirects=True) as _c:
-                    _r = _c.get(url)
-                    if _r.status_code != 200:
-                        return _r.status_code, None
-                    _exe = _r.content
+                if _upath:
+                    with open(_upath, "rb") as _f:
+                        _exe = _f.read()
+                else:
+                    with _hx2.Client(timeout=_hx2.Timeout(10.0, read=180.0),
+                                     follow_redirects=True) as _c:
+                        _r = _c.get(url, headers=GHR.gh_headers(url))
+                        if _r.status_code != 200:
+                            return _r.status_code, None
+                        _exe = _r.content
                 _t = _tf.NamedTemporaryFile(delete=False, suffix=".zip")
                 with _zf.ZipFile(_t, "w", _zf.ZIP_DEFLATED) as z:
                     z.writestr("rental_updater.exe", _exe)
@@ -13629,7 +13840,7 @@ async def download_updater(request: Request):
     import httpx as _hx
     client = _hx.AsyncClient(timeout=_hx.Timeout(10.0, read=180.0), follow_redirects=True)
     try:
-        req = client.build_request("GET", url)
+        req = client.build_request("GET", url, headers=GHR.gh_headers(url))
         resp = await client.send(req, stream=True)
         if resp.status_code != 200:
             await resp.aclose()
@@ -14396,6 +14607,157 @@ _GH_CDN_JSDELIVR = "https://cdn.jsdelivr.net/gh/kevincom-honjong/aion2-macro-rel
 #   그때 _GH_CDN_JSDELIVR 로 되돌리거나 내부망 시드를 쓴다.
 _GH_CDN = _GH_RAW
 
+# ★★#255 (2026-09-26 주인님 «서버 중계로 바꾼 뒤 비공개») — 함대는 GitHub 을 직접 안 읽는다★★ (gh_relay.py 머리 참조)
+#   /check 의 exe·업데이터 download_url 을 ★서버의 서명된 기한부 주소★ /dl/<tok>/<asset> 로 준다.
+#   서버는 GH_READ_TOKEN(Railway env)으로 GitHub 을 읽고 볼륨에 sha256 검증 캐시를 둔다.
+#   되돌리는 손잡이: Railway env DL_RELAY=0 → 옛 GitHub 주소(공개 저장소일 때만 된다).
+import gh_relay as GHR                                     # noqa: E402
+DL_RELAY = os.getenv("DL_RELAY", "1").strip() != "0"
+DL_CACHE_DIR = os.getenv("DL_CACHE_DIR") or os.path.join(VOLUME_DIR, "dlcache")
+_DL_INFLIGHT: dict = {}     # (asset, sha) → 채우는 Task 하나 — 기다리는 요청은 스레드를 안 잡고 이것만 await(반증 M2)
+_DL_FAIL: dict = {}         # (asset, sha) → 이 시각까지 다시 안 시도(실패 60초 캐시 — 24대가 차례로 GitHub 을 다시 두드리지 않게)
+DL_FAIL_HOLD_S = 60
+_DL_HITS: dict = {}         # IP → 최근 /dl 시각들(반증 M3 — 키 없는 주소라 Railway 대역을 지킨다)
+DL_RATE_N, DL_RATE_WIN_S = 300, 600   # 함대 24대가 한 공인 IP 뒤라도 24×(exe+업데이터)×재시도 4 = 192 < 300
+
+
+def _dl_base(request) -> str:
+    """Railway 는 TLS 를 앞에서 끊어 request.base_url 이 http:// 일 수 있다 — 앞단이 https 라고 하면 https 로(서명 주소를 평문에 안 싣게)."""
+    base = str(request.base_url).rstrip('/')
+    if base.startswith("http://") and request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https":
+        base = "https://" + base[len("http://"):]
+    return base
+
+
+def _dl_sign_key(key_file: str) -> bytes:
+    """서명 비밀 — ★재배포해도 같은 값★(반증 2차 #2: SESSION_SECRET 미설정이면 부팅마다 바뀌어 받는 중인 주소가 404,
+    업데이터는 같은 주소를 4번 다시 시도하고 /check 를 다시 안 부른다).
+    순서: env DL_SIGN_KEY → env SESSION_SECRET(설정됐을 때) → 볼륨 파일(처음 한 번 만든다) → 못 쓰면 부팅마다 랜덤."""
+    env = os.getenv("DL_SIGN_KEY", "").strip()
+    if env:
+        return hashlib.sha256(("aion2-dl-key-v1:" + env).encode()).digest()
+    if _SESSION_SECRET_ENV:
+        return SESSION_SECRET
+    try:
+        os.makedirs(os.path.dirname(key_file) or ".", exist_ok=True)
+        try:
+            fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(os.urandom(32))
+        except FileExistsError:
+            pass
+        with open(key_file, "rb") as f:
+            k = f.read()
+        if len(k) == 32:
+            return k
+        print("[dl] 서명 키 파일 길이 이상 — 부팅마다 랜덤", flush=True)
+    except OSError as e:
+        print(f"[dl] 서명 키 파일 못 씀({e.__class__.__name__}) — 부팅마다 랜덤", flush=True)
+    return os.urandom(32)
+
+
+DL_SIGN_SECRET = _dl_sign_key(os.path.join(VOLUME_DIR, "dl_sign.key"))
+
+
+class _DlTokMask(__import__("logging").Filter):
+    """접근 로그(Railway)에 서명 주소가 그대로 남지 않게 /dl/<서명>/ → /dl/…/ (반증 2차 #5).
+    업데이터 쪽 로그(client/updater.py:647 마지막 실패 때 주소 전체)는 그 PC 에만 남고 서명은 그 판 하나·6시간짜리다."""
+    _RE = re.compile(r"/dl/[^/\s\"]+/")
+
+    def filter(self, record):
+        try:
+            if isinstance(record.args, tuple) and record.args:
+                record.args = tuple(self._RE.sub("/dl/…/", a) if isinstance(a, str) else a for a in record.args)
+            elif isinstance(record.msg, str) and "/dl/" in record.msg:
+                record.msg = self._RE.sub("/dl/…/", record.msg)
+        except Exception:
+            pass
+        return True
+
+
+__import__("logging").getLogger("uvicorn.access").addFilter(_DlTokMask())
+
+
+def _dl_url(base: str, asset: str) -> str:
+    return f"{base}/dl/{GHR.sign(DL_SIGN_SECRET, asset)}/{_urlparse.quote(asset)}"
+
+
+async def _dl_get(asset: str, sha: str) -> tuple:
+    """(경로|None, 사유). 캐시 적중은 스레드 없이 · 빈 캐시는 (asset, sha) 당 채우기 하나를 모두가 같이 기다린다 ·
+    실패는 60초 동안 곧바로 None(상류를 24번 줄 세워 두드리지 않는다)."""
+    p = GHR.cached_path(DL_CACHE_DIR, asset, sha)
+    if os.path.isfile(p):
+        return p, "hit"
+    key = (asset, sha)
+    if _DL_FAIL.get(key, 0) > time.time():
+        return None, "recent-fail"
+    t = _DL_INFLIGHT.get(key)
+    if t is None:
+        async def _run():
+            try:
+                path, why = await asyncio.to_thread(GHR.ensure, DL_CACHE_DIR, asset, sha)
+            except Exception as e:
+                path, why = None, e.__class__.__name__
+            if not path and not _dl_is_timeout(why):     # 시간 초과는 안 잡아 둔다 — 업데이터의 다음 시도가 곧바로 다시 채운다
+                _DL_FAIL[key] = time.time() + DL_FAIL_HOLD_S
+            _DL_INFLIGHT.pop(key, None)
+            return path, why
+        t = _DL_INFLIGHT[key] = asyncio.get_running_loop().create_task(_run())
+    try:
+        return await asyncio.wait_for(asyncio.shield(t), GHR.DL_DEADLINE_S + 20)
+    except asyncio.TimeoutError:                     # 채우기는 계속 돈다(shield) — 이 요청만 끝낸다
+        return None, "wait-timeout"
+
+
+def _dl_is_timeout(why: str) -> bool:
+    return any(w in str(why) for w in ("deadline", "Timeout", "timeout"))
+
+
+def _dl_prewarm(ver: dict, asset: str) -> None:
+    """새 판을 /check 가 처음 광고할 때 캐시를 미리 채운다 — 24대의 첫 요청이 GitHub 대기를 안 하게(같은 채우기 하나)."""
+    sha = GHR.expected_sha(ver, asset)
+    if not sha or (asset, sha) in _DL_INFLIGHT or os.path.isfile(GHR.cached_path(DL_CACHE_DIR, asset, sha)):
+        return
+    try:
+        asyncio.get_running_loop().create_task(_dl_get(asset, sha))
+    except RuntimeError:
+        pass
+
+
+def _dl_rate_ok(ip: str, now: float) -> bool:
+    q = [t for t in _DL_HITS.get(ip, ()) if now - t < DL_RATE_WIN_S]
+    if len(q) >= DL_RATE_N:
+        _DL_HITS[ip] = q
+        return False
+    q.append(now)
+    _DL_HITS[ip] = q
+    if len(_DL_HITS) > 2000:            # 오래된 IP 치우기
+        for k in [k for k, v in _DL_HITS.items() if not v or now - v[-1] >= DL_RATE_WIN_S]:
+            _DL_HITS.pop(k, None)
+    return True
+
+
+@app.api_route("/dl/{tok}/{asset}", methods=["GET", "HEAD"])   # HEAD — 배포 확인 스크립트(verifyNNN.py)가 쓴다(반증 M1)
+async def dl_asset(tok: str, asset: str, request: Request):
+    """함대 exe·업데이터 내려받기(#255). 인증 = /check 가 준 서명(업데이터 download_file 은 키를 안 보낸다).
+    지금 version.json 의 판만(sha256 이 맞는 파일만) 내준다. ETag = sha256."""
+    if not GHR.ASSET_RE.match(asset) or not GHR.verify(DL_SIGN_SECRET, asset, tok):
+        raise HTTPException(status_code=404)
+    if not _dl_rate_ok(_client_ip(request), time.time()):
+        raise HTTPException(status_code=429, detail="너무 자주 받습니다 — 잠시 뒤 다시")
+    sha = GHR.expected_sha(await _load_version_json_async(), asset)
+    if not sha:
+        raise HTTPException(status_code=404)
+    etag = f'"{sha}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    path, why = await _dl_get(asset, sha)
+    if not path:
+        print(f"[dl] {asset} 못 구함: {why}", flush=True)
+        raise HTTPException(status_code=502, detail="원본을 가져오지 못했습니다 — 잠시 뒤 다시")
+    return FileResponse(path, media_type="application/octet-stream", filename=asset,
+                        headers={"ETag": etag, "Cache-Control": "private, max-age=3600"})
+
 _version_cache = {"data": {}, "ts": 0}
 _version_lock = asyncio.Lock()
 VERSION_CACHE_TTL_S = 300            # version.json 캐시 수명(초) — 함대 21대가 5분마다 /check 를 찌른다
@@ -14446,8 +14808,8 @@ def _load_version_json() -> dict:
     #   영영 낡은 버전을 서빙할 뻔했다(2026-07-28).★
     try:
         import httpx as _hx
-        r = _hx.get("https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/server/version.json",
-                    timeout=6.0, follow_redirects=True)
+        _vu = "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/server/version.json"
+        r = _hx.get(_vu, timeout=6.0, follow_redirects=True, headers=GHR.gh_headers(_vu))   # #255 비공개 대비 토큰
         if r.status_code == 200:
             data = r.json()
             if data.get("exe", {}).get("version"):
@@ -14465,9 +14827,9 @@ def _load_version_json() -> dict:
     try:
         import base64 as _b64
         import httpx as _hx2
-        r = _hx2.get("https://api.github.com/repos/kevincom-honjong/"
-                     "aion2-macro-releases/contents/server/version.json?ref=main",
-                     headers={"Accept": "application/vnd.github+json"},
+        _au = ("https://api.github.com/repos/kevincom-honjong/"
+               "aion2-macro-releases/contents/server/version.json?ref=main")
+        r = _hx2.get(_au, headers=GHR.gh_headers(_au, {"Accept": "application/vnd.github+json"}),
                      timeout=8.0, follow_redirects=True)
         if r.status_code == 200:
             data = json.loads(_b64.b64decode(r.json().get("content", "")).decode("utf-8"))
@@ -14519,8 +14881,8 @@ def _fetch_image_upstream(fname: str, sources: list):
     for name, url in sources:
         try:
             r = _hx.get(url, timeout=15.0, follow_redirects=True,
-                        headers={"Accept": "application/vnd.github.raw"}
-                        if name == "ghapi" else None)
+                        headers=GHR.gh_headers(url, {"Accept": "application/vnd.github.raw"}
+                                               if name == "ghapi" else None))   # #255 토큰은 GitHub 호스트에만
         except Exception as e:
             errs.append(f"{name}:{e.__class__.__name__}")
             continue
@@ -14660,6 +15022,76 @@ async def check_purge(request: Request):
     return {"ok": True, "was": _old, "now": _new}
 
 
+# ★시험 exe 핀 (주인님 2026-10-11 「테스트할때는 배포 하지말고 빌드해서 테스트 컴퓨터에 넣어서」)★
+#   설정 exe_test_pin = {"PC-01": {"version": "1.1.1049.t3", "sha256": "<64hex>", "until": <unix초>}}
+#   /check 가 ★그 PC 한 대에만★ 내부망 시드의 시험 파일을 가리킨다. version.json·릴리스·함대 다른 PC 는 그대로.
+#   ★GitHub 주소를 주지 않는다★ — 시험 파일은 GitHub 에 없다(404). 시드 주소(lan_seed)가 없으면 핀을 안 준다.
+#   ★PC 를 아는 건 요청 본문 pc_id 뿐이다★ — 업데이터 클라이언트가 본문에 pc_id 를 보내야 맞는다(CONTRACTS_대시보드 §20).
+_PIN_VER_RE = re.compile(r"^[0-9.]+\.t[0-9]+$")        # seed_server.py 의 `/macro-([\d.]+\.t\d+)\.exe` 와 같은 모양
+_PIN_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+# 핀 항목의 선택 필드 "seed" — 운영 시드(8766)를 못 건드릴 때 시험 파일만 따로 내주는 서버 주소(사설 대역 IPv4:포트만, 끝 `/` 없음).
+#   아이온2 지정 `^http://(10|172\.(1[6-9]|2\d|3[01])|192\.168)\.[\d.]+:\d{2,5}$` 의 부분집합(점 넷으로 못 박음, ASCII 숫자만).
+_PIN_SEED_RE = re.compile(
+    r"^http://(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}):\d{2,5}$",
+    re.ASCII)
+_PIN_MAX_AHEAD_S = 7 * 86400     # 이보다 먼 만료는 오입력(밀리초 시각 등)으로 보고 무시 — 영영 안 풀리는 핀 방지
+_PIN_NOTED: set = set()          # 같은 사유를 로그에 한 번만
+
+
+def _pin_note(key: str, msg: str) -> None:
+    if key in _PIN_NOTED:
+        return
+    if len(_PIN_NOTED) > 200:
+        _PIN_NOTED.clear()
+    _PIN_NOTED.add(key)
+    print(f"[핀] {msg}")
+
+
+def _pin_pick(raw, pc_raw, now: float) -> dict | None:
+    """설정 값(JSON 문자열)에서 ★이 PC 의★ 유효한 핀을 꺼낸다. 없음·깨짐·만료·형식 오류는 전부 None(= 정식 경로)."""
+    if not raw or not pc_raw:
+        return None
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        _pin_note("badjson", "exe_test_pin 이 JSON 이 아니라 무시한다")
+        return None
+    if not isinstance(d, dict):
+        return None
+    pc = _base_pc(clean_pc_id(str(pc_raw))).upper()
+    if not pc:
+        return None
+    ent = None
+    for k, v in d.items():
+        if _base_pc(clean_pc_id(str(k))).upper() == pc:
+            ent = v
+            break
+    if not isinstance(ent, dict):
+        return None
+    ver, sha, until = ent.get("version"), ent.get("sha256"), ent.get("until")
+    if not (isinstance(ver, str) and _PIN_VER_RE.fullmatch(ver)):
+        _pin_note("badver:" + pc, f"{pc} 핀의 version 모양이 아니라 무시한다: {str(ver)[:40]!r}")
+        return None
+    if not (isinstance(sha, str) and _PIN_SHA_RE.fullmatch(sha.lower())):
+        _pin_note("badsha:" + pc, f"{pc} 핀의 sha256 이 64자리 16진이 아니라 무시한다")
+        return None
+    if isinstance(until, bool) or not isinstance(until, (int, float)) or until != until:
+        _pin_note("baduntil:" + pc, f"{pc} 핀의 until 이 숫자가 아니라 무시한다")
+        return None
+    if until <= now:
+        return None                                  # 만료 — 정식 경로로 돌아간다
+    if until > now + _PIN_MAX_AHEAD_S:
+        _pin_note("farthe:" + pc, f"{pc} 핀의 until 이 7일보다 멀어 무시한다(밀리초 시각?)")
+        return None
+    seed = ent.get("seed")
+    if seed is None or seed == "":
+        seed = ""                                    # 없음 → 응답 lan_seed 를 쓴다(예전 그대로)
+    elif not (isinstance(seed, str) and _PIN_SEED_RE.fullmatch(seed)):
+        _pin_note("badseed:" + pc, f"{pc} 핀의 seed 가 사설 IPv4:포트 모양이 아니라 핀을 무시한다: {str(seed)[:60]!r}")
+        return None
+    return {"pc": pc, "version": ver, "sha256": sha.lower(), "until": float(until), "seed": seed}
+
+
 @app.post("/check")
 async def updater_check(request: Request):
     """updater.exe가 호출 — exe/이미지/updater 업데이트 필요 여부 응답"""
@@ -14716,7 +15148,36 @@ async def updater_check(request: Request):
     if not key_tenant and client_edition != "rental":
         exe_info = {}
         result["notice"] = "no_key_no_exe"      # 진단용(구버전 업데이터는 무시)
-    if exe_info and server_exe_ver != client_exe_ver:
+
+    # ★시험 핀(2026-10-11)★ — main 키로 확인된 요청에만, 그 PC 한 대에만. 시드 주소는 아래 lan_seed 응답과 같은 값이라 한 번만 읽는다.
+    _seed = ""
+    _pin = None
+    if key_tenant == "main":
+        try:
+            _seed = await get_setting(ns("main", "lan_seed")) or ""
+        except Exception:
+            _seed = ""
+        try:
+            _pin = _pin_pick(await get_setting(ns("main", "exe_test_pin")), body.get("pc_id"), time.time())
+        except Exception:
+            _pin = None
+        if _pin and not (_pin["seed"] or _seed):
+            #   시험 파일은 GitHub 에 없다 — 시드 주소(핀의 seed 도 응답 lan_seed 도)가 없으면 정식 주소를 주지도, 404 주소를 주지도 않는다(= 핀 무시).
+            _pin_note("noseed", f"{_pin['pc']} 핀이 있지만 seed·lan_seed 가 비어 있어 안 준다(시험 파일은 시드에만 있다)")
+            _pin = None
+
+    if _pin:
+        # 핀 PC: 정식 주소·_dl_prewarm·DL_RELAY 를 타지 않는다. 이미 그 판이면 아무것도 안 준다 —
+        #   정식 버전을 광고하면 5분 뒤 시험판이 정식판으로 되돌아간다.
+        if _pin["version"] != client_exe_ver:
+            result["exe_update"] = {
+                "version":      _pin["version"],
+                "sha256":       _pin["sha256"],
+                "download_url": f"{str(_pin['seed'] or _seed).rstrip('/')}/macro-{_pin['version']}.exe",
+            }
+            _pin_note(f"serve:{_pin['pc']}:{_pin['version']}:{int(_pin['until'])}",
+                      f"{_pin['pc']} ← 시험판 {_pin['version']} (시드, ~{int(_pin['until'])})")
+    elif exe_info and server_exe_ver != client_exe_ver:
         result["exe_update"] = {
             "version":      server_exe_ver,
             "sha256":       exe_info.get("sha256"),
@@ -14724,6 +15185,11 @@ async def updater_check(request: Request):
             # 규칙: 릴리스 태그 v<버전>, 에셋 이름 macro-<버전>.exe / rental-<버전>.exe
             "download_url": f"https://github.com/kevincom-honjong/aion2-macro-releases/releases/download/v{server_exe_ver}/{asset_prefix}-{server_exe_ver}.exe",
         }
+        if DL_RELAY and key_tenant:   # ★#255★ 서버 중계(끝 조각 = 에셋 이름 그대로 → 내부망 시드 주소도 그대로)
+            #   ★키가 확인된 요청에만(반증 2차 #3)★ — 키 없는 요청(구버전·자칭 rental 첫 설치)은 예전 GitHub 주소 그대로.
+            _asset = f"{asset_prefix}-{server_exe_ver}.exe"
+            result["exe_update"]["download_url"] = _dl_url(_dl_base(request), _asset)
+            _dl_prewarm(ver, _asset)
 
     # 이미지 업데이트 체크
     # ★배포처는 이 서버 자신 (/img 중계) — jsDelivr 사망 + 함대에서 raw 차단★
@@ -14771,6 +15237,9 @@ async def updater_check(request: Request):
             "download_url": updater_info.get("download_url",
                 f"{_GH_RAW}/exe/updater.exe"),
         }
+        if DL_RELAY and key_tenant:   # ★#255★ version.json 의 raw 주소 대신 서버 중계(키 확인된 요청만 — 반증 2차 #3)
+            result["updater_update"]["download_url"] = _dl_url(_dl_base(request), "updater.exe")
+            _dl_prewarm(ver, "updater.exe")
 
     # ★내부망 시드(2026-08-06, updater 3.0.8+)★ — 설정 lan_seed(예: http://172.30.1.70:8766)가
     #   있으면 응답에 실어, 업데이터가 exe를 내부망에서 먼저 받게 한다(같은 SHA256 검증,
@@ -14779,13 +15248,8 @@ async def updater_check(request: Request):
     #   이 필드를 몰라서 무시한다(하위호환).
     #   ★키로 main임이 확인된 요청에만 준다(2026-08-06 감사)★ — 예전엔 무인증 요청이 edition=main만
     #   자칭해도 사설 IP가 나갔다. 구버전 업데이터(키 미동봉)는 시드를 못 받고 GitHub로 받는다(무해).
-    if key_tenant == "main":
-        try:
-            _seed = await get_setting(ns("main", "lan_seed"))
-            if _seed:
-                result["lan_seed"] = _seed
-        except Exception:
-            pass
+    if key_tenant == "main" and _seed:      # _seed 는 위(시험 핀 판정)에서 한 번 읽었다
+        result["lan_seed"] = _seed
 
     return JSONResponse(result)
 
@@ -18142,6 +18606,67 @@ def _fv_pc_view(row: dict, agg: dict = None) -> dict:
     }
 
 
+def _dp_done(c) -> bool:
+    """화면 JS dpDone 과 같은 규칙 — 슬롯 하나가 오늘 완료인가(`completed` 이고 `today` 가 false 가 아님)."""
+    return isinstance(c, dict) and bool(c.get("completed")) and c.get("today") is not False
+
+
+def _dungeon_done(row, cut=None) -> bool:
+    """화면 JS isDungeonDone 과 같은 규칙 — dungeon_done_at(KST 문자열)이 가장 최근 수요일 05:00 KST 이후인가."""
+    t = str((row or {}).get("dungeon_done_at") or "").replace("T", " ")
+    if cut is None:
+        cut = _fv_last_weekly_reset_utc().astimezone(_KST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return bool(t) and t >= cut
+
+
+def _fv_acct_num(r: dict) -> int:
+    """화면 JS acctNumOf 와 같은 규칙 — 카드 id 접미사(b→2…) 우선, 없으면 매크로가 보고한 acct_num(양수), 아니면 1."""
+    raw = split_ns(str(r.get("pc_id") or ""))[1]
+    if len(raw) > 1 and raw[-1] in ACCT_SUFFIX and raw[-2].isdigit():
+        return ACCT_SUFFIX.index(raw[-1]) + 2
+    try:
+        n = int(r.get("acct_num"))
+    except Exception:
+        n = 0
+    return n if n > 0 else 1
+
+
+def _fv_group_chars(cards: list) -> dict:
+    """★#454 / #451 (§A12)★ 한 물리 PC(묶음)의 캐릭 수 — 화면 JS groupChars 와 ★같은 규칙★(tests/test_summary_stable.py 가 둘을 같은 입력으로 맞춘다).
+    묶음 카드들의 acct_names 를 합친 «전 계정 지도»의 이름 있는 칸 수에서 정지(OUT) 슬롯(banned_slots 합집합) 계정을 뺀다.
+    지도가 없을 때만 카드 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다. → {n, accts, from_map, out, out_accts}"""
+    amap: dict = {}
+    banned: set = set()
+    for p in cards:
+        an = p.get("acct_names")
+        if isinstance(an, dict):
+            amap.update(an)
+        for x in (p.get("banned_slots") or []):
+            banned.add(str(x))
+    n = accts = out = out_accts = 0
+    for k, v in amap.items():
+        cnt = sum(1 for x in (v.values() if isinstance(v, dict) else []) if str(x or "").strip())
+        if cnt <= 0:
+            continue
+        if str(k) in banned:
+            out += cnt
+            out_accts += 1
+            continue
+        n += cnt
+        accts += 1
+    if n + out > 0:
+        return {"n": n, "accts": accts, "from_map": True, "out": out, "out_accts": out_accts}
+    seen: dict = {}
+    for p in cards:
+        c = len(p.get("daily_progress") or []) or len(p.get("chars") or [])
+        k = _fv_acct_num(p)
+        if str(k) in banned:
+            out += c
+            continue
+        seen[k] = max(seen.get(k, 0), c)
+    return {"n": sum(seen.values()), "accts": sum(1 for v in seen.values() if v > 0), "from_map": False, "out": out, "out_accts": 0}
+
+
 async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
     """★대시보드가 쓰는 그 함수들★ 로만 만든다. ★tenant 매개변수화(2026-09-23)★ —
     세션 대시보드(/summary)도 이 함수로 같은 전광판 숫자를 받는다(§A12, FV_TENANT 는
@@ -18193,6 +18718,33 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
                 total_bugs += int(r.get("_bug_count") or 0)
         except Exception:
             pass
+
+    # ★#454 캐릭터·완료 칸도 서버 한 곳에서(§A12)★ — 예전엔 화면이 카드 상태로 따로 세서 /summary 가 늦으면 두 계산 사이를 오갔다.
+    #   모집단 = 가짜 PC 만 뺀 모든 카드(화면 summaryPcs 와 같다 — 은퇴·정지 카드도 daily_progress 가 비면 0 으로 들어간다).
+    _grp: dict = {}
+    chars_done = pcs_done = 0
+    _dg_cut = _fv_last_weekly_reset_utc().astimezone(_KST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    _dg_left: set = set()      # 일일던전 남은 «카드(계정)» — 화면 refreshSummary dungeonLeft 와 같은 규칙(no_account 제외)
+    for r in rows:
+        _raw = split_ns(str(r.get("pc_id") or ""))[1]
+        if not _raw or _is_fake_pc(_raw):
+            continue
+        if (r.get("status") or "offline") != "no_account" and not _dungeon_done(r, _dg_cut):
+            _dg_left.add(_raw)
+        _grp.setdefault(_base_pc(_raw), []).append(r)
+        _dp = r.get("daily_progress") or []
+        chars_done += sum(1 for c in _dp if _dp_done(c))
+        if _dp and all(_dp_done(c) for c in _dp):
+            pcs_done += 1
+    char_total = chars_out = chars_map_pcs = chars_fb_pcs = 0
+    for _cards in _grp.values():
+        _g = _fv_group_chars(_cards)
+        char_total += _g["n"]
+        chars_out += _g["out"]
+        if _g["from_map"]:
+            chars_map_pcs += 1
+        elif _g["n"] > 0:
+            chars_fb_pcs += 1
 
     # 순환 무장 — 대시보드 /rotate 와 같은 저장소를 본다
     armed = []
@@ -18261,6 +18813,10 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
             "counts": {"total": len(pcs), "online": online,
                        "offline": len(pcs) - online, "by_status": by_status},
             "totals": {"total_kina": total_kina, "bugs": total_bugs,
+                       # #454 전광판 캐릭터·완료 — 화면 groupChars/dpDone 과 같은 규칙(정지 OUT 계정 캐릭 제외)
+                       "char_total": char_total, "chars_out": chars_out, "chars_map_pcs": chars_map_pcs,
+                       "chars_fb_pcs": chars_fb_pcs, "chars_done": chars_done, "pcs_done": pcs_done,
+                       "dungeon_left": len(_dg_left),
                        # 회랑 스냅샷이 하나도 없으면 null(모름) — 화면 폴백 「–」 와 같은 뜻(2026-09-23 전수 #8)
                        "corridor_remaining": ((corridor_detail["fresh_left"] + corridor_detail["stale_left"])
                                               if corridor else None),
@@ -19120,3 +19676,7 @@ async def _updq_log(nspc: str, msg: str) -> None:
 # ★OCR 라벨링 (2026-09-23 장부 #108)★ — 라우터·표·화면은 전부 ocr_label.py(머리 주석). 여기는 연결만.
 import ocr_label as _ocr_label   # noqa: E402
 _ocr_label.init(app, __name__)
+
+# ★라야 라벨 (2026-10-11 주인님 «라야 학습 객관식·주관식»)★ — 라우터·표는 전부 laya_label.py(머리 주석). 계약 = FV_API.md «E. 라야 라벨».
+import laya_label as _laya_label   # noqa: E402
+_laya_label.init(app, __name__)

@@ -141,21 +141,52 @@ OCR_BAD_LABEL = "bad image"
 #   · auto 는 대기열·기록(history)·매크로 라벨(/ocr/labels)에 안 나간다 — 사람이 본 정답이 아니다(감사용 표시일 뿐).
 #   · 사람이 한 번이라도 손댄 묶음(ocr_hist 줄 있음)은 안 건드린다. 다른 답이 붙으면 auto → pending 으로 되돌린다.
 #   · 사람이 auto 묶음에 라벨·나쁨을 주면 그대로 된다(label_core 는 어떤 상태든 받는다).
+# ★#436-b (2026-10-11 아이온2 «OCR 큐 325→4 — 쌓이는 것에서 개선»)★ 사람이 라벨 준 묶음(6422·6434~6441, 이력 전수 대조)에서 뽑은 이름.
+#   제미나이가 매번 글자 그대로 맞혔다(성소 감시초소 6·파괴된 잔해 6·죽은 자의 침실 24 — 사람 라벨과 불일치 0). ocr_names.MAP_NAMES(스냅 목록)는
+#   그대로 둔다 — lc/map_names.py 사본이라 같이 바꿔야 한다(test_ocr_436 S-4 는 «16개 + 이 추가분» 으로 읽는다).
+OCR_AUTO_MAP_EXTRA = ("성소 감시초소", "파괴된 잔해",
+                      "죽은 자의 침실(극한)", "죽은 자의 침실(절망)", "죽은 자의 침실(지옥)", "죽은 자의 침실(파멸)",
+                      # 잊힌 저장소 — 사람 라벨 71건(절망 34·극한 23·파멸 6·어려움 5·지옥 3), 제미나이가 매번 글자 그대로 맞혔다(#436-c)
+                      "잊힌 저장소(절망)", "잊힌 저장소(극한)", "잊힌 저장소(파멸)", "잊힌 저장소(어려움)", "잊힌 저장소(지옥)")
+# ★#436-c 한 글자 오독 스냅(2026-10-11 아이온2)★ — 매크로가 이미 쓰는 ocr_names.snap 과 같은 규칙(«한 이름과 1편집 안쪽 · 다음 이름은 2 이상 · 0 = 띄어쓰기만 다름»)
+#   으로 맵 이름 답을 닫는다. 단 기준 목록을 ★스냅 목록 + 자동 닫기 이름 + 사람이 라벨 준 다른 이름들★ 로 넓힌다 — «엘둔강 중류» 는 엘듄강 중류와 엘룬강 중류
+#   둘 다 1편집이라 스냅 목록(엘룬강 없음)만 보면 한쪽으로 닫혀 사람 라벨과 어긋났다(이력: 엘둔 3건 중 2건이 엘룬강). 동률이면 사람 몫.
+#   닫는 결과는 ★자동 닫기 이름 안에서만★ — 기준 목록에만 있는 이름(엘룬강 중류 등)으로는 안 닫는다.
+OCR_AUTO_SNAP = {"analytics_py__map_loop"}
+OCR_MAP_CONFUSABLE = ("다르타스 평원 서부", "뒤틀린 고목나무 숲", "무너진 기둥", "엘룬강 중류", "큐브", "유황 나무 섬", "네프라 설원",
+                      "인도자의 처소", "야수 사냥꾼의 야영지", "아르타미아 고원 동부", "크로탄 요새", "쿠라카 언덕길")
 OCR_AUTO_SITES = {
     "analytics_py__map_loop": frozenset((
         "홍옥의 섬", "정령의 섬", "베르테론 요새 폐허", "드라나 가공구역", "루브레인 구릉지", "환영신의 정원", "엘듄강 중류",
         "어비스 회랑", "데바 생체 연구기지", "갈라진 남쪽 추락지", "갈라진 북쪽 추락지", "라 미렌 요새 남쪽 잔해",
-        "라 미렌 요새 북쪽 잔해", "붉은 가시 왕관섬", "영원의 섬", "아울라우 부락")),
+        "라 미렌 요새 북쪽 잔해", "붉은 가시 왕관섬", "영원의 섬", "아울라우 부락") + OCR_AUTO_MAP_EXTRA),
 }
 # ★#436 (2026-10-04 주인님 «OCR 쌓인 걸로 프로그램 개선»)★ 답이 닫힌 목록인 각성전 두 자리도 같은 자동 닫기 — 단 ★공백을 무시★ 하고 맞춘다
 #   (매크로가 공백을 지워 읽는 자리: lc/ocr_policy.py CLOSED_SETS · lc/awakening.py DIFF_NAMES). 라벨은 목록의 ★정식 표기★ 로 저장한다.
 #   목록 밖 답·빈 답·«텍스트 없음» 류는 그대로 사람 몫(예전과 같다).
+#   ★#436-b★ 던전 이름 두 자리(read_dungeon_key·dungeon_key — 미니맵 머리줄 «죽은 자의 침실(난이도)», 사람 라벨 207건 전부 제미나이와 같았다)는
+#   사람이 실제로 라벨 준 난이도 넷만 닫는다(쉬움·보통·어려움은 이력에 없다 → 사람 몫). 정식 표기는 사람 라벨 그대로(공백 있는 꼴).
+_DUNGEON_KEY_NAMES = ("죽은 자의 침실(극한)", "죽은 자의 침실(절망)", "죽은 자의 침실(지옥)", "죽은 자의 침실(파멸)")
 OCR_AUTO_LOOSE = {
     "awakening_py__read_objective": ("방안의몬스터를모두처치", "다음방의입구를열기", "보스를처치하기"),
     "awakening_py__read_diff_label": ("쉬움", "보통", "어려움", "극한", "절망", "지옥", "파멸"),
+    "awakening_py__read_dungeon_key": _DUNGEON_KEY_NAMES,
+    "awakening_py__dungeon_key": _DUNGEON_KEY_NAMES,
 }
 for _k, _v in OCR_AUTO_LOOSE.items():
     OCR_AUTO_SITES[_k] = frozenset(_v)
+# ★#436-b 각성전 목표 문구는 «거의 같으면» 닫는다★ — 제미나이가 매번 «보스를 처치하라»(56)·«입구권 얻기»(7) 처럼 한두 글자를 바꿔 읽는데
+#   사람 라벨은 늘 정식 문구였다(이력 68건 전부 해당 문구로 라벨·«나쁨» 0). 공백을 뺀 글자 기준 편집거리 ≤ 이 값이고 ★가장 가까운 문구가 하나뿐★일 때만.
+#   모든 문구와 이보다 멀면 닫지 않는다(사람 몫) — 빈 크롭에 지어낸 문장·«텍스트 없음» 류가 여기로 안 샌다. 난이도 이름처럼 짧은 말에는 안 쓴다.
+#   ★세 겹으로 조인다★ ① 문장부호·기호(«!» «▼» «.»)는 걷고 비교 ② 편집거리 ≤ 2 ③ 글자 수가 문구와 ±OCR_AUTO_FUZZY_LEN 이내 — «보스를 처치하기 시작»
+#   처럼 말이 덧붙은 다른 문장(+2자)은 닫지 않는다. 이력 68건은 전부 ①②③ 안이다(수정 1~2·부호 1·빠짐 1).
+OCR_AUTO_FUZZY = {"awakening_py__read_objective": 2}
+OCR_AUTO_FUZZY_LEN = 1
+# ★#436-b 숫자 자리: 제미나이 답과 로컬 답이 «수로» 같으면 닫는다(12% == 12.0)★ — 이력 49건 전부 사람 라벨과 같았다. 한 쪽이라도 비면(로컬 미독) 사람 몫.
+#   라벨은 사람이 쓰던 꼴(정수면 «12%», 소수면 «45.67%»). 묶음의 모든 이미지가 같은 수여야 한다.
+OCR_AUTO_NUMERIC = {"analytics_py__progress_loop": (0.0, 100.0)}
+for _k in OCR_AUTO_NUMERIC:
+    OCR_AUTO_SITES[_k] = frozenset()                 # 이름 목록은 없다 — auto_label_rows 가 숫자로 가른다(자동 닫기 사이트 소속·쓸기 대상)
 # ★믿을 만한 자리 자동 닫기 (2026-09-25 주인님 #228 «OCR 80개 찼다»)★ — read_server_kina_open 이 사람 라벨 240·불일치 0 인데
 #   대기 80 중 40 을 차지했다. 사람 라벨이 OCR_TRUST_MIN_LABELED 이상이고 ★최근 OCR_TRUST_WINDOW 장★(사람이 라벨 준 묶음의
 #   이미지 중 제미나이 답이 있는 것, 라벨 시각 최신순 — /ocr/stats 불일치율과 같은 비교 norm_answer)이 전부 일치하는 site 는
@@ -573,16 +604,95 @@ def auto_label(site: str, answers) -> "str | None":
     if not names:
         return None
     if site in OCR_AUTO_LOOSE:                      # ★#436★ 공백 무시 — 정식 표기로 돌려준다
-        got = {re.sub(r"\s+", "", unicodedata.normalize("NFKC", a if isinstance(a, str) else "")) for a in answers}
+        got = {_loose_pick(site, a) for a in answers}
         if len(got) != 1:
             return None
         (one,) = got
-        return one if one in names else None
-    got = {(a if isinstance(a, str) else "").strip() for a in answers}
+        return one                                   # None(목록 밖·너무 먼 답)이면 그대로 None
+    got = {_exact_or_snap(site, a, names) for a in answers}
     if len(got) != 1:
         return None
     (one,) = got
-    return one if one in names else None
+    return one                                       # None(목록 밖·스냅 불가)이면 그대로 None
+
+
+def _exact_or_snap(site: str, ans, names) -> "str | None":
+    """맵 이름 답 하나 → 이름 또는 None. 글자 그대로(strip) 가 먼저, OCR_AUTO_SNAP 사이트는 한 글자 오독·띄어쓰기를 스냅."""
+    t = (ans if isinstance(ans, str) else "").strip()
+    if t in names:
+        return t
+    if site not in OCR_AUTO_SNAP or not t:
+        return None
+    k = _squash(t)
+    if not k or len(k) > 40:
+        return None
+    ref = set(names) | set(_snap_names.MAP_NAMES) | set(OCR_MAP_CONFUSABLE)
+    d = sorted((_lev(k, _squash(n)), n) for n in ref)
+    if d and d[0][0] <= 1 and (len(d) == 1 or d[1][0] >= 2 or (d[0][0] == 0 and d[1][0] > 0)) and d[0][1] in names:
+        return d[0][1]
+    return None
+
+
+def _squash(a) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", a if isinstance(a, str) else ""))
+
+
+def _lev(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _loose_pick(site: str, ans) -> "str | None":
+    """답 하나 → 정식 표기 또는 None. 공백·전각 무시 정확 일치가 먼저, 그다음 OCR_AUTO_FUZZY 편집거리(가장 가까운 하나뿐일 때만)."""
+    s = _squash(ans)
+    if not s:
+        return None
+    canon = {_squash(n): n for n in OCR_AUTO_SITES.get(site, ())}
+    if s in canon:
+        return canon[s]
+    tol = OCR_AUTO_FUZZY.get(site, 0)
+    if tol <= 0 or len(s) > 60:
+        return None
+    fz = "".join(ch for ch in s if unicodedata.category(ch)[0] not in "PS")     # «!» «▼» «.» 같은 부호는 글자가 아니다
+    if not fz:
+        return None
+    d = sorted((_lev(fz, k), n, k) for k, n in canon.items())
+    best = d[0]
+    if best[0] <= tol and abs(len(fz) - len(best[2])) <= OCR_AUTO_FUZZY_LEN and (len(d) == 1 or d[1][0] > best[0]):
+        return best[1]                               # 가장 가까운 문구가 하나뿐일 때만(동률 = 사람)
+    return None
+
+
+_NUM_RE = re.compile(r"^(\d{1,3}(?:\.\d{1,6})?)%?$", re.ASCII)
+
+
+def _num(v) -> "float | None":
+    """«12%» «12.0» «12» → 12.0. 수가 아니면(빈 값·글자 섞임·쉼표 — «1,5» 를 15 로 읽지 않는다) None. 공백만 건다."""
+    t = re.sub(r"\s+", "", unicodedata.normalize("NFKC", v if isinstance(v, str) else ""))
+    m = _NUM_RE.match(t)
+    return float(m.group(1)) if m else None
+
+
+def auto_label_rows(site: str, rows) -> "str | None":
+    """자동 닫기 판정(이미지 줄 단위) — rows = [(gemini, local), …]. 숫자 자리는 제미나이·로컬이 수로 같을 때, 나머지는 auto_label."""
+    if site in OCR_AUTO_NUMERIC:
+        lo, hi = OCR_AUTO_NUMERIC[site]
+        vals = set()
+        for r in rows:
+            g, l = _num(r[0]), _num(r[1] if len(r) > 1 else None)
+            if g is None or l is None or abs(g - l) > 1e-6 or not (lo <= g <= hi):
+                return None                          # 한 쪽이라도 못 읽었거나 어긋나면 사람 몫
+            vals.add(round(g, 6))
+        if len(vals) != 1:
+            return None                              # 묶음 안에서 수가 갈리면 사람 몫
+        (v,) = vals
+        return "%s%%" % format(v, "g")
+    return auto_label(site, [r[0] for r in rows])
 
 
 async def site_trusted(db, tenant: str, site: str) -> dict:
@@ -666,8 +776,8 @@ async def _auto_eval(db, tenant: str, cid: int, now: float, new: bool = False) -
     cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
     if await cur.fetchone():
         return ""                                   # 사람이 손댄 묶음 — 사람 몫
-    cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, tenant))
-    lab = auto_label(r[0], [x[0] for x in await cur.fetchall()])
+    cur = await db.execute("SELECT gemini, local FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, tenant))
+    lab = auto_label_rows(r[0], await cur.fetchall())
     if lab and r[1] == "pending":
         await db.execute("UPDATE ocr_cluster SET status='auto', label=?, labeled_at=? WHERE id=?", (lab, now, cid))
         return "auto"
@@ -703,8 +813,8 @@ async def auto_sweep(tenant: str = None, dry: bool = False) -> dict:
                 cur = await db.execute("SELECT 1 FROM ocr_hist WHERE cluster_id=? LIMIT 1", (cid,))
                 if await cur.fetchone():
                     continue
-                cur = await db.execute("SELECT gemini FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, ten))
-                lab = auto_label(site, [x[0] for x in await cur.fetchall()])
+                cur = await db.execute("SELECT gemini, local FROM ocr_img WHERE cluster_id=? AND tenant=?", (cid, ten))
+                lab = auto_label_rows(site, await cur.fetchall())
                 if not lab:
                     continue
                 out["closed"] += 1

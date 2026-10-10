@@ -144,7 +144,8 @@ curl -H "X-FV-Token: $FV_TOKEN" --compressed \
       "corridor_remaining": null,
       "corridor_detail": {"fresh_n": 0, "fresh_left": 0, "stale_n": 0, "stale_left": 0},
       "subscribed": {"sub": 1, "nosub": 0, "unknown": 0},
-      "trade_kina": 12345678, "gakin_kina": 0, "odd_energy": 1495, "awakening_ticket": null
+      "trade_kina": 12345678, "gakin_kina": 0, "odd_energy": 1495, "awakening_ticket": null,
+      "char_total": 149, "chars_out": 0, "chars_map_pcs": 24, "chars_fb_pcs": 0, "chars_done": 30, "pcs_done": 5, "dungeon_left": 12
     },
     "versions": {"1.1.926": 1, "1.1.923": 1},
     "rotate_armed": [],
@@ -845,3 +846,46 @@ asyncio.run(main())
 "PC-04b": {"pc_id": "PC-04b", "status": "hunting",    "banned": false, "banned_slots": [1], "…": "…"},
 "PC-05":  {"pc_id": "PC-05",  "status": "hunting",    "banned": false, "banned_slots": [],  "…": "…"}
 ```
+
+### `global.totals` 추가 키 — 전광판 캐릭터·완료 (#454, 2026-10-06, additive)
+`char_total`(전체 캐릭 수 — 물리 PC 묶음별 «계정별 캐릭 명단»의 이름 있는 칸 수, ★정지(OUT) 계정 제외★; 명단 없는 PC 만 카드 daily_progress 합산 폴백) · `chars_out`(OUT 이라 뺀 캐릭 수) · `chars_map_pcs`/`chars_fb_pcs`(출처별 PC 수) · `chars_done`(오늘 완료 캐릭 수) · `pcs_done`(전 캐릭 완료 PC 수). 전광판과 팜뷰가 같은 값을 쓴다 — 서버 `main.py _fv_group_chars`. 모두 정수, 옛 클라이언트는 무시해도 된다.
+`dungeon_left`(일일던전 티켓이 남은 계정 카드 수 — 가짜 PC·`no_account` 제외, `dungeon_done_at` 이 가장 최근 수요일 05:00 KST 이전/없음이면 «남음», 정수·additive; 서버 `_dungeon_done`).
+
+
+## 2026-10-11 추가 — E. 라야 라벨 — `/api/fv/laya/*` · `/laya/*` (주인님 «라야 학습 객관식, 없으면 주관식», 대시보드 세션 · 더하기만)
+> **코드에 넣었다(미배포)** — 서버 `server/laya_label.py`(`ocr_label.py` 와 같은 구조), 시험 `tests/test_laya_label.py`. 배포 전엔 아래 경로가 전부 404.
+라야(로컬 분류 모델)가 알람 문구를 보고 보기를 **고르고**, 주인님이 팜뷰 «라야» 탭에서 객관식으로 맞다/아니다를 고르거나 맞는 보기가 없으면 **직접 적는다**. 그 답이 라야의 다음 학습 데이터다.
+인증: 팜뷰 = `X-FV-Token`(테넌트 = `FV_TENANT`, 에러 모양 = 다른 `/api/fv/*` 와 같은 `{ok:false, error, err, code}`) · 개발컴(라야) = `X-Api-Key`(없으면 403). 시각은 전부 **유닉스 초(UTC, 실수)**.
+
+**항목(Item)** — 서버가 중계하는 매크로 알람(`/telegram/send`) 문구마다 하나. 자동으로 쌓인다(팜뷰가 만들 일 없음).
+```json
+{"id": 17, "kind": "alarm", "text": "⚠️ 계정 전환(<id>) 실패 — info.txt 자격증명/화면 확인 필요", "pc": "PC-07",
+ "t": 1790164002.4, "tpl": "⚠️ 계정 전환(<id>) 실패 — info.txt 자격증명/화면 확인 필요",
+ "laya": {"category": {"pick": "account_switch_fail", "conf": 0.72}, "needs_human": {"pick": true, "conf": 0.9}, "ver": "20261011a"},
+ "answer": null}
+```
+- `text` — **마스킹 후** 문구(이메일 → `<email>`, `아이디/id/email/이메일/login: 값` 의 값 → `<id>`, 따옴표 안의 «글자+숫자 섞인 4자↑ 토큰» → `<id>`). 원문은 저장하지 않는다. 최대 400자, 줄바꿈은 빈칸.
+- `tpl` — 템플릿 키(숫자 → `#`, PC 번호·시각 지움 등). **같은 `tpl` 은 키당 최대 3건**만 들어온다(대기·답한 것 합쳐서) — 같은 알람 200번 고르게 하지 않는다.
+- `laya` — 라야 예측. 아직 없으면 `null`. `category.pick` = 보기 `key`(`other` 도 가능), `conf` = 0~1. `needs_human.pick` = `true`/`false`. `ver` = 예측을 올린 모델 판.
+- `answer` — 아직 안 달았으면 `null`, 달았으면 `{"category": "<key>"|"other", "text": null|"주관식 글", "needs_human": true|false|null, "at": 1790164100.0, "laya_pick": "<key>"|null, "laya_conf": 0.72|null}` (`laya_*` = 답한 **그 순간** 라야가 고른 것 — 일치율이 모델을 다시 올려도 안 바뀐다).
+
+| 메서드 · 경로 | 본문 / 쿼리 | 응답 |
+|---|---|---|
+| `GET /api/fv/laya/queue?limit=30` (1~100, 정수 아니면 400) | — | `{"pending": 57, "items": [Item…], "choices": {"category": [{"key","ko","desc"}…, {"key":"other","ko":"해당 없음 — 직접 적기","desc":"…","free":true}], "needs_human": [{"key":"yes","ko":"예","value":true},{"key":"no","ko":"아니오","value":false}]}, "now": 1790164002.4}` — **라야 확신(`category.conf`)이 낮은 것 먼저 → 예측 없는 것 → (같으면 오래된 것 먼저)**, 건너뛴 것은 맨 뒤. `pending` = 전체 대기 수 |
+| `POST /api/fv/laya/answer` | `{"id", "category": "<key>"\|"other", "text"?: "주관식", "needs_human"?: true\|false}` | `{"ok": true, "id", "answer": {…}, "prev": {…}\|null, "pending"}` — `category:"other"` 면 `text` **필수**(앞뒤 공백 걷고 1~200자, 아니면 400). `category` 가 `other` 가 아니면 `text` 는 무시. **고치기** = 같은 `id` 로 다시 보낸다(`prev` 에 이전 답). 이미 답이 있는 항목엔 `category` 없이 `{"id","needs_human"}` 만 보내도 된다(예/아니오 줄만 고치기). 답이 없는 항목엔 `category` 필수 |
+| `POST /api/fv/laya/skip` | `{"id"}` | `{"ok": true, "id", "pending"}` — 대기열 맨 뒤로. 대기 아닌(이미 답한) 항목이면 409 |
+| `POST /api/fv/laya/undo` | `{}` | `{"ok": true, "id", "action": "answer"\|"skip", "answer": {…}\|null, "pending"}` — 이 테넌트의 **마지막 답/건너뛰기 하나**를 되돌린다(최근 50개까지 거슬러 갈 수 있다). 답을 되돌리면 이전 답(없으면 대기)으로. 되돌릴 게 없으면 404 |
+| `GET /api/fv/laya/stats` | — | `{"pending", "labeled", "labeled_today", "skipped", "by_category": {"<key>": n, …, "other": n}, "needs_human": {"yes", "no", "unset"}, "agree": {"recent50": {"n","match","rate"}, "all": {"n","match","rate"}}, "other_clusters": [{"text","count"}…], "predicted", "unpredicted", "ver", "dropped": {"tpl","cap","empty"}, "now"}` — `agree.rate` 는 라야가 고른 보기와 주인님 답이 같은 비율(0~1, `n`=0 이면 `null`; 예측이 없던 답은 안 센다). `other_clusters` = 같은 주관식 글(공백·대소문자 정규화)이 **3건 이상**이면 «새 보기 후보» 로(많은 순). `labeled_today` = KST 오늘 단 답 수. `dropped` = 서버가 뜬 뒤 씨앗으로 못 쌓은 수(키당 3건 상한·테넌트 상한·빈 문구) |
+
+**개발컴 (X-Api-Key)** — 아이온2 `laya_sync.py`
+| 메서드 · 경로 | 본문 / 쿼리 | 응답 |
+|---|---|---|
+| `GET /laya/labels?since=<lts>&limit=1000` | — | `{"labels": [{"id","text","pc","t","tpl","category","other_text","needs_human","at","lts","deleted"?}…], "cursor": <lts>, "more": bool, "now"}` — **답이 달린 항목의 증분**. `lts` = 항목이 마지막으로 바뀐 순번(서버가 올리는 실수, 단조 증가). `since` 보다 큰 것만 `lts` 순으로, `cursor` 를 다음 `since` 로. 답이 **되돌려져 사라진** 항목은 `deleted:true`(그때 `category`·`other_text`·`needs_human` 은 `null`)로 한 번 나온다. `since` 없음/0 = 처음부터 |
+| `GET /laya/items?since=<lts>&status=pending\|all&limit=1000` | — | `{"items": [Item…], "cursor", "more", "now"}` — 예측할 문구를 받아 가는 길(더하기만, 위 명세에 없던 것). 증분은 `labels` 와 같은 `lts` 규칙. `status` 기본 `pending` |
+| `POST /laya/pred` | `{"ver": "20261011a", "items": [{"id", "category": {"pick","conf"}, "needs_human": {"pick","conf"}}…]}` (최대 2000개) | `{"ok": true, "updated": n, "unknown": [id…], "invalid": [id…]}` — 항목의 `laya` 를 통째로 갈아 끼운다(대기·답한 항목 모두; 답의 `laya_pick` 스냅샷은 안 바뀐다). `category.pick` 이 보기 key·`other` 가 아니거나 `conf` 가 0~1 숫자가 아니면 그 항목만 `invalid`. `needs_human` 은 생략 가능(그 항목은 `needs_human` 예측 없음). `ver` 필수 |
+
+**씨앗 규칙** — 서버가 `/telegram/send` 로 알람을 중계할 때마다(은퇴 id 제외, 음소거로 생략된 알람도 문구는 판별 거리라 포함) 마스킹 → 템플릿 키 → 키당 3건 상한 → 대기열. 응답 시간에 영향이 없게 백그라운드로 쌓고, 실패해도 알람 전송에 영향이 없다. 테넌트당 항목 상한 20000(넘으면 새 항목을 버린다 — `stats` 에 안 보이는 드문 경우).
+
+**보기(`choices.category`)** — 8 + 직접 적기. 문구는 서버가 내려준다(팜뷰는 하드코딩하지 말고 `choices` 로 그린다):
+`routine_progress` 정상 진행 보고 · `hunt_stopped` 사냥 멈춤 · `account_switch_fail` 계정 전환·로그인 실패 · `connect_or_stream_fail` 접속·스트리밍 실패 · `ui_unreachable` 화면 요소 못 찾음 · `missing_config_or_template` 설정·템플릿 없음 · `dungeon_or_corridor_result` 던전·회랑 결과 · `command_rejected` 명령 거부됨 · `other` 해당 없음 → 직접 적기.
+에러: 400(본문·id·limit·`other` 인데 `text` 없음) · 404(없는 항목·되돌릴 것 없음·미배포) · 409(skip 대상 아님) · 401/404(토큰) · 403(API 키).

@@ -785,16 +785,21 @@ function sumClock(){ return (typeof performance !== 'undefined' && performance.n
 //   마지막 값이 무기한 남았다. 주기(20초)의 세 배가 지나면 서버값을 버리고 화면 계산(폴백)으로
 //   돌아간다. 요청 하나가 걸려도 10초에 끊는다.
 const SERVER_SUMMARY_TTL_MS = 60000;
+// ★#454 (2026-10-06 주인님 «새로고침 안 하면 숫자가 오르락내리락»)★ 한 칸 = 한 출처. 서버값은 ★마지막 값을 계속 쓴다★ —
+//   예전엔 60초 묵으면 버리고 화면 계산으로 갈아탔는데(/summary 두 번 실패면 충분), 두 계산이 달라 칸마다 숫자가 튀었다가 돌아왔다.
+//   화면 계산은 ★서버값을 한 번도 못 받은 첫 화면★ 에만. 늦으면 툴팁이 «N초 전 값 유지» 를 말한다(serverSumStale).
 function serverSum(now){
-  if(!SERVER_SUMMARY) return null;
-  return ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) < SERVER_SUMMARY_TTL_MS ? SERVER_SUMMARY : null;
+  return SERVER_SUMMARY || null;
+}
+function serverSumStale(now){
+  return !!SERVER_SUMMARY && ((now == null ? sumClock() : now) - SERVER_SUMMARY_AT) >= SERVER_SUMMARY_TTL_MS;
 }
 // 전광판 칸 툴팁에 붙일 출처 한 줄 — 서버값인지, 끊겨서 화면 계산인지 사람이 가를 수 있게.
 function serverSumNote(now){
   const t = (now == null ? sumClock() : now);
-  if(serverSum(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
+  if(SERVER_SUMMARY && !serverSumStale(t)) return '※ 서버 계산(팜뷰와 같은 값) · ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전';
   return SERVER_SUMMARY
-    ? '※ 서버 요약이 ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초째 끊김 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t)
+    ? '※ 서버 요약 갱신 지연 — ★마지막 서버값★ ' + Math.round((t - SERVER_SUMMARY_AT)/1000) + '초 전 것을 유지 중(숫자는 안 바꿉니다)'
     : '※ 서버 요약 대기 중 — 이 화면 계산으로 표시 중' + ageNote(CHAR_TABLE_AT, '캐릭 표', 300000, t);
 }
 // ★renderCards 와 같은 모집단(가짜 PC 제외)★ — 예전엔 20초마다 여기서만 PC-TEST 가 섞여
@@ -815,7 +820,7 @@ async function loadServerSummary(){
     SERVER_SUMMARY_AT = sumClock();
   }catch(e){ console.error('서버 전광판 요약 실패', e); }
   finally{ if(to) clearTimeout(to); }
-  redrawSummary();   // 실패해도 다시 그린다 — 낡았으면 serverSum() 이 null 이라 폴백으로 바뀐다
+  redrawSummary();   // 실패해도 다시 그린다 — 값은 마지막 서버값 그대로, 툴팁만 «N초 전 값 유지» (#454)
 }
 
 function dkHero(){
@@ -1826,26 +1831,17 @@ function buildStack(s){
   //   ★폴백★ 지도가 없으면(옛 매크로/수집 전) 카드별 daily_progress 길이를 더한다.
   //     그건 ★카드가 있는 계정만★ 세므로 실제보다 작을 수 있어 앰버로 알린다.
   // ══════════════════════════════════════════════════════════════════════
-  const nameMap = {};
-  s.list.forEach(p => Object.assign(nameMap, p.acct_names || {}));
-  let nChar = 0, nCharAcct = 0;
-  for (const k of Object.keys(nameMap)) {
-    const cnt = Object.values(nameMap[k] || {}).filter(v => String(v || '').trim()).length;
-    if (cnt > 0) { nChar += cnt; nCharAcct++; }
-  }
+  const _cg = groupChars(s.list);          // ★#451★ 전광판과 같은 한 함수(§A12)
+  let nChar = _cg.n, nCharAcct = _cg.accts + (_cg.outAccts || 0);     // OUT 계정은 «정보 있음» 으로 본다(갭 문구용)
   let charGap = '';
-  if (!nChar) {                      // 지도가 없다 → 카드에서 센다(모자랄 수 있다)
-    const seen = {};
-    s.list.forEach(p => { const k = acctNumOf(p.pc_id);
-      seen[k] = Math.max(seen[k] || 0, (p.daily_progress || []).length); });
-    nChar = Object.values(seen).reduce((a, b) => a + b, 0);
-    nCharAcct = Object.keys(seen).filter(k => seen[k] > 0).length;
+  if (!_cg.fromMap) {                // 지도가 없다 → 카드에서 센다(모자랄 수 있다)
     charGap = '캐릭 이름 정보가 없어 ★카드에 보인 슬롯만★ 셌습니다 (정보수집을 돌리면 정확해집니다)';
   } else if (nCharAcct < hiNum) {
     charGap = `계정 ${hiNum}개 중 ★${nCharAcct}개만★ 캐릭 정보가 있습니다 `
             + `(나머지는 정보수집이 안 됐거나 info.txt 에 캐릭 이름이 비어 있습니다)`;
   }
   const totTip = `이 PC 의 ★총 캐릭 ${nChar}명★ · 계정 ${hiNum}개`
+    + (_cg.out > 0 ? ` · 정지(OUT) 계정 캐릭 ${_cg.out}명 제외` : '')
     + (idNums.length && idNums.length !== hiNum ? ` (아이디 등록 ${idNums.length}개)` : '')
     + (charGap ? ` \u2014 ${charGap}` : '');
   const total = `<span class="acct-total${charGap ? ' acct-total-gap' : ''}" `
@@ -1989,6 +1985,36 @@ function parseOddEnergy(str) {
   return a + b;
 }
 
+// ★#451 (2026-10-05 주인님 「전광판 캐릭터수 맨날 바뀐다」 · 「지금 아웃시킨거 제외하고」)★ 한 물리 PC(묶음) 의 캐릭 수 — 카드 배지와 전광판이 ★같은 함수★ (§A12).
+//   정지(OUT) 슬롯(banned_slots, 묶음 카드들의 합집합 — 계정 탭 OUT 과 같은 목록)의 계정은 세지 않는다. 뺀 수는 out 으로 돌려준다.
+//   정본 = 묶음 안 모든 카드의 acct_names 를 합친 «전 계정 지도»({계정번호:{슬롯:캐릭이름}}, info.txt 출처) 의 이름 있는 칸 수.
+//   카드가 no_account/정지로 비워지거나 순환으로 계정이 바뀌어도 지도는 그대로라 숫자가 안 흔들린다.
+//   지도가 없을 때만(옛 매크로·수집 전) 카드의 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다.
+//   → {n, accts, fromMap, out, outAccts}
+function groupChars(list){
+  const map = {};
+  const banned = new Set();                         // ★정지(OUT) 슬롯(2026-10-05 주인님 «지금 아웃시킨거 제외하고»)★ — 계정 탭 OUT 과 같은 목록
+  (list || []).forEach(p => {
+    Object.assign(map, (p && p.acct_names) || {});
+    ((p && p.banned_slots) || []).forEach(x => banned.add(String(x)));
+  });
+  let n = 0, accts = 0, out = 0, outAccts = 0;
+  for (const k of Object.keys(map)) {
+    const cnt = Object.values(map[k] || {}).filter(v => String(v || '').trim()).length;
+    if (cnt <= 0) continue;
+    if (banned.has(String(k))) { out += cnt; outAccts++; continue; }      // OUT 계정의 캐릭은 세지 않는다(몇 명 뺐는지만 남긴다)
+    n += cnt; accts++;
+  }
+  if (n + out > 0) return {n, accts, fromMap: true, out, outAccts};    // 전부 OUT 이어도 지도가 있으니 폴백으로 가지 않는다(0)
+  const seen = {};
+  (list || []).forEach(p => { const k = acctNumOf((p && p.pc_id) || '');
+    const c = ((p && p.daily_progress) || []).length || ((p && p.chars) || []).length;
+    if (banned.has(String(k))) { out += c; return; }
+    seen[k] = Math.max(seen[k] || 0, c); });
+  const fb = Object.values(seen).reduce((a, b) => a + b, 0);
+  return {n: fb, accts: Object.keys(seen).filter(k => seen[k] > 0).length, fromMap: false, out, outAccts: 0};
+}
+
 function refreshSummary(pcs) {
   const c={online:0,offline:0,completedPcs:0,onlineChars:0,completedChars:0,totalKina:0};
   const seenPc = new Set();
@@ -2038,14 +2064,15 @@ function refreshSummary(pcs) {
     //   ★이 숫자는 '지금 몇 대가 켜져 있나' 가 아니라 '내가 굴리는 캐릭이 몇인가' 다.★
     //   PC 를 껐다고 캐릭터가 사라지는 게 아니므로 온라인 여부와 무관하게 전부 센다.
     //   (대수 정보는 아래 '온라인' 섹션 헤더와 이 칸 툴팁에 그대로 남는다)
-    let n = 0;
+    //   ★#451★ 묶음별로 groupChars(전 계정 지도) — 카드 합산(비워진 카드가 빠져 100 vs 149 로 흔들렸다)은 지도 없는 묶음의 폴백만.
+    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0;
     Object.values(grp).forEach(list => {
-      list.forEach(p => {
-        const dp = p.daily_progress || [];
-        n += dp.length || ((p.chars && p.chars.length) || 0);
-      });
+      const cg = groupChars(list);
+      n += cg.n; outN += cg.out || 0;
+      if (cg.fromMap) mapPcs++; else if (cg.n > 0) fbPcs++;
     });
     c.onlineChars = n;
+    c._charSrc = {mapPcs, fbPcs, outN};
   }
   // 오드에너지 + 각성전 티켓 + 거래키나 합산 (charTableData 기준, 거래키나는 캐릭터별 소지라 전 캐릭 합산)
   let totalOdd = 0, totalAwaken = 0, awakenSeen = false, totalTrade = 0, tradeSeen = false;
@@ -2059,11 +2086,25 @@ function refreshSummary(pcs) {
   elOn.textContent = c.onlineChars;
   // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
   elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
-             + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`;
+             + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`
+             + (c._charSrc.outN ? ` / ★정지(OUT) 계정 캐릭 ${c._charSrc.outN}명 제외★` : '')
+             + ` / 출처: 계정별 캐릭 명단(info.txt) ${c._charSrc.mapPcs}대` + (c._charSrc.fbPcs ? ` · 명단 없어 카드 합산으로 센 PC ${c._charSrc.fbPcs}대(모자랄 수 있음)` : '');
+  // ★#454 캐릭터·완료 칸도 서버값이 최종값★ (char_total·chars_done = 서버 _fv_group_chars/_dp_done — 화면 groupChars/dpDone 과 같은 규칙).
+  //   서버가 아직 안 준 첫 화면(또는 옛 서버)만 위에서 센 화면 계산.
+  const ssC = serverSum();
+  if (ssC && typeof ssC.char_total === 'number') {
+    c.onlineChars = ssC.char_total;
+    elOn.textContent = c.onlineChars;
+    elOn.title = `전체 캐릭터 ${c.onlineChars}명 — 뒷카드(다른 계정)·오프라인 PC 포함`
+               + ` / PC 온라인 ${c.online}대 · 오프라인 ${c.offline}대`
+               + (ssC.chars_out ? ` / ★정지(OUT) 계정 캐릭 ${ssC.chars_out}명 제외★` : '')
+               + ` / 출처: 서버(계정별 캐릭 명단 ${ssC.chars_map_pcs}대` + (ssC.chars_fb_pcs ? ` · 카드 합산 폴백 ${ssC.chars_fb_pcs}대(모자랄 수 있음)` : '') + ')'
+               + ' — ' + serverSumNote();
+  }
   // ★서버값 있으면 그게 최종값(2026-09-23, §A12)★ — /api/fv/snapshot 과 같은 계산.
   //   아직 안 왔으면(첫 화면) 클라 계산을 폴백으로 보여준다.
   //   ★서버 합계는 「한 카드도 못 읽은 칸」을 null 로 준다(반증 #2)★ — 0 과 모름을 가른다.
-  //   ★낡으면(60초) 서버값을 버린다(반증 #4)★ — serverSum() 이 null 을 준다.
+  //   ★#454: 낡아도 서버값을 버리지 않는다★ — 마지막 서버값 유지, 화면 계산은 첫 /summary 전에만(serverSum 머리 주석).
   const ss = serverSum();
   const ssNote = serverSumNote();
   const elOdd = document.getElementById('cnt-odd-energy');
@@ -2081,10 +2122,14 @@ function refreshSummary(pcs) {
     ? (ss.trade_kina != null ? fmtKinaKor(ss.trade_kina) : '–')
     : (tradeSeen ? fmtKinaKor(totalTrade) : '–');
   elTr.title = ssNote;
-  document.getElementById('cnt-dungeon-left').textContent=pcs.length ? String(dungeonLeft.size) : '–';
+  // ★#454 일일던전 남음도 서버값이 최종(totals.dungeon_left — isDungeonDone 과 같은 규칙, 마지막 서버값 유지)★ 서버가 아직 안 준 첫 화면만 화면 계산
+  const ssD = serverSum();
+  document.getElementById('cnt-dungeon-left').textContent = (ssD && typeof ssD.dungeon_left === 'number') ? String(ssD.dungeon_left) : (pcs.length ? String(dungeonLeft.size) : '–');
   const elDone = document.getElementById('cnt-completed');
+  if (ssC && typeof ssC.chars_done === 'number') { c.completedChars = ssC.chars_done; c.completedPcs = ssC.pcs_done || 0; }     // #454 서버값이 최종
   elDone.textContent = c.completedChars;
-  elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`;
+  elDone.title = `오늘 사냥을 끝낸 캐릭터 ${c.completedChars}명 · 전 캐릭 완료한 PC ${c.completedPcs}대 (새벽 5시 초기화)`
+    + (ssC && typeof ssC.chars_done === 'number' ? ' — ' + serverSumNote() : '');
   const elTk = document.getElementById('cnt-total-kina');
   elTk.textContent = ss ? fmtKinaKor(ss.total_kina || 0) : fmtKinaKor(c.totalKina);
   elTk.title = ssNote;
@@ -2175,7 +2220,7 @@ function selectAllPcs() {
 //   안 도는 카드면 같은 PC 의 살아 있는 카드로. 살아 있는 카드가 없으면 자기 자신(큐에 남는다).
 function cmdTargetOf(id){
   const st = (state[id]||{}).status || 'offline';
-  if ((STATUS_CFG[st]||STATUS_CFG.offline).online) return id;
+  if (cardOnline(state[id])) return id;
   const live = liveCardOf(baseId(id));
   return (live && live.pc_id) || id;
 }
@@ -2401,7 +2446,7 @@ async function sendCmd(pc_id, command, args={}) {
   //   (조용히 바꾸면 그것대로 §A2 위반이다).
   const _base307 = baseId(pc_id);
   const _st307 = ((state[pc_id]||{}).status) || 'offline';
-  const _on307 = (STATUS_CFG[_st307]||STATUS_CFG.offline).online;
+  const _on307 = cardOnline(state[pc_id]);          // ★#441★ 정지 카드라도 매크로가 지금 살아 있으면(macro_live) 그 카드가 명령을 받는다
   if (!_on307) {
     const _live307 = liveCardOf(_base307);
     if (_live307 && _live307.pc_id && _live307.pc_id !== pc_id) {
@@ -2825,7 +2870,7 @@ async function rotCmd(command) {
   const byBase = {};
   for (const id of selectedPcs) {
     const b = baseId(id);
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   const targets = Object.values(byBase).map(x => {
@@ -2870,7 +2915,7 @@ async function switchAccountSelected() {
   const byBase = {};
   for (const id of selectedPcs) {
     const b = baseId(id);
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   // ★이미 그 계정인 PC는 뺀다★ — 본컴을 괜히 한 번 더 돌리면 게임만 끊긴다
@@ -2907,7 +2952,7 @@ async function switchAllToFirst() {
   for (const id of Object.keys(state)) {
     const b = baseId(id);
     if (isFakePc(id)) continue;
-    const on = !!((STATUS_CFG[(state[id]||{}).status]||STATUS_CFG.offline).online);
+    const on = cardOnline(state[id]);
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   // ★★주인님 지시 (2026-09-04) — 「뭐 하고 있는애들은 그냥 전환 안 시켜도돼」★★
@@ -3440,23 +3485,69 @@ function applyStateMsg(msg, sock){
   return true;
 }
 
-let _ws=null, _wsLastMsg=0, _wsVisSent=false;
+let _ws=null, _wsLastMsg=0, _wsVisSent=false, _wsFail=0, _wsTimer=null, _wsConnAt=0, _wsStaleSince=0, _wsRetryAt=0;
+// ★#448 (2026-10-05 주인님 「F5 안 눌러도 문제없게 · 서버 괴롭히지 말고」)★ 연결 살아 있음 감시.
+//   서버는 20초마다 ping(숨은 화면에도, 판 번호 ver 동봉)을 보낸다 → 45초(숨으면 90초) 아무것도 안 오면 죽은 소켓이다.
+//   재접속은 2→4→8…60초 + 지터(탭이 여럿이어도 한꺼번에 몰리지 않게). 첫 메시지를 받으면 백오프 초기화.
+//   페이지 새로고침·/status 반복 조회는 안 한다 — 재접속하면 서버가 전량 한 번을 준다(기존 길).
+const WS_DEAD_MS=45000, WS_DEAD_HIDDEN_MS=90000, WS_CONNECT_MAX_MS=15000, WS_STALE_VER_MS=20000;
 // ★#271 (2026-09-27 주인님 「라이브 안 쓰는데」)★ 숨은 화면(탭 뒤·최소화·크기 0 iframe)은 서버에 알려
 //   상태·로그를 안 받는다. 보이게 되면 알리고 서버가 전량 한 번. 알림(소리)·ping 은 숨어도 온다.
 function _wsHid(){ return document.hidden || innerWidth===0 || innerHeight===0; }
 function _wsVis(){ const h=_wsHid(); if(_ws && _ws.readyState===1 && h!==_wsVisSent){ try{ _ws.send(JSON.stringify({t:'vis',h:h?1:0})); _wsVisSent=h; if(!h) _wsLastMsg=Date.now(); }catch(err){} } }
 window.addEventListener('resize',_wsVis); setInterval(_wsVis,5000);
+function _wsDot(on){ const d=document.getElementById('ws-dot'); if(d) d.className='w-2.5 h-2.5 rounded-full '+(on?'bg-green-500':'bg-red-500')+' transition-colors'; }
+function _wsSchedule(){
+  if(_wsTimer) return;
+  const base=Math.min(60000, 2000*Math.pow(2,Math.min(_wsFail,5)));
+  const wait=Math.round(base+Math.random()*base*0.5);
+  _wsFail++; _wsRetryAt=Date.now()+wait;
+  _wsTimer=setTimeout(()=>{ _wsTimer=null; _wsRetryAt=0; connectWS(); }, wait);
+}
+// 반개방(close 이벤트가 안 오는) 소켓을 버린다 — close() 만 부르고 onclose 를 기다리면 브라우저에 따라 몇 분이 걸린다.
+function _wsAbandon(){
+  const old=_ws; _ws=null;
+  if(old){ old.onmessage=old.onclose=old.onerror=old.onopen=null; try{old.close();}catch(err){} }
+  _wsDot(false); _wsSchedule();
+}
+// 살아 있나(타이머·보이게 될 때·온라인 복귀 공통). stale 이면 버리고 재접속 예약, 소켓이 없는데 예약도 없으면 바로 접속.
+function _wsCheck(){
+  if(!_ws){ if(!_wsTimer){ _wsFail=0; connectWS(); } return; }
+  if(_ws.readyState===0){ if(Date.now()-_wsConnAt>WS_CONNECT_MAX_MS) _wsAbandon(); return; }
+  if(_ws.readyState!==1){ _wsAbandon(); return; }
+  if(Date.now()-_wsLastMsg>(_wsHid()?WS_DEAD_HIDDEN_MS:WS_DEAD_MS)) _wsAbandon();
+}
+// ping 의 ver 가 받은 판과 계속 다르면(연결은 사는데 상태 펌프가 죽은 경우) 전량을 한 번 조르고, 그래도 같으면 재접속.
+function _wsPing(msg, ws){
+  if(typeof msg.ver!=='number' || _wsHid() || msg.ver===STATE_VER){ _wsStaleSince=0; return; }
+  const now=Date.now();
+  if(!_wsStaleSince){ _wsStaleSince=now; return; }          // 처음 본 어긋남은 전송 중일 수 있다
+  if(now-_wsStaleSince<WS_STALE_VER_MS) return;
+  if(!_resyncAsked){ _resyncAsked=true; _wsStaleSince=now; try{ ws.send(JSON.stringify({type:'resync'})); }catch(err){} return; }
+  _wsStaleSince=0; _wsAbandon();
+}
+// 화면 한쪽의 «갱신 N초 전 / 재연결 중» — 텍스트 한 칸만 1초마다 갱신(서버 요청 없음)
+function _wsAgeTick(){
+  const el=document.getElementById('ws-age'); if(!el) return;
+  let t, warn=false;
+  if(!_ws || _ws.readyState!==1){ const w=_wsRetryAt?Math.max(0,Math.ceil((_wsRetryAt-Date.now())/1000)):0; t='재연결 중'+(w?' '+w+'초':'…'); warn=true; }
+  else { const a=Math.max(0,Math.round((Date.now()-_wsLastMsg)/1000)); t='갱신 '+a+'초 전'; warn=a>30; }
+  if(el.textContent!==t){ el.textContent=t; el.className='text-xs '+(warn?'text-amber-400':'text-gray-500'); }
+}
+setInterval(_wsAgeTick,1000);
 function connectWS() {
   const proto=location.protocol==='https:'?'wss':'ws';
   const ws=new WebSocket(`${proto}://${location.host}/ws?h=${_wsHid()?1:0}&e=${window.top!==window?1:0}`);
-  _ws=ws; _wsLastMsg=Date.now(); _wsVisSent=_wsHid();
+  _ws=ws; _wsLastMsg=Date.now(); _wsConnAt=Date.now(); _wsVisSent=_wsHid(); _wsStaleSince=0;
   // ★새 소켓은 새 판부터(2026-09-23 반증 B2-2)★ — 앞 소켓에서 resync 를 조르고 전량을 못 받은 채
   //   끊기면 _resyncAsked 가 남아, 새 소켓에서 조각이 어긋나도 다시 안 졸라 화면이 멈췄다.
   STATE_VER = -1; _resyncAsked = false;
-  ws.onopen=()=>{document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-green-500 transition-colors';};
+  ws.onopen=()=>{ if(_ws===ws) _wsDot(true); };
   ws.onmessage=(e)=>{
-    _wsLastMsg=Date.now();
+    if(_ws!==ws) return;
+    _wsLastMsg=Date.now(); _wsFail=0;
     const msg=JSON.parse(e.data);
+    if(msg.type==='ping'){ _wsPing(msg, ws); return; }
     if(msg.type==='state'||msg.type==='state_diff'){ if(applyStateMsg(msg, ws)){pendSweep();updResultSweep();scheduleRender();} }   // pendSweep = 사고 308-b ①효과 관측 해제(상태가 실제로 바뀌면 표시를 지운다)
     else if(msg.type==='log'&&logModalPc===msg.pc_id){appendLogLine(msg.level,msg.message);}
     else if(msg.type==='cmd_history'){renderCmdHistory(msg.commands||[]);}
@@ -3465,16 +3556,18 @@ function connectWS() {
     else if(msg.type==='alert'){handleAlert(msg);}
   };
   ws.onclose=(e)=>{
-    document.getElementById('ws-dot').className='w-2.5 h-2.5 rounded-full bg-red-500 transition-colors';
+    if(_ws!==ws) return;                              // 이미 버린 소켓의 늦은 close
+    _ws=null; _wsDot(false);
     if(e&&e.code===1008){location.reload();return;}   // 세션 무효(만료 등) → 새로고침으로 로그인 이동
-    setTimeout(connectWS,3000);
+    _wsSchedule();
   };
 }
 
 // ★반개방 소켓 감시(2026-07-25, 사용자: "새로고침해야만 상태 바뀜"): 프록시/절전으로 WS가
 //   close 이벤트 없이 조용히 죽으면 '연결된 척 수신 0'이 됨 — 함대가 30초마다 보고하므로
 //   90초 무수신이면 죽은 것. close()로 onclose→재연결 경로를 강제 발동.★
-setInterval(()=>{ if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>(_wsHid()?180000:90000)){ try{_ws.close();}catch(err){} } },15000);   // 숨어도 서버가 25초마다 ping(#271) — 숨은 동안은 180초로 느슨하게
+setInterval(_wsCheck,5000);   // #448 45초(숨으면 90초) 무수신이면 버리고 재접속 — 숨어도 서버가 20초마다 ping(#271)
+window.addEventListener('online',()=>{ if(!_ws && _wsTimer){ clearTimeout(_wsTimer); _wsTimer=null; _wsRetryAt=0; _wsFail=0; connectWS(); } else _wsCheck(); });
 
 // ─── 회랑 진행 (2026-08-01): 전광판 '회랑 남음' 타일 + 스프레드 '회랑' 열 갱신 ──
 let corridorRemaining={};   // {pc_id: {remaining, total, stale}}
@@ -5522,9 +5615,15 @@ function cmTarget(){
   }
   return live;
 }
+// ★#441 (2026-10-04)★ 명령 라우팅의 «살아 있는 카드» 판정 한 곳. 서버는 정지(OUT) 계정 카드를 표시·합계용으로 status=no_account 로 비우지만
+//   그 슬롯에서 매크로가 ★실제로 돌고 있으면★ macro_live=true 를 싣는다(WS 접속 또는 최근 보고) — 이 카드를 «없다» 로 치면
+//   정지 계정에서 다른 계정으로 전환하는 명령조차 «도는 매크로가 없습니다» 로 막힌다(PC-23b).
+function cardOnline(p){
+  p = p || {};
+  return !!((STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online) || !!(p.banned && p.macro_live === true);
+}
 function liveCardOf(base){
-  const isOn = p => (STATUS_CFG[p.status||'offline']||STATUS_CFG.offline).online;
-  return Object.values(state).find(p => baseId(p.pc_id||'')===base && isOn(p)) || null;
+  return Object.values(state).find(p => baseId(p.pc_id||'')===base && cardOnline(p)) || null;
 }
 function currentAcctNum(base){
   const live = liveCardOf(base);
@@ -5922,8 +6021,8 @@ function handleCharInfoMsg(msg) {
     document.documentElement.classList.toggle('fx-off',document.hidden);
     if(!document.hidden){
       renderCards(); loadCharTable(); loadCmdHistory();
-      if(_ws && _ws.readyState===1 && Date.now()-_wsLastMsg>90000){ try{_ws.close();}catch(err){} }
-      else _wsVis();
+      _wsCheck();                                     // #448 낡았을 때만 재접속(멀쩡하면 건드리지 않는다)
+      _wsVis();
     } else _wsVis();
   });
 })();

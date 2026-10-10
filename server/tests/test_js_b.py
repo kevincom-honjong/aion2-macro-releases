@@ -522,7 +522,7 @@ def t_js4_js5_js8():
         return
     src = main.HTML_DASHBOARD
     try:
-        fns = _grab(src, ("isAcctSuf", "baseId", "isFakePc", "isExcludedPc", "liveCardOf", "selectedBases",
+        fns = _grab(src, ("isAcctSuf", "baseId", "isFakePc", "isExcludedPc", "cardOnline", "liveCardOf", "selectedBases",
                           "stackIds", "selectAllPcs", "updateSelBar", "clearSelection", "withBulk", "bulkCmd",
                           "selCmd", "sellAllSel", "settleSel", "openLive", "closeLive"),
                     ("cmdTargetOf", "cmdTargets"))
