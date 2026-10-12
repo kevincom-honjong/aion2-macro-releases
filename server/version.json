@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.1057",
+    "version": "1.1.1058",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "43a40cbf6870c2776d5a1af6d2f815298ee44540c3fae08629431ecc68fcff42",
+    "sha256": "7a7c02e608b20a530bda806f327385788c0180a376a201cce347b6ed0395ee1d",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -17,6 +17,16 @@
     "F_2.png": "89d5999331a0ecb4a3a8a0070185ec81d7d1cc42f8ba2d94a1cc68e293ef9c55",
     "F_3.png": "63f5bbf1f10ee3dc03e5326bb10a99c0e12612ea28a373c5c821fa4edb7bf5e8",
     "F_4.png": "442c11e477e019550039a2d776e6968b77a48969c1a18aa1a2f101b2f6b25eb2",
+    "abyret_automv.png": "d49e6654c6ecbe01cea26cd57fe910989037889f65e66a5f67f5de5375a223b4",
+    "abyret_base.png": "106c7c91937b26bf1485e27b82cbf6c3762dc2e71903b651747f42aa9ed742b5",
+    "abyret_flydlg.png": "9f1a036b3b00546a801f84fb29b07afbb9fd1778e37ccd6086db38ee669184f1",
+    "abyret_fmove.png": "4cc0ee375fa24a023fa633dcb86c574f001ebbb7a7e2eeab78c1796a9bcf424e",
+    "abyret_kisk.png": "49f75db49bbe824f88f9071a2e3403c73a160c67f1689cb30b73a1a6de9145ae",
+    "abyret_layer.png": "8e23d9b7b1fa59f52fc49ce7782a9cfebb5d883a0cf70a5f346f7ac105113632",
+    "abyret_ram.png": "9b436dea6eb4595b2d9cac48a8c94ccbdc01b1bdbf87c8dfb932a8b3a5eec540",
+    "abyret_st_fly.png": "f4fb0cde69fee848d14a351ebe1c3491d6d03c65af3fbf7a997c3bb3d3458199",
+    "abyret_st_gnd.png": "7d30688c4e9b2566593fa62d0d5f3d5b159379feb041c537b0ed18eaf502efee",
+    "abyret_zone.png": "d15bc0c9ed6f21fe8c720c7e555a069e80065e5c37a9d25ad7e406dae823233c",
     "abyss_1400.png": "dc66710c7d978fedd944d96e0c224708f02a3b8422d75d234963084a1d8ed970",
     "abyss_npc_btn.png": "35961dc1c36c151a96efc31450de8c74a0f32852d92104314215667519875c0d",
     "acct_restricted.png": "a3a26860a816b416f44e0b409f1f0dc1a47332155fb27ca107c1d330fe921f3e",
@@ -504,11 +514,11 @@
     "sha256": "f73995b22179603e76adf135d54b9cb79379d60e01f77fcea94f72eb7a4541b8",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20261009134846",
-  "updated_at": "2026-10-12T20:26:42",
+  "images_version": "20261012210709",
+  "updated_at": "2026-10-12T21:07:09",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.1057",
+    "version": "1.1.1058",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
