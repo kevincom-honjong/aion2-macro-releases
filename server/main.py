@@ -3640,9 +3640,13 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
   /* ★카드가 아직 없는 계정★ — info.txt 에 자격증명만 선언된 자리. 번호는 보여주되 못 누른다 */
   .acct-tab-none{opacity:.38;cursor:not-allowed}
   .acct-tab-none:hover{background:#0d1424;border-color:#374151;color:#7c8aa0;height:26px}
-  /* #276 정지 계정 — 번호에 줄을 긋고 빨간 OUT */
-  .acct-tab-out{color:#f87171;text-decoration:line-through}
-  .acct-tab .tout{font-style:normal;font-weight:900;font-size:9px;line-height:1;color:#f87171;text-decoration:none}
+  /* #276 정지 계정 — 번호에 줄을 긋는다. #456(2026-10-14): 빨강(고장)이 아니라 ★회색 비활성★ + 활성 탭 뒤로 */
+  .acct-tab-out{color:#6b7280;text-decoration:line-through;opacity:.7}
+  .acct-tab .tout{font-style:normal;font-weight:900;font-size:9px;line-height:1;color:#9ca3af;text-decoration:none}
+  /* #456 정지(OUT) 카드 — 점선 테두리 + 내용을 회색으로 흐리게(선택 윤곽·✔ 는 카드 자신이라 그대로) */
+  .card-out{border-style:dashed}
+  .card-out > *:not(.out-note){opacity:.5;filter:grayscale(1)}
+  .card-out .out-note{font-size:11px;color:#9ca3af;margin:0 0 4px;font-weight:600}
   /* ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님 그림 + 정정)★★ 탭 줄 ★오른쪽 끝★.
      margin-left:auto 로 밀되 flex:none 이라 탭을 밀어내지 않는다.
      탭 5개(5x40+gap 12=212) + 배지(~54) = 266 < 카드 최소폭 285 라 겹치지 않는다. */
@@ -5507,10 +5511,26 @@ const STATUS_CFG = {
   no_account:   {label:'계정 없음', vi:'Không có tài khoản', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-gray-700', text:'text-gray-400', online:false},
   // ★정지 계정(#276, 2026-09-27 주인님)★ — 서버가 status 는 no_account(순환·집계 제외 그대로)로 두고
   //   banned:true 를 싣는다. 모양만 여기서 고른다(cardCfg).
-  banned:       {label:'정지(OUT)', vi:'Bị khóa (OUT)', bg:'bg-red-950/40', border:'border-red-900', badge:'bg-red-800', text:'text-red-400', online:false},
+  //   ★#456 (2026-10-14 주인님 «정지(out 된거 대시보드에 비활성해놔 햇걸려»)★ — 빨강은 «죽었다/고장» 으로 읽혀 헷갈린다.
+  //   정지(OUT)는 ★회색 비활성★ — 점선 테두리·흐린 내용은 .card-out 이 더한다(buildCard).
+  banned:       {label:'정지(OUT)', vi:'Bị khóa (OUT)', bg:'bg-gray-900/40', border:'border-gray-800', badge:'bg-gray-700', text:'text-gray-500', online:false},
 };
 // #276 카드 모양 한 곳 — 정지 표식이 있으면 status 보다 먼저
 function cardCfg(p){ return ((p||{}).banned && STATUS_CFG.banned) || STATUS_CFG[(p||{}).status||'offline'] || STATUS_CFG.offline; }
+// ★#456 정지(OUT) 비활성 — 한 곳(§A12)★ 탭·카드·계정 메뉴·전환 가드가 전부 이 한 함수를 본다.
+//   outSlotsOf(base) = 그 물리 PC 의 정지 슬롯 번호 집합 — 카드들의 banned_slots 합집합 + banned 인 카드 자신의 번호.
+//   서버 _ban_check_cmd 가 정본(전환 명령을 거부한다) — 여기는 «눌러 보기 전에» 회색으로 보여주고 먼저 막을 뿐이다.
+function outSlotsOf(base){
+  const set = new Set();
+  Object.values(state).forEach(p => {
+    if (!p || baseId(p.pc_id||'') !== base) return;
+    (p.banned_slots || []).forEach(x => { const n = parseInt(x, 10); if (n >= 1) set.add(n); });
+    if (p.banned) set.add(acctNumOf(p.pc_id));
+  });
+  return set;
+}
+// 탭 순서 — 활성 계정 먼저, 정지(OUT)는 뒤로(번호·서로의 순서는 그대로, 안정 정렬). PC 격자의 자리는 안 건드린다(2026-08-20 지시).
+function outLast(items){ return items.filter(x => !x.out).concat(items.filter(x => x.out)); }
 const LOG_COLOR = {error:'text-red-400', warn:'text-yellow-400', info:'text-gray-300', debug:'text-gray-600'};
 
 // ★커맨드 덱(2026-08-16)★ — 카드 윗면에서 상태색이 새어 나온다.
@@ -6481,7 +6501,7 @@ function abyssCardLine(pc){
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = cardCfg(pc);
-  const pulse = (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait')?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게
+  const pulse = (!pc.banned && (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait'))?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게 (#456 정지(OUT)는 깜빡이지 않는다)
   // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
   //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
   const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
@@ -6533,7 +6553,7 @@ function buildCard(pc) {
     (isDungeonDone(pc)?`<span class="done-badge done-dungeon" title="일일던전 완료 — 계정 티켓 소진 (수요일 새벽 5시 초기화)">🏰</span>`:'') +
     (isCorridorDone(pc.pc_id)?`<span class="done-badge done-corridor" title="어비스 회랑 완료 — 전 캐릭 남은 회랑 0 (수·토 22시 초기화)">🌀</span>`:'');
   return `<div id="card-${pc.pc_id}"
-    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel} transition-all group cursor-pointer select-none"
+    class="relative bg-gray-900 rounded-xl p-3 border ${cfg.border} ${cfg.bg}${sel}${pc.banned?' card-out':''} transition-all group cursor-pointer select-none"
     onclick="toggleSelect('${pc.pc_id}',event)"
     oncontextmenu="openCardMenu('${pc.pc_id}',event);return false">
     <div class="flex items-start justify-between mb-2">
@@ -6570,6 +6590,7 @@ function buildCard(pc) {
          얹히니 whitespace-nowrap+overflow-hidden 이 뒤쪽 뱃지를 통째로 잘랐다
          (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
          → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
+    ${pc.banned?`<div class="out-note" title="서버 정지 장부(#276)의 계정입니다 — 매크로는 이 계정으로 사냥·전환하지 않습니다. 아래 값은 마지막으로 보고된 옛 값입니다.">⛔ 비활성 — 이 계정으로는 시작·전환하지 않습니다</div>`:''}
     ${(idvChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
@@ -6846,7 +6867,8 @@ function buildStack(s){
       .map(k => parseInt(k, 10)).filter(n => n >= 1 && n <= MAX_ACCT);
   const hiNum = Math.min(MAX_ACCT,
       Math.max(1, s.n, topNum, ...idNums, ...s.list.map(p => acctNumOf(p.pc_id))));
-  let tabs = '';
+  const tabItems = [];                 // ★#456★ 정지(OUT) 탭은 활성 탭 뒤로(outLast)
+  const outSet = outSlotsOf(s.base);
   for (let k = 1; k <= hiNum; k++) {
     const g = byNum[k];
     // ★은퇴한 카드 번호는 회색 탭조차 안 그린다(2026-09-22, 주인님 「회색 카드 다 없애라」)★
@@ -6859,11 +6881,11 @@ function buildStack(s){
     const gid = (g && g.acct_id) || maps.ids[k] || '';
     const plat = (maps.plats||{})[k] || '';
     const idTxt = (String(plat).indexOf('구글') >= 0) ? '구글' : gid;
-    const out = (s.top.banned_slots||[]).includes(k);   // #276 정지 슬롯(카드가 없어도)
+    const out = outSet.has(k);   // #276 정지 슬롯(카드가 없어도) — #456 outSlotsOf 한 곳
     const stTxt = out ? STATUS_CFG.banned.label : (g ? (cardCfg(g).label || '') : '');
     const rot = g ? (g._rot || '') : '';
     const tip = g
-      ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${rot?' · 🔁 순환중':''}`
+      ? `계정 ${k}${idTxt?' · '+idTxt:''} · ${stTxt}${out?' · 비활성(시작·전환 안 함)':''}${rot?' · 🔁 순환중':''}`
         + (cur ? ' (지금 보는 계정)' : ' — 누르면 이 계정 카드를 봅니다')
       : `계정 ${k}${idTxt?' · '+idTxt:''}${out?' · '+stTxt:' — 아직 카드가 없습니다(자격증명만 등록됨)'}`;
     // ★★사냥 다 끝난 계정은 탭에 ★초록 ✓★ (2026-08-29 주인님)★★
@@ -6877,8 +6899,9 @@ function buildStack(s){
     const chk = hdone ? `<i class="tchk">✓</i>` : '';
     const click = (g && !cur)
       ? ` onclick="event.stopPropagation();closeCardMenu();stackShow('${s.base}','${g.pc_id}')"` : '';
-    tabs += `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${out?'<i class="tout">OUT</i>':''}${chk}${dot}</button>`;
+    tabItems.push({out, html: `<button type="button" class="${cls}"${click} title="${esc(tip)}${hdone?' · 오늘 사냥 완료':''}">${k}${out?'<i class="tout">OUT</i>':''}${chk}${dot}</button>`});
   }
+  const tabs = outLast(tabItems).map(x => x.html).join('');
   // ══════════════════════════════════════════════════════════════════════
   // ★★총 ★캐릭★ 수 배지 (2026-08-28 주인님)★★
   //   주인님: "계정수가 아니라 ★캐릭수★ 를 적어야하는데"
@@ -7978,16 +8001,18 @@ async function switchAccountSelected() {
     if (!byBase[b] || (on && !byBase[b].on)) byBase[b] = {id, on};
   }
   // ★이미 그 계정인 PC는 뺀다★ — 본컴을 괜히 한 번 더 돌리면 게임만 끊긴다
-  const targets = [], already = [];
+  const targets = [], already = [], outSkip = [];
   for (const x of Object.values(byBase)) {
     const live = liveCardOf(baseId(x.id));
     const t = live ? live.pc_id : x.id;
+    if (outSlotsOf(baseId(t)).has(n)) { outSkip.push(baseId(t)); continue; }   // ★#456★ 그 PC 의 계정 n 이 정지(OUT)
     if ((((t.match(ACCT_SUF_RE)||[])[1]) || 'a') === v) { already.push(baseId(t)); continue; }
     targets.push(t);
   }
-  if(!targets.length){ showToast(`선택한 PC는 이미 전부 계정 ${n} 입니다`); clearSelection(); return; }
+  if(!targets.length){ showToast(outSkip.length ? `전환할 PC가 없습니다 — 계정 ${n} 이 정지(OUT): ${outSkip.join(', ')}` : `선택한 PC는 이미 전부 계정 ${n} 입니다`); clearSelection(); return; }
   if(!confirm(`${targets.length}대 → 계정 ${n} 통짜 전환` +
               (already.length ? `\n(이미 계정 ${n} 인 ${already.length}대는 제외)` : '') +
+              (outSkip.length ? `\n(계정 ${n} 이 정지(OUT)라 제외: ${outSkip.join(', ')})` : '') +
               `\n\n① 본컴 런처 계정 교체 + 게임 실행 (파섹 경유)\n② 원격컴 크롬 로그인 교체\n③ 매크로 재시작\n\n` +
               `★대당 1~2분, 게임 세션 끊김★. 진행할까요?`))return;
   await withBulk(() => Promise.all(targets.map(id=>sendCmd(id,'switch_launcher',
@@ -8020,10 +8045,11 @@ async function switchAllToFirst() {
   //   ★놀고 있는 것만 고른다★ — 화이트리스트로 둔다(블랙리스트는 새 상태가 생기면 샌다.
   //   실제로 sealed_dungeon·wardrobe 가 그렇게 새서 「빨간 오프라인」으로 보였다, 사고 393).
   const FREE = new Set(['idle', 'paused']);
-  const targets = [], already = [], offline = [], busy = [];
+  const targets = [], already = [], offline = [], busy = [], outSk = [];
   for (const x of Object.values(byBase)) {
     const b = baseId(x.id);
     if (!x.on) { offline.push(b); continue; }
+    if (outSlotsOf(b).has(1)) { outSk.push(b); continue; }         // ★#456★ 계정1 이 정지(OUT)면 «전부 1번으로» 에서 뺀다
     const live = liveCardOf(b);
     const t = live ? live.pc_id : x.id;
     const suf = (((t.match(ACCT_SUF_RE)||[])[1]) || 'a');
@@ -8038,6 +8064,7 @@ async function switchAllToFirst() {
   if (!targets.length) {
     showToast(`전환할 PC가 없습니다 — 이미 계정1: ${already.length}대`
               + (busy.length ? ` · 일하는 중 ${busy.length}대` : '')
+              + (outSk.length ? ` · 계정1 정지(OUT) ${outSk.length}대` : '')
               + (offline.length ? ` · 오프라인 ${offline.length}대` : ''));
     return;
   }
@@ -8050,6 +8077,8 @@ async function switchAllToFirst() {
       + (already.length ? `이미 계정1 (제외): ${already.length}대
 ` : '')
       + (offline.length ? `오프라인 (제외): ${offline.length}대
+` : '')
+      + (outSk.length ? `계정1 이 정지(OUT) (제외): ${outSk.join(', ')}
 ` : '')
       + (busy.length ? `일하는 중이라 ★건너뜁니다★: ${busy.join(', ')}
 ` : '')
@@ -10694,6 +10723,7 @@ function refreshAcctButtons(pc_id){
   const base = baseId(pc_id);
   const avail = acctAvail(base);
   const cur = currentAcctNum(base);
+  const outSet = outSlotsOf(base);     // ★#456★ 정지(OUT) 계정 버튼은 처음부터 못 누른다
   // ★버튼을 MAX_ACCT 에서 만든다 — 계정을 늘려도 손으로 HTML 을 안 고치게★
   const box = document.getElementById('cm-acct-box');
   if (box && box.childElementCount !== MAX_ACCT) {
@@ -10723,11 +10753,13 @@ function refreshAcctButtons(pc_id){
     //   버튼이 애초에 disabled 라 거기까지 가지도 못했다(주인님 스샷: '✓ 계정 1' 회색).
     //   ★없는 계정만★ 막는다(info.txt 에 아이디/비번이 없는 칸). 현재 계정은 '강제 재정렬'
     //   손잡이로 살려둔다 — 카드의 계정은 매크로의 자칭값이라 본컴과 어긋날 수 있다.
-    b.disabled = !has;
+    const isOut = outSet.has(n);
+    b.disabled = !has || isOut;
     b.style.opacity = b.disabled ? '0.35' : (n===cur ? '0.8' : '');
     b.style.cursor = b.disabled ? 'not-allowed' : '';
-    b.textContent = (n===cur ? '✓ 계정 ' : '계정 ') + n;
-    b.title = !has ? 'info.txt에 이 계정의 아이디/비번이 없습니다'
+    b.textContent = (n===cur ? '✓ 계정 ' : '계정 ') + n + (isOut ? ' OUT' : '');
+    b.title = isOut ? '정지(OUT) 계정입니다 — 전환하지 않습니다(서버도 거부합니다)'
+            : !has ? 'info.txt에 이 계정의 아이디/비번이 없습니다'
             : (n===cur ? `카드상 현재 계정입니다. 눌러도 됩니다 — ★강제 재정렬★ (본컴 런처를 직접 읽어 계정 ${n} 이 아니면 바꾸고, 맞으면 게임만 다시 켭니다. 매크로 재시작 없음)`
                        : `계정 ${n}로 통짜 전환 (본컴 런처 → 원격컴 크롬 → 재시작)`);
   }
@@ -10879,6 +10911,8 @@ async function fullAccountSwitch(id, n){
   //   내보내 chrome_label 이 비어 나갔다. 라벨은 ACCT_LABELS 가 정본.
   const lab = (n >= 1 && n <= MAX_ACCT) ? ACCT_LABELS[n-1] : '';
   if (!lab) return false;
+  // ★#456★ 정지(OUT) 계정으로는 명령을 만들지 않는다 — 서버 _ban_check_cmd 가 정본, 여기는 누르자마자 이유를 알린다.
+  if (outSlotsOf(base).has(n)) { showToast(`⛔ ${base} 계정 ${n} 은 정지(OUT) — 전환하지 않습니다`); return false; }
   // 명령은 '지금 온라인인 카드'로 — 매크로는 현재 정체성의 pc_id로만 수신한다
   const live = liveCardOf(base);
   const target = live ? live.pc_id : id;

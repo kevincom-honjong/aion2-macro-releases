@@ -366,7 +366,8 @@ console.log(JSON.stringify({
     ok("J-2 카드·메뉴 머리가 cardCfg 로 모양을 고른다(두 곳)", src.count("const cfg = cardCfg(pc);") == 1
        and src.count("const cfg=cardCfg(pc);") == 1)
     ok("J-3 계정 탭: 정지 슬롯이면 카드가 없어도 OUT 표시·줄긋기",
-       "const out = (s.top.banned_slots||[]).includes(k);" in src and "(out ? ' acct-tab-out' : '')" in src
+       "const out = outSet.has(k);" in src and "const outSet = outSlotsOf(s.base);" in src   # #456 한 곳(outSlotsOf = 카드 banned_slots 합집합)
+       and "(out ? ' acct-tab-out' : '')" in src
        and '<i class="tout">OUT</i>' in src and ".acct-tab-out{" in src)
 
 

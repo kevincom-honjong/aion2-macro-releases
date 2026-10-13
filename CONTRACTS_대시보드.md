@@ -123,6 +123,13 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - FarmView side (farmview room): `fvdash.py` status label (~471, 519) → «정지(OUT)» when `banned`.
 - Server side once agreed: add the two keys in `_fv_pc_view`, update both FV_API.md copies in the same commit, and extend `tests/test_contracts.py` + `farmview/tests/test_integration_contracts.py`.
 
+### 12-c. Dashboard shows OUT slots as disabled (#456, 2026-10-14 owner «정지(out 된거 대시보드에 비활성해놔 햇걸려»)
+- UI only. No new server field, no macro change, no FV API change — the existing card keys `banned` / `banned_slots` (§12) already carry everything. FarmView needs nothing new; if it wants the same look it already has the two keys per §12-b.
+- Dashboard (`HTML_DASHBOARD`): OUT card = grey (not red) + dashed border + dimmed body + «⛔ 비활성» note, no pulse; account tabs of an OUT slot are struck-through/grey and sorted after the active tabs (only inside one PC's stack — the PC grid order itself is untouched, owner rule 2026-08-20); the account menu button of an OUT slot is `disabled`; `fullAccountSwitch`, multi-select «계정 N 으로» and «전부 1번으로» skip an OUT target with a toast. Server `_ban_check_cmd` stays the authority (409 for switch_launcher/switch_account) — the client guard only explains before the click.
+- Single source on the client: `outSlotsOf(base)` (union of `banned_slots` and a banned card's own number) + `outLast(items)`.
+- Left as is on purpose: card context menu / selection on a banned card (needed to switch OUT of a slot the macro is still live on, #441) · 카드만(`set_account`) buttons (server allows it deliberately) · header online counts.
+- Tests: `tests/test_out_disabled.py` OD-1..OD-17 (18 checks) · `tests/test_banned_accts.py` J-3.
+
 ## 13. `/api/fv/kina_adjust` — 고른 카드가 진실 (2026-09-27 아이온2, 더하기만)
 거래 #07963787(1억9천)의 매니아 글 계정은 PC-21c 였지만 ★주인님이 팜뷰에서 PC-02b 를 골랐다★(드롭다운 기본값은 PC-10b 였고,
 고르기 직전 PC-02 를 세 번 봤다) → 키나는 실제로 PC-02b 에서 나갔다. ★팜뷰가 보낸 `pc_id` = 넘긴 계정의 진실, 글 계정은 계획★.
