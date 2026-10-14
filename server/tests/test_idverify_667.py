@@ -229,7 +229,7 @@ async def t_card_and_chip():
     html = M.HTML_DASHBOARD
     ok("I667-21 ★대시보드 카드에 «본인 확인 필요» 칩이 그려진다(카드 줄에 끼움)★",
        "const idvChip = pc.idverify_hold" in html and "본인 확인 필요 · 계정" in html
-       and "${idvChip}${bugBadge}${doneBadges}" in html)
+       and "${idvChip}${silentChip}${bugBadge}${doneBadges}" in html)   # #457 — 무보고 칩이 본인 확인 칩 바로 뒤에 낀다
     M._IDV_HOLD.clear()
     rows = {r["pc_id"]: r for r in await M._build_full_state("main")}
     ok("I667-22 풀리면 카드에서 사라진다", "idverify_hold" not in (rows.get("PC-09b") or {}))

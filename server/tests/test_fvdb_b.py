@@ -316,7 +316,7 @@ async def t_db7_prune():
             n_boot = (await cur.fetchone())[0]
     ok("B-DB7-a ★부팅(init_db)은 큰 DELETE 를 안 한다 — healthcheck 10초 안(배포 반증 #6)★", n_boot == 2, str(n_boot))
     r = await db.maintain_command_tables(batch=1, pause=0)     # 한 행씩 나눠 지우는 길을 태운다
-    ok("B-DB7-b 부팅 뒤 백그라운드 정리가 나눠서 지운다", r["commands"] == 1 and r["updater_commands"] >= 1 and r["index"], str(r))
+    ok("B-DB7-b 부팅 뒤 백그라운드 정리가 나눠서 지운다", r["commands"] >= 1 and r["updater_commands"] >= 1 and r["index"], str(r))   # ≥1 — 다른 시험의 고정 날짜 행(2026-09-13)도 30일이 지나면 같이 지워진다(시한폭탄 제거)
     import inspect
     ok("B-DB7-c lifespan 이 정리를 백그라운드 작업으로 띄운다", "_cmd_table_maint()" in inspect.getsource(main.lifespan))
     async with aiosqlite.connect(db.DB_PATH) as c:

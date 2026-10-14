@@ -64,6 +64,8 @@
 !pc
 !pc.acct_id
 !pc.acct_num
+!pc.banned
+!pc.macro_live
 !pc_id
 !pcs.length
 !ph
@@ -108,6 +110,7 @@
 !wrap
 !x
 !x.on
+!x.out
 -e.at
 -m.at
 -new
@@ -512,7 +515,6 @@ bg-red-500/20
 bg-red-700
 bg-red-700/70
 bg-red-700/80
-bg-red-800
 bg-red-800/60
 bg-red-800/85
 bg-red-900/30
@@ -629,7 +631,6 @@ border-red-600
 border-red-700
 border-red-800
 border-red-800/70
-border-red-900
 border-red-900/60
 border-right:0!important
 border-right:1px
@@ -639,6 +640,7 @@ border-rose-800
 border-sky-400
 border-sky-500
 border-spacing:0
+border-style:dashed
 border-style:solid
 border-t
 border-teal-700
@@ -729,6 +731,7 @@ card-
 card-dragging
 card-dragover
 card-menu
+card-out
 card-sel
 card-sel::before
 card.after
@@ -1164,6 +1167,7 @@ fill
 filter
 filter:blur
 filter:drop-shadow
+filter:grayscale
 filter:none
 filter:saturate
 filters
@@ -1485,6 +1489,7 @@ items
 items-center
 items-start
 items-stretch
+items.filter
 items.length
 items.map
 items[i]
@@ -1943,6 +1948,7 @@ opacity:.45
 opacity:.5
 opacity:.55
 opacity:.62
+opacity:.7
 opacity:.75
 opacity:.78
 opacity:.85
@@ -1961,6 +1967,7 @@ order
 other_account
 other_account/no_account
 out
+out-note
 out.add
 out.length
 out.push
@@ -2053,6 +2060,7 @@ pc-arrow-
 pc-count
 pc._bug_count
 pc._char_collected_at
+pc._macro_silent_s
 pc._rot
 pc._rot_target
 pc._rot_task
@@ -2069,6 +2077,7 @@ pc.abyss_kina_state
 pc.acct_id
 pc.acct_ids
 pc.acct_server
+pc.banned
 pc.cdp
 pc.chars
 pc.daily_progress
@@ -2402,6 +2411,8 @@ serif
 server
 servers
 servers[n]
+set
+set.add
 set_account
 set_info
 set_slot_filter
@@ -3005,11 +3016,13 @@ x.collected_at
 x.daily
 x.daily_ticket
 x.energy
+x.html
 x.id
 x.kina
 x.left
 x.n
 x.no
+x.out
 x.pc_id
 x.pid
 x.sanctuary
