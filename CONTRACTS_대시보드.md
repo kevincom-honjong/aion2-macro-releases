@@ -130,6 +130,12 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - Left as is on purpose: card context menu / selection on a banned card (needed to switch OUT of a slot the macro is still live on, #441) · 카드만(`set_account`) buttons (server allows it deliberately) · header online counts.
 - Tests: `tests/test_out_disabled.py` OD-1..OD-17 (18 checks) · `tests/test_banned_accts.py` J-3.
 
+### 12-d. Silent macro shown on the card + `/diag/status_trail` (#457, 2026-10-15 owner «죽엇는데 어비스사냥한다고 떠잇고»)
+- Dashboard/server only — no macro change, no new `/status` key, no FV API change (`_fv_pc_view` keeps its explicit list). `_macro_silent_s` was already on every card; it is in `STATE_VOLATILE` so a card that did not change never carried a fresh value to the page, and the page never read it. A crashed macro therefore kept showing its last status (e.g. «어비스 사냥») for up to `MACRO_SILENT_TIMEOUT` = 900 s.
+- Rule (server `_silent_minutes` = page `_silM`, pinned equal by `tests/test_silent_457.py` SL-18): card status not in `offline|no_account|other_account`, not a banned slot without `macro_live`, and `_macro_silent_s` > `MACRO_SILENT_WARN_S` = 90 → «⚠ N분째 무보고» chip + «마지막 <상태>» label + no pulse. 90 s = 3 missed heartbeats (30 s; healthy max seen 47 s). The card is re-sent through `_card_key` (`__ms`) only when the minute value changes (same method as the updater «N분전», `__ua`), so healthy fleets add zero diff traffic.
+- `GET /diag/status_trail[?pc=PC-01&n=20]` (main session, read-only): server-received status transitions per PC — `at` (UTC, server receive) · `from` · `to` · `via` ws|http · macro `last_active` · slot · map · progress; last 40 per PC, heartbeats not recorded. For «what did the macro actually send and when».
+- Tests: `tests/test_silent_457.py` SL-1..SL-19 (20 checks) · `tests/test_push.py` P-3/P-4 unchanged.
+
 ## 13. `/api/fv/kina_adjust` — 고른 카드가 진실 (2026-09-27 아이온2, 더하기만)
 거래 #07963787(1억9천)의 매니아 글 계정은 PC-21c 였지만 ★주인님이 팜뷰에서 PC-02b 를 골랐다★(드롭다운 기본값은 PC-10b 였고,
 고르기 직전 PC-02 를 세 번 봤다) → 키나는 실제로 PC-02b 에서 나갔다. ★팜뷰가 보낸 `pc_id` = 넘긴 계정의 진실, 글 계정은 계획★.

@@ -50,7 +50,7 @@ async def t_source():
     ok("OD-1 ★정지(OUT) 팔레트는 빨강이 아니다(회색 비활성) — 오프라인(빨강)과 겹치지 않는다★",
        bool(cfg) and "red" not in cfg and "gray" in cfg and "online:false" in cfg, cfg)
     ok("OD-2 카드: 정지면 .card-out(점선·흐림) · 깜빡이지 않는다 · 비활성 안내 줄",
-       "${pc.banned?' card-out':''}" in src and "(!pc.banned && (st==='hunting'" in src and 'class="out-note"' in src
+       "${pc.banned?' card-out':''}" in src and "(!pc.banned && !_silM && (st==='hunting'" in src and 'class="out-note"' in src
        and ".card-out{border-style:dashed}" in src and ".card-out > *:not(.out-note){opacity:.5;filter:grayscale(1)}" in src, "")
     css = src[src.index(".acct-tab-out{"):src.index(".acct-tab-out{") + 200]
     ok("OD-3 탭: OUT 은 빨강이 아니라 회색(#276 의 #f87171 제거)", "#f87171" not in css.split("}")[0] and "#6b7280" in css, css[:120])

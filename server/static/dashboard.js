@@ -1438,7 +1438,12 @@ function abyssCardLine(pc){
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = cardCfg(pc);
-  const pulse = (!pc.banned && (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait'))?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게 (#456 정지(OUT)는 깜빡이지 않는다)
+  // ★#457 (2026-10-15 주인님 「죽엇는데 어비스사냥한다고 떠잇고」)★ 서버가 이 매크로의 보고를 받은 지 오래면(서버 규칙 _silent_minutes 와 같다)
+  //   카드의 상태·진행도는 ★그때의 마지막 값★ 이다 — 살아 있는 것처럼 깜빡이거나 «어비스 사냥» 이라고만 쓰지 않는다.
+  const _silS = (typeof pc._macro_silent_s === 'number') ? pc._macro_silent_s : 0;
+  const _silM = (_silS > 90 && !['offline','no_account','other_account'].includes(st) && !(pc.banned && !pc.macro_live))
+    ? Math.max(1, Math.floor(_silS / 60)) : 0;
+  const pulse = (!pc.banned && !_silM && (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait'))?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게 (#456 정지(OUT)는 깜빡이지 않는다)
   // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
   //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
   const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
@@ -1447,6 +1452,9 @@ function buildCard(pc) {
   // ★사고 667 본인 확인 보류 — 숨은 상태를 칩으로 (아이온2 2026-09-29)★ 사람 ▶시작/전환이 푼다
   const idvChip = pc.idverify_hold
     ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="런처 [본인 확인] 은 사람 몫 — 순환·버그스샷 알람을 멈춰 뒀습니다. 사람 ▶시작/전환이 풉니다">🪪 본인 확인 필요 · 계정${esc(String(pc.idverify_hold.acct||'?'))}</span>`
+    : '';
+  const silentChip = _silM
+    ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="서버가 이 PC 매크로의 보고를 받은 지 ${_silM}분 넘음 — 카드의 상태·진행도는 그때 마지막 값입니다. 매크로가 멈췄을 수 있습니다(15분 넘으면 오프라인으로 바뀝니다)">⚠ ${_silM}분째 무보고</span>`
     : '';
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
@@ -1515,7 +1523,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
+          <span class="truncate">${_silM?'<span class="text-amber-400 text-xs font-medium">마지막</span> ':''}${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
         </span>
       </div>
     </div>
@@ -1528,7 +1536,7 @@ function buildCard(pc) {
          (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
          → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
     ${pc.banned?`<div class="out-note" title="서버 정지 장부(#276)의 계정입니다 — 매크로는 이 계정으로 사냥·전환하지 않습니다. 아래 값은 마지막으로 보고된 옛 값입니다.">⛔ 비활성 — 이 계정으로는 시작·전환하지 않습니다</div>`:''}
-    ${(idvChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${bugBadge}${doneBadges}</div>`:''}
+    ${(idvChip||silentChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${silentChip}${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>

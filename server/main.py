@@ -557,6 +557,31 @@ WS_LOGQ_MAX = int(os.getenv("WS_LOGQ_MAX", "200"))
 #   stage: recv(WS 에서 받음) · stored(DB 저장 뒤) · send(바뀐 카드가 대시보드 방송에 실림)
 _LAG: dict = {"recv": [], "stored": [], "send": [], "recv_all": []}
 _LAG_ST: dict = {}        # pc → 마지막으로 본 status 문자열 (전이 판정)
+# ★#457★ status 전이 흔적 — «카드가 매크로의 실제 상태를 따라가나» 를 서버가 받은 순서·시각으로 되짚는다.
+#   (2026-10-15 PC-01 사망→재개: 아이온2 가 «언제 dead 로 들어와 언제 풀렸나» 를 서버에서 볼 길이 없었다.)
+TRAIL_KEEP = 40
+TRAIL_PCS_MAX = 200
+_TRAIL: dict = {}         # nspc → [전이 dict …] 최근 TRAIL_KEEP 건
+_TRAIL_LAST: dict = {}    # nspc → 마지막으로 본 status
+
+
+def _trail_note(nspc: str, payload: dict, via: str) -> None:
+    """status 값이 바뀐 보고만 적는다(하트비트는 안 적는다). 절대 던지지 않는다 — 보고 처리를 막으면 안 된다."""
+    try:
+        st = payload.get("status")
+        prev = _TRAIL_LAST.get(nspc)
+        if prev == st:
+            return
+        if nspc not in _TRAIL_LAST and len(_TRAIL_LAST) >= TRAIL_PCS_MAX:
+            return
+        _TRAIL_LAST[nspc] = st
+        a = _TRAIL.setdefault(nspc, [])
+        a.append({"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "from": prev, "to": st, "via": via,
+                  "macro_at": payload.get("last_active"), "slot": payload.get("slot"), "map": payload.get("map"),
+                  "progress": payload.get("hunt_progress")})
+        del a[:-TRAIL_KEEP]
+    except Exception:
+        pass
 _LAG_SEND_ST: dict = {}   # 카드 → 마지막 방송 때 status
 _LAG_BASE: dict = {}      # pc → 최근 raw 최소값들
 _LAG_PC: dict = {}        # pc → 최근 recv 초과분
@@ -2504,6 +2529,13 @@ def _ping_msg(tenant: str) -> dict:
     return m
 UPDATER_STALE_S = 270    # 화면 buildCard 의 「업데이터 N분전」 문턱(_ustale) — 둘이 같아야 한다(test_push)
 STATE_VOLATILE = ("_macro_silent_s", "_updater_age_s")   # 매 조립마다 1초씩 커지는 칸 — 비교에서 뺀다
+# ★#457 (2026-10-15 주인님 「죽엇는데 어비스사냥한다고 떠잇고」)★ 매크로 무보고 표시 문턱.
+#   서버는 매크로가 죽어도 900초(MACRO_SILENT_TIMEOUT)까지 마지막 상태를 그대로 냈고, 화면은 그 나이를 아예 안 봤다
+#   (_macro_silent_s 는 STATE_VOLATILE 이라 카드가 안 바뀌면 화면에 안 닿는다) → 죽은 PC 가 15분간 「어비스 사냥」.
+#   하트비트 30초 · 살아있는 매크로의 서버 수신 나이 실측 최대 47초 → 90초(=3번 거름)부터 «N분째 무보고» 칩.
+#   업데이터 「N분전」(UPDATER_STALE_S)과 같은 방식: 문턱을 넘으면 분이 바뀔 때만 카드를 다시 보낸다.
+MACRO_SILENT_WARN_S = 90
+SILENT_SKIP_STATUS = ("offline", "no_account", "other_account")   # 이미 «보고 없음»을 말하는 상태 — 칩을 또 달지 않는다
 _FEED: dict = {}         # tenant → {"ver","keys","full","diff","retired","latest","at"}
 _PUSH: dict = {}         # tenant → {"task", "dirty", "last"}
 
@@ -2571,7 +2603,20 @@ def _card_key(p: dict) -> str:
     q = {k: v for k, v in p.items() if k not in STATE_VOLATILE}
     a = p.get("_updater_age_s")
     q["__ua"] = (int(a) // 60) if isinstance(a, (int, float)) and a > UPDATER_STALE_S else 0
+    q["__ms"] = _silent_minutes(p)      # ★#457★ 매크로 무보고 «N분째» — 문턱 안이면 0(칩 없음)
     return json.dumps(q, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _silent_minutes(p: dict) -> int:
+    """★#457★ 화면이 «N분째 무보고» 칩을 달아야 하는 카드면 그 분(1 이상), 아니면 0. 화면 buildCard 의 규칙과 같다(test_silent_457)."""
+    s = p.get("_macro_silent_s")
+    if not isinstance(s, (int, float)) or isinstance(s, bool) or s <= MACRO_SILENT_WARN_S:
+        return 0
+    if str(p.get("status") or "") in SILENT_SKIP_STATUS:
+        return 0
+    if p.get("banned") and not p.get("macro_live"):    # 정지(OUT) 슬롯 — 매크로가 거기 없으니 무보고가 당연하다(#276·#441)
+        return 0
+    return max(1, int(s) // 60)
 
 
 def _feed_update(tenant: str, statuses: list, retired: list, latest) -> bool:
@@ -3388,6 +3433,23 @@ async def diag_volume(request: Request):
     import tempfile as _tf
     vdir = os.path.dirname(_database_mod.DB_PATH) or "."
     return {"volume": await asyncio.to_thread(_probe, vdir), "tmp": await asyncio.to_thread(_probe, _tf.gettempdir())}
+
+
+@app.get("/diag/status_trail")
+async def diag_status_trail(request: Request, pc: str = "", n: int = 20):
+    """[진단] ★서버가 받은 status 전이(어느 값에서 어느 값으로, 몇 시에, WS/HTTP 어느 길로)★ — #457.
+    pc 를 주면 그 PC 의 최근 n 건, 안 주면 PC 별 최근 3건. 시각은 UTC(서버 수신). main 세션만. 아무것도 안 고친다."""
+    if check_session(request) != "main":
+        raise HTTPException(status_code=401)
+    n = max(1, min(int(n or 20), TRAIL_KEEP))
+    if pc:
+        return JSONResponse({"pc": pc, "trail": list(_TRAIL.get(ns("main", pc)) or [])[-n:], "keep": TRAIL_KEEP})
+    out = {}
+    for k, v in _TRAIL.items():
+        t, raw = split_ns(k)
+        if t == "main":
+            out[raw] = v[-3:]
+    return JSONResponse({"pcs": out, "keep": TRAIL_KEEP})
 
 
 @app.get("/diag/perf")
@@ -6501,7 +6563,12 @@ function abyssCardLine(pc){
 function buildCard(pc) {
   const st = pc.status||'offline';
   const cfg = cardCfg(pc);
-  const pulse = (!pc.banned && (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait'))?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게 (#456 정지(OUT)는 깜빡이지 않는다)
+  // ★#457 (2026-10-15 주인님 「죽엇는데 어비스사냥한다고 떠잇고」)★ 서버가 이 매크로의 보고를 받은 지 오래면(서버 규칙 _silent_minutes 와 같다)
+  //   카드의 상태·진행도는 ★그때의 마지막 값★ 이다 — 살아 있는 것처럼 깜빡이거나 «어비스 사냥» 이라고만 쓰지 않는다.
+  const _silS = (typeof pc._macro_silent_s === 'number') ? pc._macro_silent_s : 0;
+  const _silM = (_silS > 90 && !['offline','no_account','other_account'].includes(st) && !(pc.banned && !pc.macro_live))
+    ? Math.max(1, Math.floor(_silS / 60)) : 0;
+  const pulse = (!pc.banned && !_silM && (st==='hunting'||st==='selling'||st==='abyss'||st==='awakening_wait'))?' pulse':'';   // 각성전 대기 = 깜빡여서 눈에 띄게 (#456 정지(OUT)는 깜빡이지 않는다)
   // ★묶음 중 하나라도 골라져 있으면 ✔(2026-09-23 B-JS8)★ — 고른 뒤 새 계정 id 가 앞장이 되면
   //   명령은 그 PC 로 가는데 카드엔 ✔ 가 없었다. 선택은 묶음(stackIds) 단위다.
   const sel = stackIds(pc.pc_id).some(id => selectedPcs.has(id)) ? ' card-sel' : '';
@@ -6510,6 +6577,9 @@ function buildCard(pc) {
   // ★사고 667 본인 확인 보류 — 숨은 상태를 칩으로 (아이온2 2026-09-29)★ 사람 ▶시작/전환이 푼다
   const idvChip = pc.idverify_hold
     ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="런처 [본인 확인] 은 사람 몫 — 순환·버그스샷 알람을 멈춰 뒀습니다. 사람 ▶시작/전환이 풉니다">🪪 본인 확인 필요 · 계정${esc(String(pc.idverify_hold.acct||'?'))}</span>`
+    : '';
+  const silentChip = _silM
+    ? `<span class="px-1.5 py-0.5 bg-amber-900/60 text-amber-300 rounded text-xs font-bold leading-none" title="서버가 이 PC 매크로의 보고를 받은 지 ${_silM}분 넘음 — 카드의 상태·진행도는 그때 마지막 값입니다. 매크로가 멈췄을 수 있습니다(15분 넘으면 오프라인으로 바뀝니다)">⚠ ${_silM}분째 무보고</span>`
     : '';
   const bugBadge = (pc._bug_count||0)>0
     ? `<span class="px-1.5 py-0.5 bg-red-700/80 text-red-200 rounded text-xs font-bold leading-none cursor-pointer" onclick="event.stopPropagation();openBugsModal('${pc.pc_id}')">🐛 ${pc._bug_count}</span>`
@@ -6578,7 +6648,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
+          <span class="truncate">${_silM?'<span class="text-amber-400 text-xs font-medium">마지막</span> ':''}${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
         </span>
       </div>
     </div>
@@ -6591,7 +6661,7 @@ function buildCard(pc) {
          (실측 스샷: 상태가 "사.." 로 뭉개질 만큼 왼쪽이 폭을 먹고 있었다).
          → 헤더 밖 전폭 줄로 빼고, 계정칩·캐릭명은 지웠다(탭·아랫줄이 이미 말한다). -->
     ${pc.banned?`<div class="out-note" title="서버 정지 장부(#276)의 계정입니다 — 매크로는 이 계정으로 사냥·전환하지 않습니다. 아래 값은 마지막으로 보고된 옛 값입니다.">⛔ 비활성 — 이 계정으로는 시작·전환하지 않습니다</div>`:''}
-    ${(idvChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${bugBadge}${doneBadges}</div>`:''}
+    ${(idvChip||silentChip||bugBadge||doneBadges)?`<div class="flex items-center gap-1 mb-1 whitespace-nowrap overflow-hidden">${idvChip}${silentChip}${bugBadge}${doneBadges}</div>`:''}
     ${pendBar(pc)}
     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
       <div><span class="pv-k">진행도</span> <span class="pv-v">${pc.hunt_progress!=null ? Math.round(pc.hunt_progress)+' %' : '–'}</span></div>
@@ -12253,6 +12323,7 @@ async def macro_websocket(websocket: WebSocket, pc_id: str):
                         _lag_note("recv_all", nspc, payload.get("last_active"))
                         _lag_tr = _LAG_ST.get(nspc) != payload.get("status")      # ★전이 보고만 지연으로 센다(하트비트의 옛 last_active 는 지연이 아니다)★
                         _LAG_ST[nspc] = payload.get("status")
+                        _trail_note(nspc, payload, "ws")                          # ★#457★ 서버가 받은 status 전이 흔적
                         if _lag_tr:
                             _lag_note("recv", nspc, payload.get("last_active"))
                         _ts = time.monotonic()
@@ -12429,6 +12500,7 @@ async def receive_report(pc_id: str, request: Request):
     #   내부망 캐시 저장본이 잘려 깨졌다. 모양이 틀리면 비운다(캐시의 마지막 정상값이 대신 뜬다).
     if "lan_url" in data and data.get("lan_url") and not _lan_url_ok(data.get("lan_url")):
         data["lan_url"] = ""
+    _trail_note(nspc, data, "http")            # ★#457★ WS 입구와 같은 흔적(HTTP 폴백으로 온 전이도 남긴다)
     await upsert_status(nspc, data)            # NaN/Infinity 는 저장 자리에서 None (2026-09-23)
     await _abyss_note(nspc, data)              # ★어비스 수익 오늘 합계 — WS 입구와 같은 함수(2026-09-23 장부 #104)★
     # 중요 이벤트는 로그 테이블에 저장
