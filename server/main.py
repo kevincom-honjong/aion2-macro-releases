@@ -6450,8 +6450,10 @@ function rotChip(pc, silM) {
   // ★#458 순환 칩은 «매크로가 지금 보고하고 있다»일 때만 살아 있게 그린다★ (주인님 2026-10-16 «정지됐는데 활성화되잇는거야»)
   //   무장(_rot)은 PC 가 꺼져도 서버에 남는다(사고 611) — 그걸 그대로 «🔁 순환»(보라/펄스)으로 그리면 죽은 PC 가 도는 것처럼 보인다.
   //   offline·계정없음·다른계정이거나 정지 슬롯에 매크로가 없거나 무보고 N분이면 회색 «보고 없음» 으로 내리고 깜빡임을 끈다.
-  const _gone = ['offline','no_account','other_account'].includes(pc.status||'') || (pc.banned && !pc.macro_live);
-  const _quiet = _gone || !!silM;
+  //   other_account 는 «이 PC 의 매크로가 다른 계정 슬롯에 있다» 는 뜻이라 보고가 없는 게 아니다 — 말을 «다른 계정» 으로 따로 한다.
+  const _other = (pc.status||'') === 'other_account';
+  const _gone = ['offline','no_account'].includes(pc.status||'') || (pc.banned && !pc.macro_live);
+  const _quiet = _gone || _other || !!silM;
   const r = _quiet ? {t:'🔁 순환', c:'bg-gray-800 text-gray-500 border-gray-700', p:false} : r0;
   const tgt = pc._rot_target ? ` → 계정${pc._rot_target}` : '';
   const tk  = pc._rot_task ? ` ${pc._rot_task}` : '';
@@ -6461,11 +6463,10 @@ function rotChip(pc, silM) {
       : (pc._rot === 'collecting' ? '계정 자동순환: 완주를 감지해 캐릭터 정보를 수집하는 중입니다'
       : (pc._rot === 'starting'   ? '계정 자동순환: 전환이 끝나 사냥을 시작하는 중입니다'
       : '계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다')));
-  const _why = _quiet
-      ? (_gone ? ' · 보고 없음' : ` · ${silM}분째 무보고`) : '';
-  const _title = _quiet
-      ? `순환 무장은 서버에 남아 있지만 매크로 보고가 없어 지금 움직이지 않습니다(${_gone ? '꺼짐/끊김' : silM + '분째 무보고'}) — 돌아오면 이어서 합니다`
-      : title;
+  const _why = !_quiet ? '' : (_gone ? ' · 보고 없음' : (_other ? ' · 다른 계정' : ` · ${silM}분째 무보고`));
+  const _title = !_quiet ? title : (_other
+      ? '순환 무장은 이 PC 의 지금 계정 카드에서 움직입니다 — 이 카드는 매크로가 있는 계정이 아닙니다'
+      : `순환 무장은 서버에 남아 있지만 매크로 보고가 없어 지금 움직이지 않습니다(${_gone ? '꺼짐/끊김' : silM + '분째 무보고'}) — 돌아오면 이어서 합니다`);
   return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${r.c}${r.p?' pulse':''}"
                 title="${_title}">${r.t}${esc(tk)}${esc(tgt)}${_why}</span>`;
 }

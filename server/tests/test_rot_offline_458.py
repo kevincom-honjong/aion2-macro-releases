@@ -153,20 +153,20 @@ const cases = [
 ];
 console.log(JSON.stringify(cases.map(([pc, s]) => { const h = rotChip(pc, s);
   return {empty: h === '', gray: h.includes('bg-gray-800'), purple: h.includes('purple'), pulse: h.includes(' pulse'),
-          off: h.includes('보고 없음'), sil: h.includes('분째 무보고')}; })));
+          off: h.includes('보고 없음'), sil: h.includes('분째 무보고'), oth: h.includes('다른 계정')}; })));
 """)
     got, err = _node(js)
     want = [
-        dict(empty=False, gray=False, purple=True, pulse=False, off=False, sil=False),   # 평상시 hunting
-        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False),    # offline
-        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False),    # no_account
-        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False),    # other_account
-        dict(empty=False, gray=True, purple=False, pulse=False, off=False, sil=True),    # 무보고 3분
-        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False),    # offline switching — 깜빡임 끔
-        dict(empty=False, gray=False, purple=False, pulse=True, off=False, sil=False),   # 살아 있는 switching — 옛 그대로 깜빡임
-        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False),    # 정지 슬롯에 매크로 없음
-        dict(empty=False, gray=False, purple=True, pulse=False, off=False, sil=False),   # 정지 슬롯에서 매크로 살아 있음 — 평상시
-        dict(empty=True, gray=False, purple=False, pulse=False, off=False, sil=False),   # _rot 없음
+        dict(empty=False, gray=False, purple=True, pulse=False, off=False, sil=False, oth=False),   # 평상시 hunting
+        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False, oth=False),    # offline
+        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False, oth=False),    # no_account
+        dict(empty=False, gray=True, purple=False, pulse=False, off=False, sil=False, oth=True),    # other_account
+        dict(empty=False, gray=True, purple=False, pulse=False, off=False, sil=True, oth=False),    # 무보고 3분
+        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False, oth=False),    # offline switching — 깜빡임 끔
+        dict(empty=False, gray=False, purple=False, pulse=True, off=False, sil=False, oth=False),   # 살아 있는 switching — 옛 그대로 깜빡임
+        dict(empty=False, gray=True, purple=False, pulse=False, off=True, sil=False, oth=False),    # 정지 슬롯에 매크로 없음
+        dict(empty=False, gray=False, purple=True, pulse=False, off=False, sil=False, oth=False),   # 정지 슬롯에서 매크로 살아 있음 — 평상시
+        dict(empty=True, gray=False, purple=False, pulse=False, off=False, sil=False, oth=False),   # _rot 없음
     ]
     ok("RO-9 ★칩 10가지 입력 전부 기대대로(평상시 보라 · 꺼짐/무보고 회색+깜빡임 끔 · 살아 있는 전환은 옛 그대로)★", got == want, "got=%s err=%s" % (got, err))
     stat = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.js"), encoding="utf-8").read()
