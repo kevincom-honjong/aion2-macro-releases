@@ -75,10 +75,10 @@
 !plan.length
 !plat
 !ppw
-!r
 !r.collected_at
 !r.held
 !r.ok
+!r0
 !raw
 !res.ok
 !rows.length
@@ -2255,6 +2255,7 @@ r.total_kina
 r.tour
 r.trade_kina
 r.value
+r0
 r[key]
 radial-gradient
 range

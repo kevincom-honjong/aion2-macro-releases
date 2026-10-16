@@ -6444,9 +6444,15 @@ const ROT_CHIP = {
   // ★작업 순환 (2026-08-23)★ — 무슨 작업인지는 pc._rot_task 로 뒤에 붙는다
   tasking   : {t:'🔁 순환',        c:'bg-sky-800/85 text-sky-100 border-sky-400',       p:true},
 };
-function rotChip(pc) {
-  const r = ROT_CHIP[pc._rot];
-  if (!r) return '';
+function rotChip(pc, silM) {
+  const r0 = ROT_CHIP[pc._rot];
+  if (!r0) return '';
+  // ★#458 순환 칩은 «매크로가 지금 보고하고 있다»일 때만 살아 있게 그린다★ (주인님 2026-10-16 «정지됐는데 활성화되잇는거야»)
+  //   무장(_rot)은 PC 가 꺼져도 서버에 남는다(사고 611) — 그걸 그대로 «🔁 순환»(보라/펄스)으로 그리면 죽은 PC 가 도는 것처럼 보인다.
+  //   offline·계정없음·다른계정이거나 정지 슬롯에 매크로가 없거나 무보고 N분이면 회색 «보고 없음» 으로 내리고 깜빡임을 끈다.
+  const _gone = ['offline','no_account','other_account'].includes(pc.status||'') || (pc.banned && !pc.macro_live);
+  const _quiet = _gone || !!silM;
+  const r = _quiet ? {t:'🔁 순환', c:'bg-gray-800 text-gray-500 border-gray-700', p:false} : r0;
   const tgt = pc._rot_target ? ` → 계정${pc._rot_target}` : '';
   const tk  = pc._rot_task ? ` ${pc._rot_task}` : '';
   const title = pc._rot === 'switching'
@@ -6455,8 +6461,13 @@ function rotChip(pc) {
       : (pc._rot === 'collecting' ? '계정 자동순환: 완주를 감지해 캐릭터 정보를 수집하는 중입니다'
       : (pc._rot === 'starting'   ? '계정 자동순환: 전환이 끝나 사냥을 시작하는 중입니다'
       : '계정 자동순환 무장됨 — 완주하면 정보수집 후 다음 계정으로 넘어갑니다')));
+  const _why = _quiet
+      ? (_gone ? ' · 보고 없음' : ` · ${silM}분째 무보고`) : '';
+  const _title = _quiet
+      ? `순환 무장은 서버에 남아 있지만 매크로 보고가 없어 지금 움직이지 않습니다(${_gone ? '꺼짐/끊김' : silM + '분째 무보고'}) — 돌아오면 이어서 합니다`
+      : title;
   return `<span class="ml-1.5 shrink-0 px-1.5 py-0.5 rounded border text-xs font-bold leading-none ${r.c}${r.p?' pulse':''}"
-                title="${title}">${r.t}${esc(tk)}${esc(tgt)}</span>`;
+                title="${_title}">${r.t}${esc(tk)}${esc(tgt)}${_why}</span>`;
 }
 // ★★사고 391 — ★순회를 걸었는데 메인 카드에 안 보인다★★ (주인님 2026-09-01)
 //   원문: 「아직도 대시보드에 순회라고안뜨는데?」
@@ -6648,7 +6659,7 @@ function buildCard(pc) {
       <div class="flex items-center gap-1 min-w-0">
         <span class="inline-flex items-center gap-1.5 text-base font-bold ${cfg.text} min-w-0">
           <span class="w-3 h-3 rounded-full ${cfg.badge}${pulse} shrink-0"></span>
-          <span class="truncate">${_silM?'<span class="text-amber-400 text-xs font-medium">마지막</span> ':''}${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc)}${pendChip(pc)}
+          <span class="truncate">${_silM?'<span class="text-amber-400 text-xs font-medium">마지막</span> ':''}${cfg.label}</span>${switchStepChip(pc)}${tourChip(pc)}${rotChip(pc, _silM)}${pendChip(pc)}
         </span>
       </div>
     </div>
@@ -16491,6 +16502,15 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
         await _rot_stop(tenant, base,
                         f"⛔ 순환 정지 — 지금 계정{_rot_acct_no(active.get('pc_id'))} 은 {BANNED_LABEL}(#276)입니다. "
                         f"다른 계정으로 전환한 뒤 ▶시작을 다시 눌러주세요")
+        return
+    # ★#458 (2026-10-16 주인님 «11번 정지 out … 정지됐는데 왜 대시보드에 활성화되잇는거야»)★ 위 가드는 `active`(살아 있는 카드)가
+    #   있어야 켜진다 — 그런데 PC 가 꺼져/끊겨 매크로가 보고를 안 하면 active 가 없어 아래 사냥 단계의 `if not active: return`
+    #   (사고 611: 시계로 풀지 않는다)에 걸려 PC-11 이 정지(OUT) 등록 뒤에도 stage=hunting 으로 41000초 남았고 카드엔 «🔁 순환» 이 떴다.
+    #   이 PC 의 ★모든 카드가 정지 슬롯★ 이면 순환할 곳이 없다 — 시계가 아니라 사실(정지 등록)로 조용히 푼다. 푸는 길 = ▶시작.
+    if stage in ("hunting", "tasking") and not active and cards and all(c.get("banned") for c in cards):
+        await _rot_stop(tenant, base,
+                        f"순환 해제 — {base} 의 계정이 전부 {BANNED_LABEL}(#276)이라 순환할 곳이 없습니다(#458). "
+                        f"정지를 풀고 ▶시작을 누르면 다시 걸립니다", st, routine=True)
         return
 
     # ── ⑤ 작업 순환: 이 계정에서 작업이 끝나기를 기다린다 (2026-08-23) ──────

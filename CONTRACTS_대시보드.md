@@ -136,6 +136,13 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - `GET /diag/status_trail[?pc=PC-01&n=20]` (main session, read-only): server-received status transitions per PC — `at` (UTC, server receive) · `from` · `to` · `via` ws|http · macro `last_active` · slot · map · progress; last 40 per PC, heartbeats not recorded. For «what did the macro actually send and when».
 - Tests: `tests/test_silent_457.py` SL-1..SL-19 (20 checks) · `tests/test_push.py` P-3/P-4 unchanged.
 
+### 12-e. Armed rotation on an offline / banned PC (#458, 2026-10-16 owner «11번 정지 out … 정지됐는데 왜 대시보드에 활성화되잇는거야»)
+- Dashboard/server only — no macro change, no new `/status` key, no FV API change. Cause: `_rot_step_pc` hunting branch `if not active: return` (사고 611: no clock release) keeps `_ROT[PC].stage=hunting` forever once the macro is gone, and the #276 banned guard needed a live `active` card, so PC-11 stayed armed (41048 s) and drew a purple «🔁 순환» after it was registered 정지(OUT).
+- Engine (`_rot_step_pc`, right after the #276 guard): stage hunting|tasking + no active card + EVERY card of the physical PC `banned` → quiet `_rot_stop(routine=True)` (fact-based, not clock-based; multi-account PCs with any non-banned card stay armed; switching untouched). Re-arm = ▶시작 after un-banning.
+- Card (`rotChip(pc, silM)`): status offline|no_account|other_account, or banned slot without `macro_live`, or silent minutes `_silM` > 0 → grey «🔁 순환 · 보고 없음» / «· N분째 무보고», no pulse (live armed PCs unchanged, incl. pulsing switching).
+- Live data change for this order (not code): `POST /admin/banned_accts {accts:[PC-11]}` + `POST /rotate/PC-11 {on:false}` — server settings only, no macro command.
+- Tests: `tests/test_rot_offline_458.py` RO-0..RO-11 (12 checks).
+
 ## 13. `/api/fv/kina_adjust` — 고른 카드가 진실 (2026-09-27 아이온2, 더하기만)
 거래 #07963787(1억9천)의 매니아 글 계정은 PC-21c 였지만 ★주인님이 팜뷰에서 PC-02b 를 골랐다★(드롭다운 기본값은 PC-10b 였고,
 고르기 직전 PC-02 를 세 번 봤다) → 키나는 실제로 PC-02b 에서 나갔다. ★팜뷰가 보낸 `pc_id` = 넘긴 계정의 진실, 글 계정은 계획★.
