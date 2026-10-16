@@ -86,6 +86,7 @@
 !s.online
 !same
 !seen
+!seen[b].has
 !seen[k]
 !sel
 !slots.length
@@ -261,6 +262,7 @@ acked/expired/cancelled
 acked:[
 act
 active:cursor-grabbing
+add
 adopt
 after
 age
@@ -419,10 +421,13 @@ background:var
 bad
 badge
 balance
+ban-off
+ban-on
 banned
 banned.add
 banned.has
 banned:true
+banned_accts
 banned_slots
 bar
 base
@@ -432,6 +437,9 @@ bases
 bases.filter
 bases.length
 bases.map
+bc
+bc.off
+bc.on
 bcd
 bd
 before
@@ -543,6 +551,7 @@ bleed
 blob
 block
 blockquote
+bo
 body
 body.bg-gray-950
 body::after
@@ -694,6 +703,7 @@ button.bg-gray-800:hover
 button:active
 button:hover
 button[onclick
+bx
 by
 by]
 c._rot
@@ -884,11 +894,13 @@ color:#2a1c02!important
 color:#34d399
 color:#4ade80
 color:#5eead4
+color:#60a5fa
 color:#6b7280
 color:#6ee7b7
 color:#7c8aa0
 color:#818cf8
 color:#86efac
+color:#93c5fd
 color:#94a3b8
 color:#9ca3af
 color:#a5b4c8
@@ -907,8 +919,10 @@ color:#e9d5ff
 color:#f59e0b
 color:#f87171
 color:#f8fafc
+color:#fb923c
 color:#fca5a5
 color:#fda4af
+color:#fdba74
 color:#fde047
 color:#fecaca
 color:#ffb3ba!important
@@ -1032,6 +1046,10 @@ divide-y
 dk-eyebrow
 dk-eyebrow::after
 dk-eyebrow::before
+dk-h-ban-off
+dk-h-ban-off-row
+dk-h-ban-on
+dk-h-ban-on-row
 dk-h-eff
 dk-h-kina
 dk-h-sub-off
@@ -1224,6 +1242,7 @@ font-size:14px!important
 font-size:15px
 font-size:16px
 font-size:17px
+font-size:20px
 font-size:24px
 font-size:25px
 font-size:25px!important
@@ -1717,6 +1736,7 @@ margin-top:.3rem
 margin-top:11px
 margin-top:13px
 margin-top:3px
+margin-top:4px
 margin-top:5px
 margin-top:9px
 margin:0
@@ -2028,6 +2048,7 @@ padding-right:14px
 padding-right:22px
 padding-top
 padding-top:.5rem!important
+padding-top:9px
 padding:0
 padding:1.5px
 padding:12px
@@ -2256,6 +2277,10 @@ r.tour
 r.trade_kina
 r.value
 r0
+r1
+r1.title
+r2
+r2.title
 r[key]
 radial-gradient
 range
@@ -2389,6 +2414,7 @@ search
 section
 section.bg-gray-900
 seen
+seen[b]
 seen[k]
 sel
 sel-badge

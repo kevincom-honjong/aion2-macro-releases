@@ -763,6 +763,25 @@ const DK_SUM = {kina: 0, trade: null};
 //   ★계정(카드) 단위★ 라 pc_id 로 묶고 그 계정 캐릭 중 ★분모 최댓값★ 으로 판정한다
 //   (aiBuildPlan 과 같은 규칙·같은 파서 — 두 화면이 다른 답을 내면 안 된다).
 //   ★오드에너지를 아직 못 읽은 계정은 어느 쪽도 아니다★ — X 로 세지 않고 따로 알린다.
+// ★정지 O / X 세기 (#459, 2026-10-17 주인님 «여기에 분류중에 정지 X 정지 O 이분류 두개도 추가해줘»)★
+//   ★칸(= 계정 카드) 단위★ — 구독 O/X 와 같은 모집단(가짜 PC·은퇴·계정없음 제외)에서, 정지(banned) 표식이 있는 칸이 O ·
+//   그 밖의 계정 칸이 X. 아직 카드가 없는 정지 슬롯(보고한 적 없는 계정)은 outSlotsOf(#456 한 곳)로 O 에 더한다.
+//   정지 O + 정지 X = 센 계정 칸 전부(계정 없음 칸은 계정이 아니라 어느 쪽에도 안 센다).
+function dkBanCount(){
+  let on = 0, off = 0;
+  const seen = {};                                   // base → 카드가 있는 계정 번호 집합
+  Object.keys(state || {}).forEach(id => {
+    const p = state[id] || {};
+    if (!id || RETIRED.has(id) || isFakePc(id)) return;
+    const b = baseId(id);
+    (seen[b] = seen[b] || new Set()).add(acctNumOf(id));
+    if (p.banned) on++;
+    else if (p.status !== 'no_account') off++;
+  });
+  Object.keys(seen).forEach(b => outSlotsOf(b).forEach(n => { if (!seen[b].has(n)) on++; }));
+  return {on, off};
+}
+
 function dkSubCount(){
   // ★카드 뱃지(subBadge)와 ★같은 함수★ 로 센다 (2026-08-29)★ — 예전엔 여기서 따로
   //   `>= 840` 으로 세는 바람에 전광판 숫자와 카드 뱃지가 어긋날 수 있었다.
@@ -842,6 +861,17 @@ async function loadServerSummary(){
 function dkHero(){
   const $ = id => document.getElementById(id);
   dkQuote();
+  // ★정지 O / X (#459)★ — 아래 «제외 PC 가 없으면 return» 보다 먼저: 전부 정지여도 정지 O 숫자는 떠야 한다
+  try {
+    const bc = dkBanCount();
+    const bo = $('dk-h-ban-on'), bx = $('dk-h-ban-off');
+    if (bo) bo.textContent = bc.on;
+    if (bx) bx.textContent = bc.off;
+    const _t = `정지 O ${bc.on}칸 · 정지 X ${bc.off}칸 (계정 카드 단위)\n정지 O = 정지(OUT) 로 등록된 계정 칸 · 정지 X = 그 밖의 계정 칸 (계정 없음·은퇴·가짜 PC 제외)`;
+    const r1 = $('dk-h-ban-on-row'), r2 = $('dk-h-ban-off-row');
+    if (r1) r1.title = _t;
+    if (r2) r2.title = _t;
+  } catch (e) {}
   // ★제외 PC(가짜·은퇴·계정없음)는 평균·스파크라인에서 뺀다(2026-09-23 반증 2바퀴)★ —
   //   카드엔 안 보이는 PC-DEMO 90 이 PC-01 10 과 평균돼 50.0 으로 보였다.
   const pcs = Object.entries(state||{}).filter(([id])=>!isExcludedPc(id)).map(([,p])=>p);

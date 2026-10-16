@@ -143,6 +143,12 @@ FarmView shows «계정 없음» for a banned slot because `_fv_pc_view` (main.p
 - Live data change for this order (not code): `POST /admin/banned_accts {accts:[PC-11]}` + `POST /rotate/PC-11 {on:false}` — server settings only, no macro command.
 - Tests: `tests/test_rot_offline_458.py` RO-0..RO-11 (12 checks).
 
+### 12-f. Hero «정지 O / 정지 X» next to «구독 O / 구독 X» (#459, 2026-10-17 owner «여기에 분류중에 정지 X 정지 O 이분류 두개도 추가해줘»)
+- Dashboard page only — no server/macro/FV change (`/summary`, `/api/fv/snapshot` untouched; `tests/test_ban_counts_459.py` BC-13). The only O/X «분류» on the dashboard is the hero box `dk-hero-sub` (구독 O : / 구독 X :) — two more rows `dk-h-ban-on` / `dk-h-ban-off` under it, same shape, one size smaller (4 rows).
+- Unit = account card (칸), one function `dkBanCount()` over `state` (same population as the 구독 count: fake PCs, retired and 계정없음 cards excluded): **정지 O** = cards with `banned` + banned slots that have no card yet (`outSlotsOf`, #456) · **정지 X** = every other account card. Filled in `dkHero` before its «no non-excluded PC → return» so an all-banned fleet still shows 정지 O.
+- Not done (not asked in those words): clicking the rows does not filter the card grid.
+- Tests: `tests/test_ban_counts_459.py` BC-1..BC-13 (13 checks, incl. real `/status` rows).
+
 ## 13. `/api/fv/kina_adjust` — 고른 카드가 진실 (2026-09-27 아이온2, 더하기만)
 거래 #07963787(1억9천)의 매니아 글 계정은 PC-21c 였지만 ★주인님이 팜뷰에서 PC-02b 를 골랐다★(드롭다운 기본값은 PC-10b 였고,
 고르기 직전 PC-02 를 세 번 봤다) → 키나는 실제로 PC-02b 에서 나갔다. ★팜뷰가 보낸 `pc_id` = 넘긴 계정의 진실, 글 계정은 계획★.

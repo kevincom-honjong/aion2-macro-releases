@@ -571,6 +571,11 @@
     font-size:34px;font-weight:800;line-height:1;margin-left:auto}
   .dk-hero-sub .on  .l{color:#6ee7b7}  .dk-hero-sub .on  .n{color:#34d399}
   .dk-hero-sub .off .l{color:#fca5a5}  .dk-hero-sub .off .n{color:#f87171}
+  /* ★정지 O/X (#459)★ 구독 O/X 아래 한 묶음 — 가는 선으로 갈라 두 분류가 섞여 읽히지 않게. 글자는 구독보다 한 단 작게(박스가 4줄이 되므로) */
+  .dk-hero-sub .ban-on{margin-top:4px;padding-top:9px;border-top:1px solid rgba(255,255,255,.10)}
+  .dk-hero-sub .ban-on .l,.dk-hero-sub .ban-off .l,.dk-hero-sub .ban-on .n,.dk-hero-sub .ban-off .n{font-size:26px}
+  .dk-hero-sub .ban-on  .l{color:#fdba74}  .dk-hero-sub .ban-on  .n{color:#fb923c}
+  .dk-hero-sub .ban-off .l{color:#93c5fd}  .dk-hero-sub .ban-off .n{color:#60a5fa}
   .dk-hero-side{position:relative;z-index:1;margin-left:auto;display:flex;gap:24px;align-items:flex-end}
   .dk-sm{text-align:right}
   .dk-sm .k{font-size:9px;letter-spacing:.15em;color:var(--dk-t3);font-weight:700}
@@ -581,7 +586,8 @@
   @media(max-width:760px){.dk-hero{gap:16px}.dk-hero-side{margin-left:0;gap:16px}
     .dk-hero-n{font-size:44px}
     .dk-hero-sub{padding-right:14px;gap:4px}
-    .dk-hero-sub .n,.dk-hero-sub .l{font-size:26px}}
+    .dk-hero-sub .n,.dk-hero-sub .l{font-size:26px}
+    .dk-hero-sub .ban-on .l,.dk-hero-sub .ban-off .l,.dk-hero-sub .ban-on .n,.dk-hero-sub .ban-off .n{font-size:20px}}
 
 /* ══════════════════════════════════════════════════════════════════════════
    ★덱 테마 2단계 — 캐릭터 스프레드 (2026-08-16)★
