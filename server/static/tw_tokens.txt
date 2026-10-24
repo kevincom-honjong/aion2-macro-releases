@@ -2133,6 +2133,7 @@ pcs
 pcs.filter
 pcs.length
 pcs.size
+pcs:[id]
 peer
 peer_id
 pending
@@ -2927,6 +2928,7 @@ v.replace
 v.slice
 v.stale
 v.total
+v.trim
 v1.1.412
 v1.1.413
 v1.1.424

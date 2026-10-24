@@ -292,6 +292,32 @@ def _ban_check_cmd(tenant: str, pc_id: str, command: str, args: dict) -> tuple:
     return args, ""
 
 
+# ─── 순환 영구 제외 (#460, 2026-10-24 주인님 «다해» — PC-05·PC-09 가 자꾸 다시 무장됨) ───
+#   설정 `rot_excluded` = 콤마 목록(ns 키 = 물리 PC, 접미사 없음). _rot_arm 한 곳이 거절하므로 ▶시작(rotate:true)·PageUp 핫키·POST /rotate
+#   세 길이 전부 막힌다. 엔진은 이미 무장된 것도 조용히 푼다. 푸는 손잡이 = DELETE /admin/rot_excluded/{pc} (세션=주인님).
+ROT_EXCLUDED: set = set()
+ROT_EXCLUDED_SEED = ("PC-05", "PC-09")
+_ROT_EXCL_LOADED = [False]
+
+
+def _rot_excluded(tenant: str, pc_id: str) -> bool:
+    return ns(tenant, _base_pc(clean_pc_id(pc_id or ""))) in ROT_EXCLUDED
+
+
+async def _rot_excl_restore() -> bool:
+    try:
+        raw = await get_setting("rot_excluded")
+        if raw is None:                                   # 한 번도 안 쓰였을 때만 씨앗(그 뒤엔 설정이 정본)
+            ROT_EXCLUDED.update(ns("main", c) for c in ROT_EXCLUDED_SEED)
+            await set_setting("rot_excluded", ",".join(sorted(ROT_EXCLUDED)))
+        else:
+            ROT_EXCLUDED.update(x.strip() for x in str(raw).split(",") if x.strip())
+        _ROT_EXCL_LOADED[0] = True
+    except Exception as e:
+        print(f"[순환제외] 로드 실패(무시): {e}")
+    return _ROT_EXCL_LOADED[0]
+
+
 async def _banned_restore() -> bool:
     """부팅 복원(#276). 설정이 ★한 번도 안 쓰였으면(None)★ 주인님 #276 대상으로 한 번 심고 저장한다 —
     그 뒤로는 설정이 정본(해제해서 빈 값 "" 이 되면 다시 심지 않는다)."""
@@ -1623,6 +1649,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[계정없음] no_account_pcs 로드 실패(무시): {e}")
     await _banned_restore()            # 정지 계정(#276)
+    await _rot_excl_restore()          # 순환 영구 제외(#460)
     await _corridor_restore()          # 회랑 진행 스냅샷 복원(2026-08-07)
     await _lan_cache_restore()         # 내부망 주소 캐시 복원(2026-09-12)
     await _abyss_restore()             # 어비스 수익 오늘 합계 복원(2026-09-23 장부 #104)
@@ -3091,7 +3118,7 @@ MACRO_READABLE_SETTINGS = {"awakening_preset", "sale_price"}
 #   저장본만 잘려 ★다음 재시작에 은퇴 PC 가 되살아났다★(콤마 목록 중간 절단). 순환 상태·텔레그램 오프셋도 같다.
 #   rot_allow(카나리아 게이트)·parsec_map 은 /rotate/allow·파섹 지도 엔드포인트가 검증하고 쓴다 — /setting 은 그 검증을 건너뛴다.
 #   읽기(GET, 세션)는 그대로 둔다. 새 서버 관리 키를 만들면 여기 더한다(시험 test_setting_reserved 가 set_setting 호출처와 대조).
-SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "banned_accts", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
+SERVER_MANAGED_SETTINGS = {"retired_pcs", "no_account_pcs", "banned_accts", "rot_excluded", "abyss_acc_all", "corridor_prog_all", "lan_cache_last",
                            "acct_rotate", "acct_rotate.broken", "tg_poller_lease", "tg_offset",
                          "rot_allow", "parsec_map", "bug_pins", "scout_alerted", "idverify_hold"}   # bug_pins = #271 버그스샷 핀(POST /bugs/pin 만 쓴다)
 _SERVER_MANAGED_NS = {ns("main", k) for k in SERVER_MANAGED_SETTINGS}   # 소독 뒤 모양(/setting 이 실제로 쓰는 키)
@@ -4530,6 +4557,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
        계정을 한 바퀴 다 돌면 자동 종료(텔레그램 ✅). ★물리 PC당 1건★ 으로 접어 보낸다. -->
   <div class="cmd-group cmd-rot">
     <span class="cmd-legend">🔁 전 계정 순환 (PC의 계정 전부)</span>
+    <button onclick="rotExclToggle()" class="chip chip-gray" title="순환 영구 제외 목록(#460) 보기 · PC 번호를 넣어 풀기/추가">🔒 순환 제외</button>
     <button onclick="rotCmd('daily_dungeon')" class="chip chip-purple" title="선택 PC의 ★모든 계정★ 을 돌며 일일던전. 한 계정이 끝나면 자동으로 다음 계정으로 전환합니다">일일던전</button>
     <button onclick="rotCmd('nightmare')" class="chip chip-pink" title="선택 PC의 ★모든 계정★ 을 돌며 악몽">악몽</button>
     <button onclick="rotCmd('awakening')" class="chip chip-orange" title="선택 PC의 ★모든 계정★ 을 돌며 각성전">각성</button>
@@ -6484,6 +6512,18 @@ const ROT_CHIP = {
   // ★작업 순환 (2026-08-23)★ — 무슨 작업인지는 pc._rot_task 로 뒤에 붙는다
   tasking   : {t:'🔁 순환',        c:'bg-sky-800/85 text-sky-100 border-sky-400',       p:true},
 };
+// ★#460 순환 영구 제외 — 목록 보기 · 풀기 · 추가(주인님 세션)★ 해제해도 자동 무장은 안 된다(▶시작을 다시 눌러야 한다)
+async function rotExclToggle(){
+  const cur = await (await fetch('/admin/rot_excluded')).json();
+  const v = prompt('순환 영구 제외 PC: ' + ((cur.excluded||[]).join(', ') || '없음') + '\n\n풀 PC 는 «-PC-05», 더할 PC 는 «PC-05» 로 입력', '');
+  if (!v) return;
+  const id = v.trim();
+  const r = id.startsWith('-')
+    ? await fetch('/admin/rot_excluded/' + encodeURIComponent(id.slice(1)), {method:'DELETE'})
+    : await fetch('/admin/rot_excluded', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pcs:[id]})});
+  const j = await r.json().catch(()=>({}));
+  showToast(r.ok ? '✓ 순환 제외: ' + ((j.excluded||[]).join(', ') || '없음') : '✗ ' + (j.detail || r.status));
+}
 function rotChip(pc, silM) {
   const r0 = ROT_CHIP[pc._rot];
   if (!r0) return '';
@@ -12114,6 +12154,43 @@ async def fleet_stutter(request: Request, pc: str = ""):
     return JSONResponse(_fleet_stutter_core(tenant, pc), headers={"Cache-Control": "no-store"})
 
 
+@app.get("/admin/rot_excluded")
+async def admin_rot_excl_list(request: Request):
+    """#460 순환 영구 제외 목록(물리 PC)."""
+    tenant = _require_session(request)
+    return JSONResponse({"excluded": sorted(r for k in ROT_EXCLUDED for t, r in [split_ns(k)] if t == tenant)})
+
+
+@app.post("/admin/rot_excluded")
+async def admin_rot_excl_add(request: Request):
+    """#460 body {"pcs": ["PC-05", ...]} — 제외에 더한다(이미 무장된 건 엔진이 다음 틱에 푼다)."""
+    tenant = _require_session(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw = body.get("pcs") if isinstance(body, dict) else None
+    ids = [_base_pc(clean_pc_id(x)) for x in raw] if isinstance(raw, list) and raw and len(raw) <= 50 else []
+    if not ids or any(not re.fullmatch(r"PC-\d{2,}", i) for i in ids):
+        raise HTTPException(status_code=400, detail='{"pcs": ["PC-05", ...]} 가 필요합니다')
+    if not _ROT_EXCL_LOADED[0] and not await _rot_excl_restore():
+        raise HTTPException(status_code=503, detail="제외 목록을 못 읽었습니다 — 덮어쓰면 저장본이 지워집니다")
+    ROT_EXCLUDED.update(ns(tenant, i) for i in ids)
+    await set_setting("rot_excluded", ",".join(sorted(ROT_EXCLUDED)))
+    return JSONResponse({"ok": True, "excluded": sorted(r for k in ROT_EXCLUDED for t, r in [split_ns(k)] if t == tenant)})
+
+
+@app.delete("/admin/rot_excluded/{pc_id}")
+async def admin_rot_excl_del(pc_id: str, request: Request):
+    """#460 제외 해제(푸는 손잡이, 세션=주인님). 해제해도 자동 무장은 안 된다 — 다시 ▶시작."""
+    tenant = _require_session(request)
+    if not _ROT_EXCL_LOADED[0] and not await _rot_excl_restore():
+        raise HTTPException(status_code=503, detail="제외 목록을 못 읽었습니다")
+    ROT_EXCLUDED.discard(ns(tenant, _base_pc(clean_pc_id(pc_id))))
+    await set_setting("rot_excluded", ",".join(sorted(ROT_EXCLUDED)))
+    return JSONResponse({"ok": True, "excluded": sorted(r for k in ROT_EXCLUDED for t, r in [split_ns(k)] if t == tenant)})
+
+
 @app.get("/admin/banned_accts")
 async def admin_banned_list(request: Request):
     """#276 정지 계정 슬롯 목록(카드 id — 계정1 은 접미사 없음)."""
@@ -15964,6 +16041,8 @@ async def _rot_arm(tenant: str, pc_id: str, task: str = "",
     #   카드가 없어 아무것도 안 하지만 해제 사유도 없이 영원히 남는다(TTL 은 사고 522 로 없앴다).
     if str(base).strip() in _BROADCAST_IDS:
         return False, f"'{base}' 는 브로드캐스트 id — 순환은 한 대씩만 무장한다"
+    if _rot_excluded(tenant, base):                       # ★#460★ 세 무장 길(▶시작·PageUp·/rotate)이 전부 여기를 지난다
+        return False, f"{base} 는 순환 영구 제외(주인님 2026-10-24) — 풀려면 DELETE /admin/rot_excluded/{base} (대시보드 «순환 제외 해제»)"
     allow = await _rot_allow(tenant)
     if not allow:
         return False, "허용 목록이 비어 있음 (POST /rotate/allow 로 대상 PC 지정 필요)"
@@ -16496,6 +16575,9 @@ async def _rot_step_pc(tenant: str, base: str, st: dict, pcs: list) -> None:
     # ★[M1] 여기 있던 TTL 자동 해제는 없앴다 (2026-09-09 주인님 지시)★ — 상수 자리 묘비 참고.
     #   ★[M1] 이 잡던 「카드가 사라진 좀비 엔트리」는 그대로 남는다★ — 아래 `if not cards`
     #   에서 아무 명령도 안 쏘고 물러나므로 ★해를 끼치지 않는다.★ 무장만 살아 있을 뿐이다.
+    if _rot_excluded(tenant, base):                  # ★#460★ 이미 무장돼 있던 것도 조용히 푼다(명령 0건)
+        await _rot_stop(tenant, base, f"순환 해제 — {base} 는 순환 영구 제외 목록에 있습니다(#460)", st, routine=True)
+        return
     cards = _rot_cards(pcs, base)
     if not cards:
         return                                       # 카드가 사라진 PC — 아무것도 안 한다

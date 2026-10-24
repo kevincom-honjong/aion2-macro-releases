@@ -1349,6 +1349,18 @@ const ROT_CHIP = {
   // ★작업 순환 (2026-08-23)★ — 무슨 작업인지는 pc._rot_task 로 뒤에 붙는다
   tasking   : {t:'🔁 순환',        c:'bg-sky-800/85 text-sky-100 border-sky-400',       p:true},
 };
+// ★#460 순환 영구 제외 — 목록 보기 · 풀기 · 추가(주인님 세션)★ 해제해도 자동 무장은 안 된다(▶시작을 다시 눌러야 한다)
+async function rotExclToggle(){
+  const cur = await (await fetch('/admin/rot_excluded')).json();
+  const v = prompt('순환 영구 제외 PC: ' + ((cur.excluded||[]).join(', ') || '없음') + '\n\n풀 PC 는 «-PC-05», 더할 PC 는 «PC-05» 로 입력', '');
+  if (!v) return;
+  const id = v.trim();
+  const r = id.startsWith('-')
+    ? await fetch('/admin/rot_excluded/' + encodeURIComponent(id.slice(1)), {method:'DELETE'})
+    : await fetch('/admin/rot_excluded', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pcs:[id]})});
+  const j = await r.json().catch(()=>({}));
+  showToast(r.ok ? '✓ 순환 제외: ' + ((j.excluded||[]).join(', ') || '없음') : '✗ ' + (j.detail || r.status));
+}
 function rotChip(pc, silM) {
   const r0 = ROT_CHIP[pc._rot];
   if (!r0) return '';
