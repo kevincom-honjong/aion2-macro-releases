@@ -362,17 +362,20 @@ awakening_wait:[
 b.disabled
 b.filename
 b.length
+b.n
 b.pc
 b.size/1024
 b.style.background
 b.style.color
 b.style.cursor
 b.style.opacity
+b.t
 b.title
 b/c/d
 b[0]
 b[i]
 b[key]
+b]
 back
 backdrop-filter
 backdrop-filter:blur
@@ -444,6 +447,9 @@ bcd
 bd
 before
 beforeunload
+best
+best.get
+best.set
 bg
 bg-amber-500
 bg-amber-500/20
@@ -1690,6 +1696,7 @@ m.at
 m.clicks
 m.map
 m.old
+m.set
 m.src_h
 m.src_w
 m.step
@@ -2943,6 +2950,7 @@ value
 value:pid
 value:ppw
 value:v
+values
 var
 vb
 ver

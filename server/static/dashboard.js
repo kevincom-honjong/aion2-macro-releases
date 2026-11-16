@@ -971,9 +971,27 @@ function isHuntDone(dp){
   const cut=fmtKstTs(lastDailyReset());   // ★B-JS11★ completed_time 은 KST 문자열
   return dp.every(c=>c.completed && ((c.completed_time||'').replace('T',' ')>=cut));
 }
+// ★2026-11-16 게임 업데이트(주인님)★ 각성전 티켓은 ★계정 공용 9/9★ (예전엔 캐릭터마다 3). 매크로는 계정 값을
+//   daily_ticket 처럼 ★모든 슬롯에 같은 값으로★ 보낸다 → 합산하지 않고 ★카드(PC)당 한 번, 가장 늦게 읽은 값★ 으로 센다(awakenByPc).
+//   옛 행(0~3, 캐릭별)도 에러 없이 읽힌다(분모만 9) — 다음 정보수집 때 새 값으로 바뀐다. 서버 _FV_AWAKEN_MAX 와 같은 값.
+const AWAKEN_MAX = 9;
+function awakenByPc(rows){   // pc_id → 계정 각성 티켓. ★가장 늦게 읽은 캐릭의 값★ (슬롯마다 같은 값이 와도 한 번만 · 같은 시각이면 큰 값). 못 읽었으면 키 없음.
+  const best = new Map();   // pc_id → {t, n}
+  for (const r of rows) {
+    if (r.awakening_ticket == null || r.awakening_ticket === '') continue;
+    const n = parseInt(r.awakening_ticket);
+    if (isNaN(n)) continue;
+    const d = collectedAtDate(r.collected_at), t = d ? d.getTime() : 0;
+    const b = best.get(r.pc_id);
+    if (!b || t > b.t || (t === b.t && n > b.n)) best.set(r.pc_id, {t, n});
+  }
+  const m = new Map();
+  for (const [k, b] of best) m.set(k, b.n);
+  return m;
+}
 function isAwakenDone(pc_id){
-  // 규칙(사용자 확정): 전 캐릭터 각성 티켓 0/3이면 스탬프 — 단순 판정.
-  // (수요일 05시 초기화 후엔 게임이 3/3으로 돌아가고 다음 정보수집 때 DB 갱신돼 자연 소멸)
+  // 규칙(사용자 확정): 각성 티켓 0 이면 스탬프 — 단순 판정(2026-11-16 부터 계정 공용 0/9, 슬롯마다 같은 값).
+  // (수요일 05시 초기화 후엔 게임이 9/9로 돌아가고 다음 정보수집 때 DB 갱신돼 자연 소멸)
   const rows=charTableData.filter(r=>r.pc_id===pc_id);
   return rows.length>0 && rows.every(r=>parseInt(r.awakening_ticket)===0);
 }
@@ -1545,10 +1563,10 @@ function buildCard(pc) {
   // ★[슬롯 캐릭이름] 태그는 2026-08-29 에 뺐다 (주인님: "1캐릭터이름 이것도 없애도될거같아")★
   //   지금 도는 캐릭은 아래 진행 칸의 ▶ 가 이미 노랗게 말한다 — 두 번 말하면서
   //   뱃지 줄을 밀어내 🏹⚔🏰🌀 가 잘렸다. 되살릴 거면 ★뱃지 줄이 아닌 곳★ 에 넣을 것.
-  // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=전 캐릭 각성 0/3 / 🏰보라=일일던전 티켓 소진
+  // 완료 스탬프(이모지만 — 색이 신호): 🏹초록=오늘 사냥 완료 / ⚔인디고=계정 각성 0/9 / 🏰보라=일일던전 티켓 소진
   const doneBadges =
     (isHuntDone(pc.daily_progress)?`<span class="done-badge done-hunt" title="오늘 사냥 완료 — 매일 새벽 5시 초기화">🏹</span>`:'') +
-    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 전 캐릭 0/3 (수요일 새벽 5시 초기화)">⚔</span>`:'') +
+    (isAwakenDone(pc.pc_id)?`<span class="done-badge done-awaken" title="각성전 완료 — 계정 각성 티켓 0/9 (수요일 새벽 5시 초기화)">⚔</span>`:'') +
     (isDungeonDone(pc)?`<span class="done-badge done-dungeon" title="일일던전 완료 — 계정 티켓 소진 (수요일 새벽 5시 초기화)">🏰</span>`:'') +
     (isCorridorDone(pc.pc_id)?`<span class="done-badge done-corridor" title="어비스 회랑 완료 — 전 캐릭 남은 회랑 0 (수·토 22시 초기화)">🌀</span>`:'');
   return `<div id="card-${pc.pc_id}"
@@ -2160,9 +2178,10 @@ function refreshSummary(pcs) {
   charTableData.forEach(r => {
     totalOdd += parseOddEnergy(r.odd_energy);
     // 빈 문자열은 「못 읽음」 — 서버 _fv_char_agg 의 _seen 과 같은 뜻(2026-09-23 반증 B6)
-    if (r.awakening_ticket != null && r.awakening_ticket !== '') { awakenSeen = true; totalAwaken += (parseInt(r.awakening_ticket) || 0); }
     if (r.trade_kina != null && r.trade_kina !== '') { tradeSeen = true; totalTrade += (Number(r.trade_kina) || 0); }
   });
+  // ★각성전은 계정 값(슬롯마다 반복)이라 캐릭 합이 아니라 PC(카드)당 한 번(2026-11-16)★ — 서버 _fv_char_agg 와 같은 뜻
+  for (const v of awakenByPc(charTableData).values()) { awakenSeen = true; totalAwaken += v; }
   const elOn = document.getElementById('cnt-online');
   elOn.textContent = c.onlineChars;
   // 숫자는 '전체 캐릭터', 대수 정보는 툴팁에 남긴다 (온라인/오프라인 구분은 여기서 확인)
@@ -5178,7 +5197,7 @@ async function loadCharTable() {
     charTableData = (d.characters || []).filter(r => !isExcludedPc(r.pc_id)).map(r => ({
       ...r,
       daily_ticket: resetAwareTicket(r.collected_at, r.daily_ticket, 14),
-      awakening_ticket: resetAwareTicket(r.collected_at, r.awakening_ticket, 3),
+      awakening_ticket: resetAwareTicket(r.collected_at, r.awakening_ticket, AWAKEN_MAX),
       sanctuary: resetAwareSanctuary(r.collected_at, r.sanctuary),
     }));
     document.getElementById('char-table-count').textContent = `(${charTableData.length})`;
@@ -5219,7 +5238,7 @@ const VIETNAM_COLS = [
   {key:'power_power',      vi:'Power',     ko:'파워',   align:'right',  fmt:r=>r.power_power?Number(r.power_power).toLocaleString():'–', red:r=>{const n=parseInt(r.power_power)||0;return n>0&&n<200000;}},
   {key:'odd_energy',       vi:'Odd',       ko:'오드',   align:'left',   fmt:r=>r.odd_energy||'–', red:r=>{const n=parseInt(r.odd_energy);return !isNaN(n)&&n>=840;}},
   {key:'daily_ticket',     vi:'Ngày',      ko:'일일',   align:'center', fmt:r=>r.daily_ticket||'–', red:r=>{const n=parseInt(r.daily_ticket);return !isNaN(n)&&n>=14;}},
-  {key:'awakening_ticket', vi:'Thức tỉnh', ko:'각성',   align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/3':'–', red:r=>r.awakening_ticket!=null&&r.awakening_ticket>=3},
+  {key:'awakening_ticket', vi:'Thức tỉnh', ko:'각성',   align:'center', fmt:r=>r.awakening_ticket!=null?r.awakening_ticket+'/'+AWAKEN_MAX:'–', red:r=>r.awakening_ticket!=null&&r.awakening_ticket>=AWAKEN_MAX},
 ];
 function _ta(a){ return a==='right'?'text-right':a==='center'?'text-center':'text-left'; }
 // 자가체크(작업완료) — 기기(휴대폰) localStorage에 저장. pc+slot 키라 데이터 갱신돼도 유지.
@@ -5241,7 +5260,7 @@ async function loadVietnam(){
     if(r.ok) vietnamData = ((await r.json()).characters || []).filter(x => !isExcludedPc(x.pc_id)).map(x => ({
       ...x,
       daily_ticket: resetAwareTicket(x.collected_at, x.daily_ticket, 14),
-      awakening_ticket: resetAwareTicket(x.collected_at, x.awakening_ticket, 3),
+      awakening_ticket: resetAwareTicket(x.collected_at, x.awakening_ticket, AWAKEN_MAX),
       sanctuary: resetAwareSanctuary(x.collected_at, x.sanctuary),
     }));
   }catch(e){ console.error('vietnam load', e); }
@@ -5309,7 +5328,7 @@ function isRowRed(r){
   const sFirst = sp ? parseInt(sp[1]) : 0, sMax = sp ? parseInt(sp[2]) : 0;
   const sancFull = r.gear_power >= 2700 && sMax > 0 && sFirst >= sMax;
   const extFull = String(ext).includes('입문') && String(ext).includes('50');
-  return oddFull || dailyFull || nmTicketFull(r.nightmare_ticket) || r.awakening_ticket >= 3 || sancFull || extFull;
+  return oddFull || dailyFull || nmTicketFull(r.nightmare_ticket) || r.awakening_ticket >= AWAKEN_MAX || sancFull || extFull;
 }
 function renderCharTable() {
   const filter = (document.getElementById('char-filter')?.value || '').toLowerCase();
@@ -5345,7 +5364,7 @@ function renderCharTable() {
     const nmProg = r.nightmare_progress || '';
     // ★nm 만 일부러 HTML 을 품는다★ — 조각을 여기서 감싸고, 쓰는 자리는 그대로 둔다 (2026-09-11)
     const nm = nmProg ? `${esc(nmTicket)} <span class="text-pink-400 text-[10px]">${esc(nmProg)}</span>` : esc(nmTicket);
-    const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/3` : '–';
+    const aw = r.awakening_ticket != null ? `${r.awakening_ticket}/${AWAKEN_MAX}` : '–';
     const sanc = r.sanctuary || '–';
     const mail = r.mail_count != null ? r.mail_count : '–';
     // 물약 열 제거(2026-07-30 사용자 지시) — v1.1.343부터 매크로가 판독하지 않는다(항상 0)
@@ -5362,7 +5381,7 @@ function renderCharTable() {
     const dailyNum = daily !== '–' ? parseInt(daily) : 0;
     const dailyFull = dailyNum >= 14;
     const nmFull = nmTicketFull(r.nightmare_ticket), nmWarn = nmTicketWarn(r.nightmare_ticket);
-    const awFull = r.awakening_ticket >= 3;
+    const awFull = r.awakening_ticket >= AWAKEN_MAX;
     const sancParts = sanc !== '–' ? sanc.match(/(\d+).*\/(\d+)/) : null;
     const sancFirst = sancParts ? parseInt(sancParts[1]) : 0;
     const sancMax = sancParts ? parseInt(sancParts[2]) : 0;

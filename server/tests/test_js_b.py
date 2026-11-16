@@ -202,7 +202,7 @@ async def t_js1_server():
 
     agg = await main._fv_char_agg("main")
     aw = (agg.get(pid) or {}).get("awakening_ticket")
-    ok("JS1-f 서버 합계 각성 = 슬롯1 새 값 0 + 슬롯2 리셋보정 3 = 3(옛: 6)", aw == 3, str(aw))
+    ok("JS1-f 서버 합계 각성 = 계정 값 1개(가장 늦게 읽은 슬롯1=0, 슬롯2 리셋보정 9 는 안 더함, 2026-11-16 계정 공용 9)", aw == 0, str(aw))
 
     # 화면: /characters 행을 그대로 JS 리셋 보정에 넣는다
     if not _need_node("JS1-g"):
@@ -218,7 +218,7 @@ async def t_js1_server():
         return
     js = (_DOM + consts + "\n" + fns + "\nconst rows = " + json.dumps(rows) + ";\n" + r"""
 const o = {};
-for (const r of rows) o[r.slot] = {abyss: displayAbyssTime(r), aw: resetAwareTicket(r.collected_at, r.awakening_ticket, 3),
+for (const r of rows) o[r.slot] = {abyss: displayAbyssTime(r), aw: resetAwareTicket(r.collected_at, r.awakening_ticket, 9),
   daily: resetAwareTicket(r.collected_at, r.daily_ticket, 14)};
 console.log(JSON.stringify(o));
 """)
@@ -229,10 +229,10 @@ console.log(JSON.stringify(o));
             ok("JS1-g[%s] node 실행" % tz, False, str(e)[:300])
             continue
         ok("JS1-g[%s] 리셋 뒤 merge 된 표층 00:00:00 은 그대로(14:00:00 아님)" % tz, o["1"]["abyss"] == "00:00:00", str(o))
-        ok("JS1-h[%s] 리셋 뒤 merge 된 각성 0·일일 0 은 그대로(3/3·14 아님)" % tz,
+        ok("JS1-h[%s] 리셋 뒤 merge 된 각성 0·일일 0 은 그대로(9/9·14 아님)" % tz,
            o["1"]["aw"] == 0 and o["1"]["daily"] == 0, str(o["1"]))
-        ok("JS1-i[%s] 옛 행 폴백 슬롯2 는 리셋 보정(각성 3·일일 14)" % tz,
-           o["2"]["aw"] == 3 and o["2"]["daily"] == 14, str(o["2"]))
+        ok("JS1-i[%s] 옛 행 폴백 슬롯2 는 리셋 보정(각성 9·일일 14)" % tz,
+           o["2"]["aw"] == 9 and o["2"]["daily"] == 14, str(o["2"]))
 
 
 # ───────────────── JS2 · JS6 · JS11 — 시간 ─────────────────
@@ -397,7 +397,7 @@ def t_js3_js10_table():
     src = main.HTML_DASHBOARD
     try:
         fns = _grab(src, _CT_FUNCS, ("kstGameDayNum", "isRowRed"))
-        consts = "\n".join(filter(None, (_line(src, "const NIGHTMARE_TICKET_MAX"), _line(src, "const MAX_ACCT"),
+        consts = "\n".join(filter(None, (_line(src, "const NIGHTMARE_TICKET_MAX"), _line(src, "const AWAKEN_MAX"), _line(src, "const MAX_ACCT"),
                                           _line(src, "const ACCT_LABELS"), _line(src, "const ACCT_SUFFIX"),
                                           _line(src, "const KST_OFF_MS", required=False))))
     except Exception as e:

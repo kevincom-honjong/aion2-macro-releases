@@ -44,7 +44,7 @@ async def _chars_rows(pid):
 
 
 def _aw(r):
-    return main._fv_ticket_reset_aware(r["collected_at"], r["awakening_ticket"], 3)
+    return main._fv_ticket_reset_aware(r["collected_at"], r["awakening_ticket"], 9)
 
 
 # ───────────────────────── M1 ─────────────────────────
@@ -59,8 +59,8 @@ async def t_m1():
     rb = await _chars_rows(pid)
     agg = (await main._fv_char_agg("main")).get(pid, {}).get("awakening_ticket")
     info = await db.get_char_info(pid)
-    ok("M1-a 스냅샷 통째 merge 뒤에도 안 바뀐 캐릭은 리셋 보정(3,3 · 합 6) — 키나는 갱신",
-       [_aw(rb[1]), _aw(rb[2])] == [3, 3] and agg == 6 and info["total_kina"] == 5000,
+    ok("M1-a 스냅샷 통째 merge 뒤에도 안 바뀐 캐릭은 리셋 보정(9,9 · 계정 값 9, 합 아님) — 키나는 갱신",
+       [_aw(rb[1]), _aw(rb[2])] == [9, 9] and agg == 9 and info["total_kina"] == 5000,
        "aw=%s agg=%s kina=%s ca=%s" % ([_aw(rb[1]), _aw(rb[2])], agg, info["total_kina"],
                                        [rb[1]["collected_at"], rb[2]["collected_at"]]))
 
@@ -71,8 +71,8 @@ async def t_m1():
                                            "characters": snap}))
     rb = await _chars_rows(pid)
     agg = (await main._fv_char_agg("main")).get(pid, {}).get("awakening_ticket")
-    ok("M1-b 바뀐 슬롯2 만 새 시각(0 그대로), 안 바뀐 슬롯1 은 리셋 보정 3 — 합 3",
-       _aw(rb[2]) == 0 and _aw(rb[1]) == 3 and agg == 3 and rb[1]["collected_at"] == pre,
+    ok("M1-b 바뀐 슬롯2 만 새 시각(0 그대로), 안 바뀐 슬롯1 은 리셋 보정 9 — 계정 값은 가장 늦게 읽은 슬롯2 = 0",
+       _aw(rb[2]) == 0 and _aw(rb[1]) == 9 and agg == 0 and rb[1]["collected_at"] == pre,
        "aw=%s agg=%s ca=%s" % ([_aw(rb[1]), _aw(rb[2])], agg, [rb[1]["collected_at"], rb[2]["collected_at"]]))
 
     # 이미 자기 시각이 있는 캐릭(리셋 전) — 같은 값으로 다시 통째 merge 돼도 시각이 안 밀린다
@@ -88,8 +88,8 @@ async def t_m1():
     await main.receive_char_info(pid, Req({"total_kina": 5000, "merge": True, "collected_at": pre,
                                            "characters": snap}))
     rb2 = await _chars_rows(pid)
-    ok("M1-d 재전송(같은 스냅샷 반복)은 아무 캐릭 시각도 안 올린다(슬롯1 3·슬롯2 시각 그대로)",
-       _aw(rb2[1]) == 3 and rb2[2]["collected_at"] == rb[2]["collected_at"] and rb2[1]["collected_at"] == pre,
+    ok("M1-d 재전송(같은 스냅샷 반복)은 아무 캐릭 시각도 안 올린다(슬롯1 9·슬롯2 시각 그대로)",
+       _aw(rb2[1]) == 9 and rb2[2]["collected_at"] == rb[2]["collected_at"] and rb2[1]["collected_at"] == pre,
        "%s / %s" % ([rb2[1]["collected_at"], rb2[2]["collected_at"]], [rb[1]["collected_at"], rb[2]["collected_at"]]))
 
 
