@@ -4134,6 +4134,13 @@ function aiPowerK(pw){
   return {txt: n + 'K', color: n >= 400 ? '#facc15' : '#f87171'};
 }
 // ★계정 단위 횟수(정복 62·초월 14)★ 한도를 넘으면 빨강. 모름(''·null·undefined·숫자 아님) = «—» (0 과 구분).
+// ★주간 플레이 횟수는 수요일 05:00 에 0 으로 초기화(주인님 «주간 정복 횟수»)★ — 리셋 이전에 읽은 값은 0 으로 본다.
+//   모름(''·null)은 그대로 모름. resetAwareTicket 과 같은 판정(isBeforeReset) · 수집 시각 모름이면 원본 그대로.
+function resetAwarePlays(collected_at, raw){
+  if (raw === '' || raw == null) return raw;
+  if (!collected_at || !isBeforeReset(collected_at)) return raw;
+  return 0;
+}
 function aiCountFmt(v, limit){
   if (v === '' || v == null) return {txt:'—', color:'#9ca3af'};
   const n = Number(v);
@@ -4298,8 +4305,9 @@ function aiBuildPlan(){
     acc[pc].max = Math.max(acc[pc].max, oe.max);       // ★계정 단위 속성★
     // ★정복·초월 횟수도 계정 값★ — 모든 슬롯에 같은 값이 오므로 가장 늦게 읽은 캐릭의 값을 쓴다(모름은 건너뜀).
     const _d = collectedAtDate(r.collected_at), _t = _d ? _d.getTime() : 0;
-    if (r.conquest_plays !== '' && r.conquest_plays != null && _t >= acc[pc]._cqT) { acc[pc].cq = r.conquest_plays; acc[pc]._cqT = _t; }
-    if (r.transcend_plays !== '' && r.transcend_plays != null && _t >= acc[pc]._trT) { acc[pc].tr = r.transcend_plays; acc[pc]._trT = _t; }
+    const _cq = resetAwarePlays(r.collected_at, r.conquest_plays), _tr = resetAwarePlays(r.collected_at, r.transcend_plays);
+    if (_cq !== '' && _cq != null && _t >= acc[pc]._cqT) { acc[pc].cq = _cq; acc[pc]._cqT = _t; }
+    if (_tr !== '' && _tr != null && _t >= acc[pc]._trT) { acc[pc].tr = _tr; acc[pc]._trT = _t; }
     acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
                         daily:oe.daily, bonus:oe.bonus});
   });

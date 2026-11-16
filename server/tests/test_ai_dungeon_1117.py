@@ -11,7 +11,7 @@ import tempfile
 
 from _harness import main as M, ok, run_all, finish   # noqa: E402
 
-MIN_CHECKS = 14
+MIN_CHECKS = 15
 
 
 def _fn(src, name):
@@ -42,9 +42,10 @@ async def t_ai():
        '"conquest_plays": ch.get("conquest_plays")' in __import__("inspect").getsource(M)
        and '"transcend_plays": ch.get("transcend_plays")' in __import__("inspect").getsource(M), "")
     ok("AID-2 화면 라벨 ko·vi 둘 다 정복·초월", "conquest:'정복', transcend:'초월'" in src and "conquest:'Chinh phục'" in src, "")
-    fns = "\n".join(_fn(src, n) for n in ("aiPowerK", "aiCountFmt", "aiParseOdd", "collectedAtDate", "aiBuildPlan"))
+    fns = "\n".join(_fn(src, n) for n in ("aiPowerK", "aiCountFmt", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset", "resetAwarePlays", "aiBuildPlan"))
     i = src.index("const SUB_DEN_MIN")
-    pre = src[i:src.index("\n", i)] + "\n"
+    j = src.index("const KST_OFF_MS")
+    pre = src[i:src.index("\n", i)] + "\n" + src[j:src.index("\n", j)] + "\n"
     rows = [
         {"pc_id": "PC-A", "slot": 3, "name": "c", "power_power": 400912, "odd_energy": "300/840", "collected_at": "2099-01-01T00:00:00", "conquest_plays": 10, "transcend_plays": 3},
         {"pc_id": "PC-A", "slot": 1, "name": "a", "power_power": 399999, "odd_energy": "100/840", "collected_at": "2099-01-01T00:00:00", "conquest_plays": 10, "transcend_plays": 3},
@@ -52,6 +53,8 @@ async def t_ai():
         {"pc_id": "PC-B", "slot": 1, "name": "x", "power_power": 1, "odd_energy": "1/840", "collected_at": "2099-01-01T00:00:00"},
         {"pc_id": "PC-C", "slot": 1, "name": "y", "power_power": 1, "odd_energy": "1/840", "collected_at": "2099-01-01T00:00:00", "conquest_plays": 63, "transcend_plays": 14},
         {"pc_id": "PC-C", "slot": 2, "name": "z", "power_power": 1, "odd_energy": "1/840", "collected_at": "2098-01-01T00:00:00", "conquest_plays": 5, "transcend_plays": 1},
+        {"pc_id": "PC-E", "slot": 1, "name": "v", "power_power": 1, "odd_energy": "1/840", "collected_at": "2026-09-01T00:00:00", "conquest_plays": 70, "transcend_plays": 9},
+        {"pc_id": "PC-F", "slot": 1, "name": "u", "power_power": 1, "odd_energy": "1/840", "collected_at": "", "conquest_plays": 70, "transcend_plays": 9},
         {"pc_id": "PC-D", "slot": 1, "name": "w", "power_power": 1, "odd_energy": "1/840", "collected_at": "2099-01-01T00:00:00", "conquest_plays": "", "transcend_plays": None},
     ]
     js = (pre + fns + "\nlet charTableData=%s;\nconst plan=aiBuildPlan();\nconst by={};plan.forEach(a=>by[a.pc]=a);\n"
@@ -73,6 +76,7 @@ async def t_ai():
     cq = g["cq"]
     ok("AID-11 계정 값 한 번(슬롯마다 더하지 않음): PC-A 정복 10·초월 3", cq.get("PC-A") == [10, 3], str(cq))
     ok("AID-12 필드 없는 PC(옛 데이터)는 null → «—» 로 그려진다", cq.get("PC-B") == [None, None] and cq.get("PC-D") == [None, None], str(cq))
+    ok("AID-14 주간 리셋 이전에 읽은 횟수는 0(70→0, 9→0), 수집 시각 모름은 원본 그대로", cq.get("PC-E") == [0, 0] and cq.get("PC-F") == [70, 9], str(cq))
     ok("AID-13 가장 늦게 읽은 캐릭의 값(PC-C 슬롯1 63, 낡은 슬롯2 5 아님)", cq.get("PC-C") == [63, 14], str(cq))
 
 
