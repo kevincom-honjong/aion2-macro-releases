@@ -134,6 +134,7 @@ a.chars.filter
 a.chars.length
 a.chars.slice
 a.click
+a.cq
 a.day
 a.done
 a.download
@@ -159,6 +160,7 @@ a.sub
 a.today
 a.today_pcs
 a.total
+a.tr
 a.wait_n
 a/b/c/d
 a701b11
@@ -183,7 +185,9 @@ ac.signal
 acc
 acc[pc]
 acc[pc].chars.push
+acc[pc].cq
 acc[pc].max
+acc[pc].tr
 accent-color:#22c55e
 accent-color:var
 accent-emerald-500
@@ -731,6 +735,7 @@ c.name
 c.offline
 c.online
 c.pc_id
+c.pw
 c.red
 c.slot
 c.status
@@ -950,6 +955,7 @@ config._report_start_time
 config.running
 confirm
 connecting
+conquest
 console.error
 console.warn
 const
@@ -961,6 +967,8 @@ continue
 corridor
 corridor_detail
 corridor_progress
+cq:a.cq
+cq:null
 crashed
 created_at
 credentials
@@ -1632,6 +1640,7 @@ lg-lab
 lg-note
 lg-sub
 lg-title
+limit
 line
 line-height:1
 line-height:1.05!important
@@ -2244,6 +2253,7 @@ r.busy
 r.c
 r.char_class
 r.collected_at
+r.conquest_plays
 r.corridor_full
 r.corridor_progress
 r.daily_ticket
@@ -2286,6 +2296,7 @@ r.targets
 r.total_kina
 r.tour
 r.trade_kina
+r.transcend_plays
 r.value
 r0
 r1
@@ -2852,6 +2863,8 @@ tr.bg-gray-900
 tr.bg-red-950
 tr.red-row
 tr.style.opacity
+tr:a.tr
+tr:null
 tr[data-pc
 tr[data-pc]
 tr[data-pc]:hover
@@ -2859,6 +2872,7 @@ tracking-wide
 tracking-widest
 trade
 trade_kina
+transcend
 transform
 transform-origin:50%
 transform/opacity
@@ -3056,7 +3070,6 @@ wss
 x.awakening_ticket
 x.base
 x.collected_at
-x.daily
 x.daily_ticket
 x.energy
 x.html
@@ -3071,6 +3084,7 @@ x.pc_id
 x.pid
 x.sanctuary
 x.seen
+x.slot
 x.srv
 x.stale
 x.status
@@ -3081,7 +3095,6 @@ x[i]
 xa
 xong
 y.base
-y.daily
 y.energy
 y.kina
 y.left
@@ -3090,6 +3103,7 @@ y.n
 y.no
 y.pid
 y.seen
+y.slot
 y.srv
 y.stale
 y.status

@@ -9225,7 +9225,7 @@ if (aiFilter === 'hi' || aiFilter === 'lo') aiFilter = 'dg';
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
-  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm',
+  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt',
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
@@ -9253,7 +9253,7 @@ const AI_T = {
         huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
         foot:'Tất cả nhân vật (không lọc theo lực) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
-  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스',
+  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스', conquest:'정복', transcend:'초월',
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
@@ -9290,6 +9290,19 @@ function aiGameDay(){
 }
 
 // `840(+115)/840` → {daily:840, bonus:115, max:840}. 못 읽으면 null.
+// ★파워 전투력 표시(2026-11-17 주인님)★ 천 단위 ★내림★ + K — 400,912 → «400K». ≥400K 노랑 · <400K 빨강. 0(못 읽음)은 «–».
+function aiPowerK(pw){
+  const n = Math.floor((Number(pw) || 0) / 1000);
+  if (!(Number(pw) > 0)) return {txt:'–', color:'#9ca3af'};
+  return {txt: n + 'K', color: n >= 400 ? '#facc15' : '#f87171'};
+}
+// ★계정 단위 횟수(정복 62·초월 14)★ 한도를 넘으면 빨강. 모름(''·null·undefined·숫자 아님) = «—» (0 과 구분).
+function aiCountFmt(v, limit){
+  if (v === '' || v == null) return {txt:'—', color:'#9ca3af'};
+  const n = Number(v);
+  if (!isFinite(n)) return {txt:'—', color:'#9ca3af'};
+  return {txt: n + '/' + limit, color: n > limit ? '#f87171' : '#d1d5db'};
+}
 function aiParseOdd(s){
   const m = String(s||'').match(/^\s*([\d,]+)\s*(?:\(\+?([\d,]+)\))?\s*\/\s*([\d,]+)/);
   if(!m) return null;
@@ -9444,8 +9457,12 @@ function aiBuildPlan(){
     const oe = aiParseOdd(r.odd_energy);
     if (!oe) return;                                   // 오드 미수집 캐릭은 판단 불가 → 제외
     const pc = r.pc_id || '';
-    if (!acc[pc]) acc[pc] = {pc, max:0, chars:[]};
+    if (!acc[pc]) acc[pc] = {pc, max:0, chars:[], cq:null, tr:null, _cqT:-1, _trT:-1};
     acc[pc].max = Math.max(acc[pc].max, oe.max);       // ★계정 단위 속성★
+    // ★정복·초월 횟수도 계정 값★ — 모든 슬롯에 같은 값이 오므로 가장 늦게 읽은 캐릭의 값을 쓴다(모름은 건너뜀).
+    const _d = collectedAtDate(r.collected_at), _t = _d ? _d.getTime() : 0;
+    if (r.conquest_plays !== '' && r.conquest_plays != null && _t >= acc[pc]._cqT) { acc[pc].cq = r.conquest_plays; acc[pc]._cqT = _t; }
+    if (r.transcend_plays !== '' && r.transcend_plays != null && _t >= acc[pc]._trT) { acc[pc].tr = r.transcend_plays; acc[pc]._trT = _t; }
     acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
                         daily:oe.daily, bonus:oe.bonus});
   });
@@ -9456,7 +9473,8 @@ function aiBuildPlan(){
     //   ★던전 탭만 「구독 X」★ 로 봤다. 같은 모달 안에서 탭마다 답이 다르면 안 된다.
     const sub = a.max >= SUB_DEN_MIN;
     // ★파워로 거르지 않는다 (2026-09-09 통합)★ — 정렬 규칙은 그대로.
-    const elig = a.chars.slice().sort((x,y) => y.daily - x.daily);
+    //   ★슬롯 번호 오름차순(2026-11-17 주인님)★ — 예전엔 일일 에너지 내림차순이라 슬롯이 뒤섞였다.
+    const elig = a.chars.slice().sort((x,y) => (Number(x.slot) - Number(y.slot)) || 0);
     if (!elig.length) return;
     elig.forEach(c => { c.key = a.pc + ':' + c.slot; });
     // ★★정렬은 완료 체크와 ★무관★ 해야 한다 (2026-08-22 주인님 지시)★★
@@ -9465,7 +9483,7 @@ function aiBuildPlan(){
     //   점수가 떨어지고 ★목록이 통째로 재정렬★ 됐다. 사람 눈에는 '사라진' 것으로 보인다.
     //   작업 목록에서 자리가 움직이면 지금 어디까지 했는지를 잃는다 — 체크는 ★표시만★ 이고
     //   순서는 화면을 연 시점 그대로 고정한다.
-    out.push({pc:a.pc, sub, max:a.max, chars:elig,
+    out.push({pc:a.pc, sub, max:a.max, chars:elig, cq:a.cq, tr:a.tr,
               energy: elig.reduce((s,c) => s + c.daily, 0)});   // 완료와 무관한 고정 키
   });
   // ★구독 계정 먼저★(2배 효율) → 그 안에서 일일 에너지 많은 순. 체크해도 안 바뀐다.
@@ -9888,6 +9906,8 @@ function renderAiPlan(){
         ${acctTagSpread(a.pc)}
         ${badge}
         ${aiAcctInfo(a.pc)}
+        <span class="text-xs text-gray-400">${T.conquest} <b style="color:${aiCountFmt(a.cq,62).color}">${aiCountFmt(a.cq,62).txt}</b></span>
+        <span class="text-xs text-gray-400">${T.transcend} <b style="color:${aiCountFmt(a.tr,14).color}">${aiCountFmt(a.tr,14).txt}</b></span>
         <span class="ml-auto text-xs ${aDone===a.chars.length?'text-emerald-400 font-bold':'text-gray-400'}">${aDone}/${a.chars.length}</span>
       </div>`;
     if (!a.sub) h += `<div class="px-3 py-1 text-[11px] text-red-300">${T.warn}</div>`;
@@ -9900,7 +9920,7 @@ function renderAiPlan(){
                style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
         <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
         <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
-        <span class="text-xs text-gray-400">${T.power} <b class="text-amber-300">${c.pw.toLocaleString()}</b></span>
+        <span class="text-xs text-gray-400">${T.power} <b style="color:${aiPowerK(c.pw).color}">${aiPowerK(c.pw).txt}</b></span>
         <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
         <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
       </div>`;
@@ -14843,6 +14863,9 @@ async def get_all_characters(request: Request):
                 "potion_count": ch.get("potion_count"),
                 "return_scroll_count": ch.get("return_scroll_count"),
                 "abyss_time": ch.get("abyss_time", ""),
+                # 정복(주간 62)·초월(14) 횟수 — 계정 값, 프로그램방이 /status chars 에 넣는다. 없으면 null(모름).
+                "conquest_plays": ch.get("conquest_plays"),
+                "transcend_plays": ch.get("transcend_plays"),
                 "abyss_point": ch.get("abyss_point", 0),
                 "arcana_image": ch.get("arcana_image", False),
                 "equip_image": ch.get("equip_image", False),

@@ -162,7 +162,7 @@ def t_sb3_js():
         return
     src = main.HTML_DASHBOARD
     try:
-        code = _grab(src, ("esc", "aiParseOdd", "aiBuildPlan", "renderAiPlan"))
+        code = _grab(src, ("esc", "aiParseOdd", "collectedAtDate", "aiPowerK", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
         i = src.index("const AI_T = ")
         j = src.index("};\n", i)
         ai_t = src[i:j + 2]
