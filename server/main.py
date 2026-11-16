@@ -6180,6 +6180,20 @@ function collectedAtDate(raw){
   const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
   return isNaN(d.getTime()) ? null : d;
 }
+// ★버전 뱃지 빨강 = 최신보다 ★옛것★ 일 때만(2026-11-17 주인님 「1번컴퓨터 업데이터 왜자꾸 빨간색」)★
+//   PC-01 이 시험판 3.1.15(version.json 3.1.13 보다 ★새것★)인데 `!==` 라 빨갰다. 점 숫자 비교,
+//   한쪽이라도 숫자 점 형식이 아니면(모름·'dev' 등) 빨강 아님 — 모름 ≠ 옛것(사고 464).
+function verOlder(cur, latest){
+  const re = /^v?(\d+(?:\.\d+)*)$/;
+  const a = re.exec(String(cur == null ? '' : cur).trim()), b = re.exec(String(latest == null ? '' : latest).trim());
+  if (!a || !b) return false;
+  const x = a[1].split('.').map(Number), y = b[1].split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const p = x[i] || 0, q = y[i] || 0;
+    if (p !== q) return p < q;
+  }
+  return false;
+}
 function isBeforeReset(raw){   // 가장 최근 수요일 05:00(KST) 이전 수집인가 — 모르면 false(모름≠이전)
   const d = collectedAtDate(raw);
   return !!d && d < lastWeeklyReset();
@@ -6710,8 +6724,8 @@ function buildCard(pc) {
   const ucls = _ustale ? 'text-gray-600 line-through'
     : ({'running':'text-green-400','stopped':'text-gray-500','updating':'text-cyan-400','crashed':'text-red-400'}[pc._updater_state]||'text-gray-600');
   const uageTxt = _ustale ? `<span class="text-amber-600" title="업데이터 보고가 ${Math.floor(_uage/60)}분째 없음 — 화면의 상태는 그때 값입니다">(${Math.floor(_uage/60)}분전)</span>` : '';
-  const mvcls = (pc.macro_version && latestVersions.macro && pc.macro_version !== latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
-  const uvcls = (pc._updater_version && latestVersions.updater && pc._updater_version !== latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
+  const mvcls = verOlder(pc.macro_version, latestVersions.macro) ? 'text-red-400' : 'text-gray-700';
+  const uvcls = verOlder(pc._updater_version, latestVersions.updater) ? 'text-red-400' : 'text-gray-700';
   const macroVer = pc.macro_version ? `<span class="${mvcls}">매크로 v${esc(pc.macro_version)}</span>` : '';
   // ★업데이트/재시작 결과만(2026-09-22)★ — 버전이 바뀌면 ✓, 3분 안 안 바뀌면 ✗. 설명은 hover 로만.
   const _ur = UPD_RESULT[baseId(pc.pc_id||'')];

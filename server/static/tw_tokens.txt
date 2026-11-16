@@ -165,6 +165,7 @@ a701b11
 a7guard
 a7guard.py
 a:hover
+a[1].split
 a[i]
 a[key]
 abcd
@@ -373,6 +374,7 @@ b.t
 b.title
 b/c/d
 b[0]
+b[1].split
 b[i]
 b[key]
 b]
@@ -1032,6 +1034,7 @@ delete
 delivered:true
 desc
 detect_host_acct
+dev
 device-width
 dg
 dir
@@ -2296,6 +2299,8 @@ rate
 rate/since/mins
 raw
 rc
+re
+re.exec
 re.test
 rebooted
 reconnecting
@@ -2954,6 +2959,7 @@ values
 var
 vb
 ver
+version.json
 vertical-align:middle
 vi
 vietnam
@@ -3057,6 +3063,7 @@ x.html
 x.id
 x.kina
 x.left
+x.length
 x.n
 x.no
 x.out
@@ -3070,6 +3077,7 @@ x.status
 x.sub
 x.why
 x:client_vsync
+x[i]
 xa
 xong
 y.base
@@ -3077,6 +3085,7 @@ y.daily
 y.energy
 y.kina
 y.left
+y.length
 y.n
 y.no
 y.pid
@@ -3085,6 +3094,7 @@ y.srv
 y.stale
 y.status
 y.sub
+y[i]
 yes
 yes:false
 yle
