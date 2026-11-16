@@ -1070,6 +1070,13 @@ function displayAbyssTime(r){
   if (!r.collected_at || !isBeforeReset(r.collected_at)) return v;
   return '14:00:00';
 }
+// ★캐릭 표 어비스 칸 빨강(2026-11-17 주인님 「00:00:00 이면 빨간색 글자로 표기하게 하는게 맞잖아」)★
+//   카드 이름 빨강(surfaceZeroSlots)과 ★같은 규칙★ — 0 이고 ★리셋 이전 값이 아닐 때만★
+//   (리셋 이전 0 은 displayAbyssTime 이 14:00:00 으로 보여 주므로 빨강이 아니다). 수집 시각 모름 = 원본 0 → 빨강.
+function isAbyssZeroRed(r){
+  if (!isSurfaceZero(r.abyss_time)) return false;
+  return !(r.collected_at && isBeforeReset(r.collected_at));
+}
 // ★구독 O/X — PC명 옆 동그라미 뱃지 (2026-08-29 주인님 요청)★
 //   판정은 ★오드에너지 분모★ 다: 840(또는 800)=구독 / 560=구독 해제.
 //   ★lc/info_collector._subscribed(사고 219) · dkSubCount(3644) 와 같은 규칙·같은 파서★ —
@@ -5413,7 +5420,7 @@ function renderCharTable() {
       <td class="px-3 py-1.5 text-right text-emerald-400">${gakin}</td>
       <td class="px-3 py-1.5 text-right text-orange-400">${trade}</td>
       <td class="px-3 py-1.5 text-right text-yellow-300 font-medium">${kina}</td>
-      <td class="px-3 py-1.5 text-center text-fuchsia-300">${esc(displayAbyssTime(r))}</td>
+      <td class="px-3 py-1.5 text-center ${isAbyssZeroRed(r) ? 'font-bold' : 'text-fuchsia-300'}"${isAbyssZeroRed(r) ? ' style="color:#f87171"' : ''}>${esc(displayAbyssTime(r))}</td>
       <td class="px-3 py-1.5 text-right text-fuchsia-200">${r.abyss_point ? Number(r.abyss_point).toLocaleString() : '–'}</td>
       <td class="px-3 py-1.5 text-center ${r.corridor_full ? 'text-green-400 font-medium' : 'text-sky-300'}">${esc(r.corridor_progress || '–')}</td>
     </tr>`;

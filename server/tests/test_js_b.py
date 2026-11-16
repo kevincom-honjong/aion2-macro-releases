@@ -387,7 +387,7 @@ console.log(JSON.stringify(o));
 
 
 _CT_FUNCS = ("esc", "escAttr", "isAcctSuf", "baseId", "nmTicketText", "nmTicketFull", "nmTicketWarn", "collectedAtDate",
-             "lastDailyReset", "lastWeeklyReset", "isBeforeReset", "isSurfaceZero", "displayAbyssTime",
+             "lastDailyReset", "lastWeeklyReset", "isBeforeReset", "isSurfaceZero", "displayAbyssTime", "isAbyssZeroRed",
              "renderCharTable")
 
 
