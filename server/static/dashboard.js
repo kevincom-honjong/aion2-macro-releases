@@ -4062,7 +4062,7 @@ if (aiFilter === 'hi' || aiFilter === 'lo') aiFilter = 'dg';
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
-  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt',
+  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt', sanc:'Thánh địa',
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
@@ -4090,7 +4090,7 @@ const AI_T = {
         huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
         foot:'Tất cả nhân vật (không lọc theo lực) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
-  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스', conquest:'정복', transcend:'초월',
+  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스', conquest:'정복', transcend:'초월', sanc:'성역',
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
@@ -4141,6 +4141,11 @@ function resetAwarePlays(collected_at, raw){
   if (!collected_at || !isBeforeReset(collected_at)) return raw;
   return 0;
 }
+// ★에너지 꽉참 = 진한 파랑(2026-11-19 주인님 «840/840 꽉차면 파란색 진한걸로»)★ — 분모 모르면(0) 꽉참 아님.
+function aiEnergyFull(daily, max){ return Number(max) > 0 && Number(daily) >= Number(max); }
+// ★성역(루드라) 티켓 칸(2026-11-19)★ — ★캐릭터 표 성역 열과 같은 값·같은 규칙★(§A12): charTableData 의 sanctuary
+//   (loadCharTable 이 resetAwareSanctuary 를 이미 적용 — 리셋 이전이면 «초기화됨»). 못 읽음(빈 값·null) = «?» (0 아님).
+function aiSancTxt(v){ const t = String(v == null ? '' : v).trim(); return t ? t : '?'; }
 function aiCountFmt(v, limit){
   if (v === '' || v == null) return {txt:'—', color:'#9ca3af'};
   const n = Number(v);
@@ -4309,7 +4314,7 @@ function aiBuildPlan(){
     if (_cq !== '' && _cq != null && _t >= acc[pc]._cqT) { acc[pc].cq = _cq; acc[pc]._cqT = _t; }
     if (_tr !== '' && _tr != null && _t >= acc[pc]._trT) { acc[pc].tr = _tr; acc[pc]._trT = _t; }
     acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
-                        daily:oe.daily, bonus:oe.bonus});
+                        daily:oe.daily, bonus:oe.bonus, sanc:r.sanctuary});
   });
   const out = [];
   Object.values(acc).forEach(a => {
@@ -4766,7 +4771,10 @@ function renderAiPlan(){
         <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
         <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
         <span class="text-xs text-gray-400">${T.power} <b style="color:${aiPowerK(c.pw).color}">${aiPowerK(c.pw).txt}</b></span>
-        <span class="text-xs text-gray-400">${T.energy} <b class="text-cyan-300">${c.daily}</b>/${a.max}</span>
+        <span class="text-xs text-gray-400">${T.energy} ${aiEnergyFull(c.daily, a.max)
+          ? `<b style="color:#2563eb;font-weight:800" data-full="1">${c.daily}/${a.max}</b>`
+          : `<b class="text-cyan-300">${c.daily}</b>/${a.max}`}</span>
+        <span class="text-xs text-gray-400">${T.sanc} <b class="text-amber-200">${esc(aiSancTxt(c.sanc))}</b></span>
         <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
       </div>`;
     });

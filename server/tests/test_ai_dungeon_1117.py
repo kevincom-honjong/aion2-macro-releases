@@ -42,7 +42,7 @@ async def t_ai():
        '"conquest_plays": ch.get("conquest_plays")' in __import__("inspect").getsource(M)
        and '"transcend_plays": ch.get("transcend_plays")' in __import__("inspect").getsource(M), "")
     ok("AID-2 화면 라벨 ko·vi 둘 다 정복·초월", "conquest:'정복', transcend:'초월'" in src and "conquest:'Chinh phục'" in src, "")
-    fns = "\n".join(_fn(src, n) for n in ("aiPowerK", "aiCountFmt", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset", "resetAwarePlays", "aiBuildPlan"))
+    fns = "\n".join(_fn(src, n) for n in ("aiPowerK", "aiEnergyFull", "aiSancTxt", "aiCountFmt", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset", "resetAwarePlays", "aiBuildPlan"))
     i = src.index("const SUB_DEN_MIN")
     j = src.index("const KST_OFF_MS")
     pre = src[i:src.index("\n", i)] + "\n" + src[j:src.index("\n", j)] + "\n"

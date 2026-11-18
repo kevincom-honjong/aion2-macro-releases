@@ -737,6 +737,7 @@ c.online
 c.pc_id
 c.pw
 c.red
+c.sanc
 c.slot
 c.status
 c.today
@@ -903,6 +904,7 @@ color
 color:#04202a
 color:#0b0f1f
 color:#22c55e
+color:#2563eb
 color:#2a1c02!important
 color:#34d399
 color:#4ade80
@@ -1022,6 +1024,7 @@ dashed
 data
 data-base
 data-f
+data-full
 data-k
 data-label
 data-orig
@@ -2415,6 +2418,7 @@ same
 same-origin
 sanc
 sanc.match
+sanc:r.sanctuary
 sanctuary
 sans-serif
 say
@@ -2690,6 +2694,7 @@ text-align:center
 text-align:left
 text-align:right
 text-amber-100
+text-amber-200
 text-amber-300
 text-amber-300/90
 text-amber-400
