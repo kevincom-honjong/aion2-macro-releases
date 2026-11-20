@@ -1259,7 +1259,7 @@ function nightmareBySlot(pc){
 }
 function nightmareCardLine(n){
   const col = nmTicketFull(n) ? '#f87171' : (nmTicketWarn(n) ? '#fbbf24' : '#9ca3af');
-  return `<span style="font-size:8px;line-height:1.1;max-width:100%;overflow:hidden;white-space:nowrap;color:${col}${nmTicketFull(n) ? ';font-weight:700' : ''}" title="악몽 도전 티켓">악몽 ${esc(nmTicketText(n))}</span>`;
+  return `<span style="font-size:8px;line-height:1.1;max-width:100%;overflow:hidden;white-space:nowrap;color:${col}${nmTicketFull(n) ? ';font-weight:700' : ''}" title="악몽 도전 티켓">${esc(nmTicketText(n))}</span>`;
 }
 
 // ─── 카드 렌더링 ──────────────────────────────────────────────────────────────

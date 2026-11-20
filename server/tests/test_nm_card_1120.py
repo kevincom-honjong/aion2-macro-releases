@@ -50,12 +50,12 @@ console.log(JSON.stringify({h}));
         return next((c for c in cells if ">c%d<" % n in c), "")
     ok("NM-0 여섯 칸이 그려졌다", all(cell(n) for n in range(1, 7)), str(len(cells)))
     ok("NM-1 이름 밑에 «악몽 5/14» (표와 같은 서식 nmTicketText), 이름 뒤에 온다",
-       "악몽 5&#47;14" in cell(1) and cell(1).index(">c1<") < cell(1).index("악몽"), cell(1)[-200:])
-    ok("NM-2 12 = 경고 호박색", "#fbbf24" in cell(2) and "악몽 12&#47;14" in cell(2), cell(2)[-160:])
-    ok("NM-3 14 = 꽉참 빨강 굵게", "#f87171" in cell(3) and "악몽 14&#47;14" in cell(3), cell(3)[-160:])
+       "5&#47;14" in cell(1) and "악몽 5" not in cell(1) and cell(1).index(">c1<") < cell(1).index("5&#47;14"), cell(1)[-200:])
+    ok("NM-2 12 = 경고 호박색", "#fbbf24" in cell(2) and "12&#47;14" in cell(2), cell(2)[-160:])
+    ok("NM-3 14 = 꽉참 빨강 굵게", "#f87171" in cell(3) and "14&#47;14" in cell(3), cell(3)[-160:])
     ok("NM-4 5 = 보통 회색(경고색 아님)", "#9ca3af" in cell(1) and "#fbbf24" not in cell(1), "")
     ok("NM-5 못 읽음(null)은 줄을 안 그린다", "악몽" not in cell(4), cell(4)[-120:])
-    ok("NM-6 0 은 «악몽 0/14» 로 그린다(모름과 구분)", "악몽 0&#47;14" in cell(5), cell(5)[-120:])
+    ok("NM-6 0 은 «악몽 0/14» 로 그린다(모름과 구분)", "0&#47;14" in cell(5), cell(5)[-120:])
     ok("NM-7 테이블에 없는 슬롯(6)은 줄 없음 · 다른 PC 값(PC-02 슬롯1=9)은 안 섞인다", "악몽" not in cell(6) and "9&#47;14" not in h, "")
     ok("NM-8 카드 이름 줄은 그대로(이름 칸 유지)", all(">c%d<" % n in h for n in range(1, 7)), "")
 
