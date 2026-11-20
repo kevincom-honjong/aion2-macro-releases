@@ -57,7 +57,7 @@ async def t_ai():
         {"pc_id": "PC-F", "slot": 1, "name": "u", "power_power": 1, "odd_energy": "1/840", "collected_at": "", "conquest_plays": 70, "transcend_plays": 9},
         {"pc_id": "PC-D", "slot": 1, "name": "w", "power_power": 1, "odd_energy": "1/840", "collected_at": "2099-01-01T00:00:00", "conquest_plays": "", "transcend_plays": None},
     ]
-    js = (pre + fns + "\nlet charTableData=%s;\nconst plan=aiBuildPlan();\nconst by={};plan.forEach(a=>by[a.pc]=a);\n"
+    js = (pre + "function isExcludedPc(){ return false; }"+chr(10) + fns + "\nlet charTableData=%s;\nconst plan=aiBuildPlan();\nconst by={};plan.forEach(a=>by[a.pc]=a);\n"
           "console.log(JSON.stringify({slots:by['PC-A'].chars.map(c=>c.slot),cq:Object.fromEntries(Object.entries(by).map(([k,a])=>[k,[a.cq,a.tr]])),"
           "k:[400912,400000,399999,0,'',1500].map(aiPowerK),n:[[0,62],[62,62],[63,62],[14,14],[15,14],['',62],[null,14],[undefined,14],['x',14]].map(c=>aiCountFmt(c[0],c[1]))}));" % json.dumps(rows))
     g, err = _node(js)

@@ -6375,6 +6375,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
   //   순환은 상태 옆 칩이 이미 말한다 — 같은 말을 세 번 하면 아무것도 안 읽힌다.
   const total = dp.length;
   const zeroSlots = surfaceZeroSlots(pc);   // ★사고 610★ 표층 시간 0 인 슬롯(★리셋 이후 값만★ 2026-09-23)
+  const nmSlots = nightmareBySlot(pc);      // ★악몽 남은 횟수(2026-11-20 주인님)★ 이름 밑 — 값 없으면 안 그린다
   const slots = dp.map(c => {
     const done = dpDone(c);
     const sZero = zeroSlots.has(Number(c.slot));        // ★사고 610★
@@ -6394,6 +6395,7 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
       style="min-width:0" title="${escAttr(name)}${done?' ✓ '+escAttr(time):isActive?' 진행 중':''}${sZero?' · 표층 시간 0 (00:00:00)':''}">
       <span class="font-bold text-xs leading-none">${esc(icon)}</span>
       <span style="font-size:9px;line-height:1.2;max-width:100%;overflow:hidden;white-space:nowrap${sZero?';color:#f87171;font-weight:700':''}">${esc(short)}</span>
+      ${nmSlots.has(Number(c.slot)) ? nightmareCardLine(nmSlots.get(Number(c.slot))) : ''}
       ${classLabel?`<span style="font-size:8px;line-height:1;color:#9ca3af">${classLabel}</span>`:''}
     </div>`;
   }).join('');
@@ -6404,6 +6406,23 @@ function buildDailyProgress(dp, activeSlot, charNames, pc) {
     </div>
     <div class="grid gap-1" style="grid-template-columns:repeat(${total},minmax(0,1fr))">${slots}</div>
   </div>`;
+}
+
+// ★카드 캐릭 이름 밑 «악몽 N/14» (2026-11-20 주인님 「이름 밑에 악몽 남은 횟수」)★
+//   값·색은 캐릭 표 「악몽」 열과 ★같은 헬퍼★(nmTicketText·nmTicketFull·nmTicketWarn, §A12): 꽉참(≥14)=빨강,
+//   경고(12·13)=호박색. charTableData 를 pc_id+slot 으로 조인(surfaceZeroSlots 와 같은 방식). 못 읽음(null·'') 은 줄 자체를 안 그린다(0 과 구분).
+function nightmareBySlot(pc){
+  const m = new Map(), pc_id = pc && pc.pc_id;
+  if (!pc_id) return m;
+  for (const r of charTableData) {
+    if (r.pc_id !== pc_id || r.nightmare_ticket == null || r.nightmare_ticket === '') continue;
+    m.set(Number(r.slot), r.nightmare_ticket);
+  }
+  return m;
+}
+function nightmareCardLine(n){
+  const col = nmTicketFull(n) ? '#f87171' : (nmTicketWarn(n) ? '#fbbf24' : '#9ca3af');
+  return `<span style="font-size:8px;line-height:1.1;max-width:100%;overflow:hidden;white-space:nowrap;color:${col}${nmTicketFull(n) ? ';font-weight:700' : ''}" title="악몽 도전 티켓">악몽 ${esc(nmTicketText(n))}</span>`;
 }
 
 // ─── 카드 렌더링 ──────────────────────────────────────────────────────────────

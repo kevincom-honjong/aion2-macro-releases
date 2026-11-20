@@ -357,6 +357,7 @@ function closeCardMenu(){} function refreshAcctButtons(){} function refreshCardO
 function groupAcctMaps(){ return {ids:{}, servers:{}, plats:{}}; }
 function platLabel(){ return null; }
 function surfaceZeroSlots(){ return new Set(); }
+function nightmareBySlot(){ return new Map(); }
 function dpDone(c){ return !!c.completed; }
 function dpMarks(){ return ''; }
 function fmtKinaShort(n){ return String(n); }

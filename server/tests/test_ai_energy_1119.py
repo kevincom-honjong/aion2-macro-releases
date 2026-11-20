@@ -30,7 +30,7 @@ async def t_energy():
     ]
     js = _DOM + ai_t + "\nconst SUB_DEN_MIN = 700;\nconst KST_OFF_MS = 9 * 3600000, GAME_RESET_MS = 5 * 3600000;\n" + code + r"""
 let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []};
-function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; }
+function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; } function isExcludedPc(){ return false; }
 let charTableData = %s;
 renderAiPlan();
 console.log(JSON.stringify({h: els['ai-body'].innerHTML}));

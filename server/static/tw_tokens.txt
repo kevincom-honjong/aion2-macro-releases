@@ -1647,6 +1647,7 @@ limit
 line
 line-height:1
 line-height:1.05!important
+line-height:1.1
 line-height:1.18
 line-height:1.2
 line-height:1.25
