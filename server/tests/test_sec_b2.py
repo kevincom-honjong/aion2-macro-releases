@@ -171,7 +171,7 @@ def t_sb3_js():
         return
     js = _DOM + ai_t + "\nconst SUB_DEN_MIN = 700;\n" + code + r"""
 let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []};
-function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; }
+function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; } function isExcludedPc(){ return false; }
 let charTableData = [{pc_id:'PC-01', slot:%s, name:'n', power_power:1, odd_energy:'100/840'},
                      {pc_id:'PC-02', slot:2, name:'ok', power_power:1, odd_energy:'100/840'}];
 renderAiPlan();

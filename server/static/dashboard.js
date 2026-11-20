@@ -4306,6 +4306,7 @@ function aiBuildPlan(){
     const oe = aiParseOdd(r.odd_energy);
     if (!oe) return;                                   // 오드 미수집 캐릭은 판단 불가 → 제외
     const pc = r.pc_id || '';
+    if (isExcludedPc(pc)) return;                      // ★2026-11-20 주인님★ 정지·OUT(5-2·9-2) 빼기 — loadCharTable 이 state 보다 먼저 돌면 거기 필터가 빈 state 를 봐 정지 계정이 샜다
     if (!acc[pc]) acc[pc] = {pc, max:0, chars:[], cq:null, tr:null, _cqT:-1, _trT:-1};
     acc[pc].max = Math.max(acc[pc].max, oe.max);       // ★계정 단위 속성★
     // ★정복·초월 횟수도 계정 값★ — 모든 슬롯에 같은 값이 오므로 가장 늦게 읽은 캐릭의 값을 쓴다(모름은 건너뜀).
@@ -4413,6 +4414,7 @@ function aiBuildHunt(){
     const held = cards.find(c => HUNT_HUMAN_WAIT.includes(c.status)) || null;
     const accts = [];
     cards.forEach(p => {
+      if (isExcludedPc(p.pc_id)) return;            // ★2026-11-20★ 정지·OUT 빼기(던전 탭과 같은 한 함수)
       const dp = p.daily_progress || [];
       if (!dp.length) return;                       // 진행 정보 없음 = 판정 불가 → 뺀다
       const done = dp.filter(dpDone).length;
@@ -4484,6 +4486,7 @@ function aiBuildKina(){
   Object.values(state || {}).forEach(p => {
     const pid = p.pc_id || '';
     if (!pid || /^PC-(TEST|DEMO)/i.test(pid)) return;
+    if (isExcludedPc(pid)) return;                      // ★2026-11-20★ 정지·OUT 빼기
     if (subState(pid) !== 'on') return;                 // ★구독한 것만★
     const n = acctNumOf(pid);
     const srv = (p.acct_servers && p.acct_servers[n]) ||
