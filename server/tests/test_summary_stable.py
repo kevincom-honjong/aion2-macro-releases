@@ -46,7 +46,7 @@ async def t_parity():
     ok("ST-0 node 가 있어야 한다", bool(node))
     if not node:
         return
-    js = _fn(src, "groupChars") + "\nconst acctNumOf = id => ({b:2, c:3, d:4})[(id||'').slice(-1)] || 1;\n" \
+    js = _fn(src, "groupAmap") + _fn(src, "groupChars") + "\nconst acctNumOf = id => ({b:2, c:3, d:4})[(id||'').slice(-1)] || 1;\n" \
         "console.log(JSON.stringify(%s.map(l => groupChars(l))));\n" % json.dumps(FIX)
     d = tempfile.mkdtemp(prefix="st454_")
     pth = os.path.join(d, "t.js")
@@ -76,8 +76,8 @@ async def t_parity():
 
 
 async def t_totals():
-    rows = [dict(_row("PC-01"), acct_names=M3, daily_progress=[{"completed": True}, {"completed": True, "today": False}]),
-            dict(_row("PC-01b"), acct_names=M3, banned_slots=[2], daily_progress=[{"completed": True}]),
+    rows = [dict(_row("PC-01"), acct_names=M3, daily_progress=[{"slot": 1, "completed": True}, {"slot": 2, "completed": True, "today": False}]),
+            dict(_row("PC-01b"), acct_names=M3, banned_slots=[2], daily_progress=[{"slot": 1, "completed": True}]),
             dict(_row("PC-02"), daily_progress=[{"completed": True}, {"completed": True}]),
             dict(_row("PC-TEST"), acct_names=M3, daily_progress=[{"completed": True}])]
     with _Patch(rows, [_info("PC-01", [dict(SUB_CH)])]):
@@ -86,8 +86,8 @@ async def t_totals():
        ("char_total", "chars_out", "chars_map_pcs", "chars_fb_pcs", "chars_done", "pcs_done")), str(t))
     ok("ST-6 char_total = PC-01 묶음(OUT 계정2 제외 4) + PC-02 폴백 2 = 6 · OUT 2 · 가짜 PC 제외",
        (t["char_total"], t["chars_out"], t["chars_map_pcs"], t["chars_fb_pcs"]) == (6, 2, 1, 1), str(t))
-    ok("ST-7 chars_done = 1(PC-01 today false 제외)+1(01b)+2(PC-02) = 4 · pcs_done = PC-01b·PC-02 = 2",
-       (t["chars_done"], t["pcs_done"]) == (4, 2), str((t["chars_done"], t["pcs_done"])))
+    ok("ST-7 chars_done = 1(PC-01 today false 제외)+0(01b 는 정지 계정 — 2026-11-22 분모와 같은 모집단)+2(PC-02 폴백) = 3 · pcs_done = PC-01b·PC-02 = 2",
+       (t["chars_done"], t["pcs_done"]) == (3, 2), str((t["chars_done"], t["pcs_done"])))
 
 
 async def t_replay():

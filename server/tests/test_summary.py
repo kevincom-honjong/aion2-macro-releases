@@ -242,7 +242,7 @@ let CHAR_TABLE_AT = 0, CORRIDOR_AT = 0;
 
 _JS_FUNCS = ("isAcctSuf", "baseId", "isFakePc", "sumClock", "ageNote", "serverSum", "serverSumNote",
              "summaryPcs", "redrawSummary", "loadServerSummary", "refreshSummary", "updateCorridorTile",
-             "dkHero", "awakenByPc", "collectedAtDate", "nmTicketText", "nmTicketFull", "nmTicketWarn", "isExcludedPc", "groupChars", "serverSumStale")
+             "dkHero", "awakenByPc", "collectedAtDate", "nmTicketText", "nmTicketFull", "nmTicketWarn", "isExcludedPc", "groupAmap", "groupChars", "groupDone", "serverSumStale")
 _JS_CONSTS = ("const SERVER_SUMMARY_TTL_MS", "const FAKE_PC_BASES", "const NIGHTMARE_TICKET_MAX", "const AWAKEN_MAX")
 
 FAKE_IDS = ["PC-TEST", "pc-test", "PC-TESTb", "pc-testb", "PC-DEMOc", " PC-TEST ", " pc-demo", "PC-DEMO",

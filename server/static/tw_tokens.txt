@@ -2038,7 +2038,9 @@ p-3
 p-4
 p-5
 p-8
+p._char_collected_at
 p._total_kina
+p._updated_at
 p._updater_version
 p.acct_names
 p.acct_servers

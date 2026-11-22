@@ -2130,11 +2130,18 @@ function parseOddEnergy(str) {
 //   카드가 no_account/정지로 비워지거나 순환으로 계정이 바뀌어도 지도는 그대로라 숫자가 안 흔들린다.
 //   지도가 없을 때만(옛 매크로·수집 전) 카드의 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다.
 //   → {n, accts, fromMap, out, outAccts}
-function groupChars(list){
+// ★2026-11-22★ 전 계정 지도 — 가장 최근에 갱신된 카드가 이긴다(멈춘 뒷카드의 낡은 명단이 덮어쓰지 않게). 서버 _fv_amap 과 같은 규칙.
+function groupAmap(list){
+  const fresh = p => String((p && (p._char_collected_at || p._updated_at)) || '');
   const map = {};
+  (list || []).slice().sort((a, b) => fresh(a) < fresh(b) ? -1 : fresh(a) > fresh(b) ? 1 : 0)
+    .forEach(p => Object.assign(map, (p && p.acct_names) || {}));
+  return map;
+}
+function groupChars(list){
+  const map = groupAmap(list);
   const banned = new Set();                         // ★정지(OUT) 슬롯(2026-10-05 주인님 «지금 아웃시킨거 제외하고»)★ — 계정 탭 OUT 과 같은 목록
   (list || []).forEach(p => {
-    Object.assign(map, (p && p.acct_names) || {});
     ((p && p.banned_slots) || []).forEach(x => banned.add(String(x)));
   });
   let n = 0, accts = 0, out = 0, outAccts = 0;
@@ -2152,6 +2159,25 @@ function groupChars(list){
     seen[k] = Math.max(seen[k] || 0, c); });
   const fb = Object.values(seen).reduce((a, b) => a + b, 0);
   return {n: fb, accts: Object.keys(seen).filter(k => seen[k] > 0).length, fromMap: false, out, outAccts: 0};
+}
+
+// ★2026-11-22 «완료 69 인데 13 남았다»★ 한 묶음의 «오늘 끝낸 캐릭» — 분모(groupChars)와 같은 모집단(이름 있는 칸 ∧ 정지 아님). 서버 _fv_group_done 과 같은 규칙.
+function groupDone(list){
+  const map = groupAmap(list), banned = new Set();
+  (list || []).forEach(p => { ((p && p.banned_slots) || []).forEach(x => banned.add(String(x))); });
+  const fromMap = groupChars(list).fromMap;
+  let n = 0;
+  (list || []).forEach(p => {
+    const k = String(acctNumOf((p && p.pc_id) || ''));
+    if (banned.has(k)) return;
+    const names = map[k] || {};
+    ((p && p.daily_progress) || []).forEach(c => {
+      if (!dpDone(c)) return;
+      if (fromMap && !String(names[String(c.slot)] || '').trim()) return;
+      n++;
+    });
+  });
+  return n;
 }
 
 function refreshSummary(pcs) {
@@ -2172,7 +2198,7 @@ function refreshSummary(pcs) {
     //   캐릭 수는 daily_progress 길이(=슬롯 수)가 정본, 아직 없으면 chars 목록으로 보완.
     const nChars = dp.length || ((p.chars && p.chars.length) || 0);
     if(isOnline) c.onlineChars += nChars;   // ↓ 아래에서 '뒷카드 포함'으로 다시 계산한다
-    c.completedChars += dp.filter(dpDone).length;
+    // (completedChars 는 아래 묶음 루프에서 groupDone 으로 — 분모와 같은 모집단, 2026-11-22)
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
       seenPc.add(p.pc_id);
@@ -2204,13 +2230,15 @@ function refreshSummary(pcs) {
     //   PC 를 껐다고 캐릭터가 사라지는 게 아니므로 온라인 여부와 무관하게 전부 센다.
     //   (대수 정보는 아래 '온라인' 섹션 헤더와 이 칸 툴팁에 그대로 남는다)
     //   ★#451★ 묶음별로 groupChars(전 계정 지도) — 카드 합산(비워진 카드가 빠져 100 vs 149 로 흔들렸다)은 지도 없는 묶음의 폴백만.
-    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0;
+    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0, doneN = 0;
     Object.values(grp).forEach(list => {
       const cg = groupChars(list);
       n += cg.n; outN += cg.out || 0;
+      doneN += groupDone(list);
       if (cg.fromMap) mapPcs++; else if (cg.n > 0) fbPcs++;
     });
     c.onlineChars = n;
+    c.completedChars = doneN;
     c._charSrc = {mapPcs, fbPcs, outN};
   }
   // 오드에너지 + 각성전 티켓 + 거래키나 합산 (charTableData 기준, 거래키나는 캐릭터별 소지라 전 캐릭 합산)

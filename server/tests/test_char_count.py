@@ -35,7 +35,7 @@ async def t_helper():
     if not node:
         return
     names = lambda *per: {str(i + 1): {str(j + 1): "c%d_%d" % (i, j) for j in range(n)} for i, n in enumerate(per)}   # noqa: E731
-    js = _fn(src, "groupChars") + r"""
+    js = _fn(src, "groupAmap") + _fn(src, "groupChars") + r"""
 const acctNumOf = id => ({b:2, c:3, d:4})[(id||'').slice(-1)] || 1;
 const M = %s;                       // 6 + 2 + 2 = 10 캐릭 지도(PC-03 실측 모양)
 const o = {};
@@ -105,7 +105,7 @@ console.log(JSON.stringify(o));
        "groupChars(list)" in body and "n += dp.length ||" not in body and "const _cg = groupChars(s.list);" in src, "")
     ok("CC-8 툴팁에 출처와 폴백 PC 수 · completedChars 계산은 그대로",
        "출처: 계정별 캐릭 명단(info.txt)" in body and "카드 합산으로 센 PC" in body and "정지(OUT) 계정 캐릭 ${c._charSrc.outN}명 제외" in body
-       and "c.completedChars += dp.filter(dpDone).length;" in body)
+       and "doneN += groupDone(list);" in body)
 
 
 def test_all():

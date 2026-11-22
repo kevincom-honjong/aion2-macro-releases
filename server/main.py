@@ -7293,11 +7293,18 @@ function parseOddEnergy(str) {
 //   카드가 no_account/정지로 비워지거나 순환으로 계정이 바뀌어도 지도는 그대로라 숫자가 안 흔들린다.
 //   지도가 없을 때만(옛 매크로·수집 전) 카드의 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다.
 //   → {n, accts, fromMap, out, outAccts}
-function groupChars(list){
+// ★2026-11-22★ 전 계정 지도 — 가장 최근에 갱신된 카드가 이긴다(멈춘 뒷카드의 낡은 명단이 덮어쓰지 않게). 서버 _fv_amap 과 같은 규칙.
+function groupAmap(list){
+  const fresh = p => String((p && (p._char_collected_at || p._updated_at)) || '');
   const map = {};
+  (list || []).slice().sort((a, b) => fresh(a) < fresh(b) ? -1 : fresh(a) > fresh(b) ? 1 : 0)
+    .forEach(p => Object.assign(map, (p && p.acct_names) || {}));
+  return map;
+}
+function groupChars(list){
+  const map = groupAmap(list);
   const banned = new Set();                         // ★정지(OUT) 슬롯(2026-10-05 주인님 «지금 아웃시킨거 제외하고»)★ — 계정 탭 OUT 과 같은 목록
   (list || []).forEach(p => {
-    Object.assign(map, (p && p.acct_names) || {});
     ((p && p.banned_slots) || []).forEach(x => banned.add(String(x)));
   });
   let n = 0, accts = 0, out = 0, outAccts = 0;
@@ -7315,6 +7322,25 @@ function groupChars(list){
     seen[k] = Math.max(seen[k] || 0, c); });
   const fb = Object.values(seen).reduce((a, b) => a + b, 0);
   return {n: fb, accts: Object.keys(seen).filter(k => seen[k] > 0).length, fromMap: false, out, outAccts: 0};
+}
+
+// ★2026-11-22 «완료 69 인데 13 남았다»★ 한 묶음의 «오늘 끝낸 캐릭» — 분모(groupChars)와 같은 모집단(이름 있는 칸 ∧ 정지 아님). 서버 _fv_group_done 과 같은 규칙.
+function groupDone(list){
+  const map = groupAmap(list), banned = new Set();
+  (list || []).forEach(p => { ((p && p.banned_slots) || []).forEach(x => banned.add(String(x))); });
+  const fromMap = groupChars(list).fromMap;
+  let n = 0;
+  (list || []).forEach(p => {
+    const k = String(acctNumOf((p && p.pc_id) || ''));
+    if (banned.has(k)) return;
+    const names = map[k] || {};
+    ((p && p.daily_progress) || []).forEach(c => {
+      if (!dpDone(c)) return;
+      if (fromMap && !String(names[String(c.slot)] || '').trim()) return;
+      n++;
+    });
+  });
+  return n;
 }
 
 function refreshSummary(pcs) {
@@ -7335,7 +7361,7 @@ function refreshSummary(pcs) {
     //   캐릭 수는 daily_progress 길이(=슬롯 수)가 정본, 아직 없으면 chars 목록으로 보완.
     const nChars = dp.length || ((p.chars && p.chars.length) || 0);
     if(isOnline) c.onlineChars += nChars;   // ↓ 아래에서 '뒷카드 포함'으로 다시 계산한다
-    c.completedChars += dp.filter(dpDone).length;
+    // (completedChars 는 아래 묶음 루프에서 groupDone 으로 — 분모와 같은 모집단, 2026-11-22)
     // 창고키나: PC별 1회만 합산 (창고 공유 → 중복 방지)
     if(p._total_kina && !seenPc.has(p.pc_id)) {
       seenPc.add(p.pc_id);
@@ -7367,13 +7393,15 @@ function refreshSummary(pcs) {
     //   PC 를 껐다고 캐릭터가 사라지는 게 아니므로 온라인 여부와 무관하게 전부 센다.
     //   (대수 정보는 아래 '온라인' 섹션 헤더와 이 칸 툴팁에 그대로 남는다)
     //   ★#451★ 묶음별로 groupChars(전 계정 지도) — 카드 합산(비워진 카드가 빠져 100 vs 149 로 흔들렸다)은 지도 없는 묶음의 폴백만.
-    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0;
+    let n = 0, fbPcs = 0, mapPcs = 0, outN = 0, doneN = 0;
     Object.values(grp).forEach(list => {
       const cg = groupChars(list);
       n += cg.n; outN += cg.out || 0;
+      doneN += groupDone(list);
       if (cg.fromMap) mapPcs++; else if (cg.n > 0) fbPcs++;
     });
     c.onlineChars = n;
+    c.completedChars = doneN;
     c._charSrc = {mapPcs, fbPcs, outN};
   }
   // 오드에너지 + 각성전 티켓 + 거래키나 합산 (charTableData 기준, 거래키나는 캐릭터별 소지라 전 캐릭 합산)
@@ -18989,16 +19017,30 @@ def _fv_acct_num(r: dict) -> int:
     return n if n > 0 else 1
 
 
+def _fv_card_fresh(p: dict) -> str:
+    """카드의 «이름 지도가 얼마나 새것인가» 키 — 캐릭 수집 시각, 없으면 갱신 시각(ISO 문자열 비교)."""
+    return str(p.get("_char_collected_at") or p.get("_updated_at") or "")
+
+
+def _fv_amap(cards: list) -> dict:
+    """★2026-11-22★ 묶음의 «전 계정 지도» — ★가장 최근에 갱신된 카드의 값이 이긴다★(옛 카드 순서로 덮어쓰지 않는다).
+    예전엔 카드 순서대로 update 해서, 9~10월에 멈춘 no_account 뒷카드(PC-04b·17b·20b/c·23b/c)의 낡은 acct_names 가
+    활성 카드의 새 명단을 덮어썼다(PC-04 계정1 5명→4명, PC-23 5명→2명 → 분모가 6명 모자랐다)."""
+    amap: dict = {}
+    for p in sorted(cards, key=_fv_card_fresh):
+        an = p.get("acct_names")
+        if isinstance(an, dict):
+            amap.update(an)
+    return amap
+
+
 def _fv_group_chars(cards: list) -> dict:
     """★#454 / #451 (§A12)★ 한 물리 PC(묶음)의 캐릭 수 — 화면 JS groupChars 와 ★같은 규칙★(tests/test_summary_stable.py 가 둘을 같은 입력으로 맞춘다).
     묶음 카드들의 acct_names 를 합친 «전 계정 지도»의 이름 있는 칸 수에서 정지(OUT) 슬롯(banned_slots 합집합) 계정을 뺀다.
     지도가 없을 때만 카드 daily_progress(없으면 chars) 길이를 계정번호별 최대로 더한다 — 모자랄 수 있다. → {n, accts, from_map, out, out_accts}"""
-    amap: dict = {}
+    amap = _fv_amap(cards)
     banned: set = set()
     for p in cards:
-        an = p.get("acct_names")
-        if isinstance(an, dict):
-            amap.update(an)
         for x in (p.get("banned_slots") or []):
             banned.add(str(x))
     n = accts = out = out_accts = 0
@@ -19023,6 +19065,31 @@ def _fv_group_chars(cards: list) -> dict:
             continue
         seen[k] = max(seen.get(k, 0), c)
     return {"n": sum(seen.values()), "accts": sum(1 for v in seen.values() if v > 0), "from_map": False, "out": out, "out_accts": 0}
+
+
+def _fv_group_done(cards: list) -> int:
+    """★2026-11-22 주인님 «완료 69 인데 세어보니 13 남았다»★ 한 물리 PC(묶음)의 «오늘 끝낸 캐릭» 수 — 분모(_fv_group_chars)와 ★같은 모집단★만 센다.
+    예전엔 카드 daily_progress 의 완료 슬롯을 전부 더해서, 이름 지도(acct_names)에 없는 슬롯·정지(OUT) 계정 슬롯이 분자에만 들어가 분모를 넘었다
+    (실측 PC-04 5/4 · PC-17 5/4 · PC-20 3/2 · PC-23 5/2 → 6명 과다). 지도가 있으면 «이름 있는 칸 ∧ 정지 아님» 슬롯만, 지도가 없으면(폴백) 정지만 뺀다."""
+    amap = _fv_amap(cards)
+    banned: set = set()
+    for p in cards:
+        for x in (p.get("banned_slots") or []):
+            banned.add(str(x))
+    from_map = _fv_group_chars(cards)["from_map"]
+    done = 0
+    for p in cards:
+        k = str(_fv_acct_num(p))
+        if k in banned:
+            continue
+        names = amap.get(k) if isinstance(amap.get(k), dict) else {}
+        for c in (p.get("daily_progress") or []):
+            if not _dp_done(c):
+                continue
+            if from_map and not str(names.get(str(c.get("slot"))) or "").strip():
+                continue
+            done += 1
+    return done
 
 
 async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
@@ -19091,12 +19158,12 @@ async def _fv_build_snapshot(tenant: str = FV_TENANT) -> dict:
             _dg_left.add(_raw)
         _grp.setdefault(_base_pc(_raw), []).append(r)
         _dp = r.get("daily_progress") or []
-        chars_done += sum(1 for c in _dp if _dp_done(c))
         if _dp and all(_dp_done(c) for c in _dp):
             pcs_done += 1
     char_total = chars_out = chars_map_pcs = chars_fb_pcs = 0
     for _cards in _grp.values():
         _g = _fv_group_chars(_cards)
+        chars_done += _fv_group_done(_cards)
         char_total += _g["n"]
         chars_out += _g["out"]
         if _g["from_map"]:
