@@ -1,8 +1,8 @@
 {
   "exe": {
-    "version": "1.1.1097",
+    "version": "1.1.1098",
     "filename": "혼종_통합_자동.exe",
-    "sha256": "3f22da72831b143511eae04192f9f4ae179627e34c272272a01da9b5ab12860a",
+    "sha256": "a27fc6a169fb5c216f9f810e554c7ee5860e943fc02ecee30814e747cefacf3e",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/%ED%98%BC%EC%A2%85_%ED%86%B5%ED%95%A9_%EC%9E%90%EB%8F%99.exe"
   },
   "images": {
@@ -134,6 +134,9 @@
     "fullscreen_check.png": "5927089457520ab4aeac82e3fa1f8c76fd96792bade75ccd46026715f22b0a48",
     "gakin_title.png": "8cbe1dbafd3ddcffed5b3a900e4426e94b0a1828867d4a9f3bbbb793f71a4941",
     "game_start_btn.png": "c42479b28e13ca7243c504b83984a953f60758eb5ea6d7189d62643900ca13c2",
+    "gather_f.png": "5747b0f285dbc487b9a2947e0dddc7403448447a88d6a4aaebf992c0fd390352",
+    "gather_panel.png": "9843549c611cd31d77ba3dc9deb22500327ae71abf87c6017c1a91956b67c520",
+    "gather_tgt.png": "11386f16423e03af876fd90d42c32d139852aa5cc3c435a93855e9d0e584cddd",
     "gear_icon.png": "10ce36dc1d1df85813784667ab8f35c291e7b551ae7a899427cb30c781eafa58",
     "gung_5.png": "99736d6af3d0064ea3430e5e1ef86e1d431d7e02b65d0f024af89350e669fbc0",
     "gung_6.png": "2f869b2cf7a0665441d4f2a1203449757eceeeb5a36d9c406a1394d10bec7f85",
@@ -522,11 +525,11 @@
     "sha256": "f73995b22179603e76adf135d54b9cb79379d60e01f77fcea94f72eb7a4541b8",
     "download_url": "https://raw.githubusercontent.com/kevincom-honjong/aion2-macro-releases/main/exe/updater.exe"
   },
-  "images_version": "20261121165036",
-  "updated_at": "2026-11-21T18:28:06",
+  "images_version": "20261123071833",
+  "updated_at": "2026-11-23T07:18:33",
   "_note": "이 파일은 GitHub Actions가 자동 관리. exe SHA256과 이미지 해시는 푸시할 때 자동 계산됨.",
   "rental": {
-    "version": "1.1.1097",
+    "version": "1.1.1098",
     "sha256": "944040d56f08ec3dcdaedbb6467e56622886b2f1742f2761c7e16e7e6343eee5",
     "filename": "혼종_렌탈.exe"
   }
