@@ -19,7 +19,7 @@ async def t_energy():
         return
     src = main.HTML_DASHBOARD
     code = _grab(src, ("esc", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset",
-                       "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
+                       "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiGakinTxt", "aiPcOrder", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
     i = src.index("const AI_T = ")
     ai_t = src[i:src.index("};\n", i) + 2]
     rows = [

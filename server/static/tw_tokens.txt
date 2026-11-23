@@ -167,6 +167,8 @@ a701b11
 a7guard
 a7guard.py
 a:hover
+a[0]
+a[1]
 a[1].split
 a[i]
 a[key]
@@ -378,6 +380,7 @@ b.t
 b.title
 b/c/d
 b[0]
+b[1]
 b[1].split
 b[i]
 b[key]
@@ -727,6 +730,7 @@ c.completed
 c.created_at
 c.daily
 c.fmt
+c.gk
 c.id
 c.key
 c.label
@@ -1339,6 +1343,7 @@ gear_power
 get_logs
 gian
 gid
+gk:r.gakin_kina
 glass-header
 glass-header::after
 go
@@ -3079,7 +3084,6 @@ x.awakening_ticket
 x.base
 x.collected_at
 x.daily_ticket
-x.energy
 x.html
 x.id
 x.kina
@@ -3088,6 +3092,7 @@ x.length
 x.n
 x.no
 x.out
+x.pc
 x.pc_id
 x.pid
 x.sanctuary
@@ -3096,26 +3101,24 @@ x.slot
 x.srv
 x.stale
 x.status
-x.sub
 x.why
 x:client_vsync
 x[i]
 xa
 xong
 y.base
-y.energy
 y.kina
 y.left
 y.length
 y.n
 y.no
+y.pc
 y.pid
 y.seen
 y.slot
 y.srv
 y.stale
 y.status
-y.sub
 y[i]
 yes
 yes:false

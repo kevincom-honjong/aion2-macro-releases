@@ -9272,7 +9272,7 @@ if (aiFilter === 'hi' || aiFilter === 'lo') aiFilter = 'dg';
 let aiDone = { day: '', keys: [] };
 
 const AI_T = {
-  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt', sanc:'Thánh địa',
+  vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt', sanc:'Thánh địa', gakin:'Kina khắc',
         slot:'Ô', chars:'nhân vật', sub:'Có đăng ký', nosub:'KHÔNG đăng ký',
         warn:'⚠ Không đăng ký — 1 lượt chỉ 40 NL, không bán được ở chợ, không dùng được kho từ xa',
         empty:'Chưa có dữ liệu. Hãy chạy thu thập thông tin trước.',
@@ -9300,7 +9300,7 @@ const AI_T = {
         huntSummary:(pc,ac,sl)=>`${pc} máy · ${ac} tài khoản · còn ${sl} ô`,
         foot:'Tất cả nhân vật (không lọc theo lực) · tài khoản CÓ đăng ký lên trước · ưu tiên nhân vật còn nhiều năng lượng hằng ngày. Đánh dấu xong sẽ được lưu (vẫn ở nguyên chỗ), tự reset lúc 5 giờ sáng.',
         summary:(a,c,d)=>`${a} tài khoản · ${c} nhân vật · đã xong ${d}` },
-  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스', conquest:'정복', transcend:'초월', sanc:'성역',
+  ko: { title:'🤖 오늘의 던전', power:'파워', energy:'에너지', bonus:'보너스', conquest:'정복', transcend:'초월', sanc:'성역', gakin:'각인키나',
         slot:'슬롯', chars:'캐릭', sub:'구독 O', nosub:'구독 X',
         warn:'⚠ 구독 해제 — 한 판 40에너지, 거래소 판매 불가, 원격창고 불가',
         empty:'데이터가 없습니다. 먼저 정보수집을 돌려주세요.',
@@ -9355,6 +9355,14 @@ function resetAwarePlays(collected_at, raw){
 function aiEnergyFull(daily, max){ return Number(max) > 0 && Number(daily) >= Number(max); }
 // ★성역(루드라) 티켓 칸(2026-11-19)★ — ★캐릭터 표 성역 열과 같은 값·같은 규칙★(§A12): charTableData 의 sanctuary
 //   (loadCharTable 이 resetAwareSanctuary 를 이미 적용 — 리셋 이전이면 «초기화됨»). 못 읽음(빈 값·null) = «?» (0 아님).
+// ★각인키나(2026-11-23 주인님)★ — 캐릭터 표 각인키나 열과 같은 값(charTableData.gakin_kina). 매크로는 못 읽으면 0 을 보내므로
+//   값 없음·0·숫자 아님은 «모름»(0 으로 보여 주지 않는다). 읽은 값은 천 단위 쉼표.
+function aiGakinTxt(v){ const n = Number(v); return (v === '' || v == null || !isFinite(n) || n <= 0) ? '모름' : n.toLocaleString(); }
+// ★PC 번호순(2026-11-23 주인님)★ — PC-01, 02 … 숫자순, 같은 PC 안에서는 본카드 → b → c → d. 모르는 이름은 맨 뒤(이름순).
+function aiPcOrder(pc){
+  const m = /^PC-(\d+)([a-z]?)$/i.exec(String(pc || ''));
+  return m ? [Number(m[1]), m[2] ? m[2].toLowerCase().charCodeAt(0) - 96 : 0] : [1e9, 0];
+}
 function aiSancTxt(v){ const t = String(v == null ? '' : v).trim(); return t ? t : '?'; }
 function aiCountFmt(v, limit){
   if (v === '' || v == null) return {txt:'—', color:'#9ca3af'};
@@ -9525,7 +9533,7 @@ function aiBuildPlan(){
     if (_cq !== '' && _cq != null && _t >= acc[pc]._cqT) { acc[pc].cq = _cq; acc[pc]._cqT = _t; }
     if (_tr !== '' && _tr != null && _t >= acc[pc]._trT) { acc[pc].tr = _tr; acc[pc]._trT = _t; }
     acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
-                        daily:oe.daily, bonus:oe.bonus, sanc:r.sanctuary});
+                        daily:oe.daily, bonus:oe.bonus, sanc:r.sanctuary, gk:r.gakin_kina});
   });
   const out = [];
   Object.values(acc).forEach(a => {
@@ -9547,8 +9555,9 @@ function aiBuildPlan(){
     out.push({pc:a.pc, sub, max:a.max, chars:elig, cq:a.cq, tr:a.tr,
               energy: elig.reduce((s,c) => s + c.daily, 0)});   // 완료와 무관한 고정 키
   });
-  // ★구독 계정 먼저★(2배 효율) → 그 안에서 일일 에너지 많은 순. 체크해도 안 바뀐다.
-  out.sort((x,y) => (y.sub - x.sub) || (y.energy - x.energy));
+  // ★PC 번호순(2026-11-23 주인님 「pc 순서대로」)★ — 예전엔 구독 먼저·에너지 순이었다. 체크해도 안 바뀐다.
+  out.sort((x,y) => { const a = aiPcOrder(x.pc), b = aiPcOrder(y.pc);
+    return (a[0] - b[0]) || (a[1] - b[1]) || String(x.pc).localeCompare(String(y.pc)); });
   return out;
 }
 
@@ -9988,6 +9997,7 @@ function renderAiPlan(){
           ? `<b style="color:#2563eb;font-weight:800" data-full="1">${c.daily}/${a.max}</b>`
           : `<b class="text-cyan-300">${c.daily}</b>/${a.max}`}</span>
         <span class="text-xs text-gray-400">${T.sanc} <b class="text-amber-200">${esc(aiSancTxt(c.sanc))}</b></span>
+        <span class="text-xs text-gray-400">${T.gakin} <b class="text-emerald-400">${esc(aiGakinTxt(c.gk))}</b></span>
         <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
       </div>`;
     });
