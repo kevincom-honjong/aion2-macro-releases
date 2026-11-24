@@ -162,7 +162,7 @@ def t_sb3_js():
         return
     src = main.HTML_DASHBOARD
     try:
-        code = _grab(src, ("esc", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset", "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiGakinTxt", "aiPcOrder", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
+        code = _grab(src, ("esc", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset", "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiGakinTxt", "aiClsHtml", "aiPcOrder", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
         i = src.index("const AI_T = ")
         j = src.index("};\n", i)
         ai_t = src[i:j + 2]
@@ -170,7 +170,7 @@ def t_sb3_js():
         ok("SB3 JS 함수를 잘라낸다", False, str(e))
         return
     js = _DOM + ai_t + "\nconst SUB_DEN_MIN = 700;\n" + code + r"""
-let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []}; let aiPwFilter = ''; const AI_PW_BANDS = []; function aiPwMatch(){ return true; }
+let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []}; const AI_CLS_COLOR = {}; let aiPwFilter = ''; const AI_PW_BANDS = []; function aiPwMatch(){ return true; }
 function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; } function isExcludedPc(){ return false; }
 let charTableData = [{pc_id:'PC-01', slot:%s, name:'n', power_power:1, odd_energy:'100/840'},
                      {pc_id:'PC-02', slot:2, name:'ok', power_power:1, odd_energy:'100/840'}];

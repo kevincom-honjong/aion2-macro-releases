@@ -4217,6 +4217,14 @@ function aiEnergyFull(daily, max){ return Number(max) > 0 && Number(daily) >= Nu
 //   (loadCharTable 이 resetAwareSanctuary 를 이미 적용 — 리셋 이전이면 «초기화됨»). 못 읽음(빈 값·null) = «?» (0 아님).
 // ★각인키나(2026-11-23 주인님)★ — 캐릭터 표 각인키나 열과 같은 값(charTableData.gakin_kina). 매크로는 못 읽으면 0 을 보내므로
 //   값 없음·0·숫자 아님은 «모름»(0 으로 보여 주지 않는다). 읽은 값은 천 단위 쉼표.
+// ★직업(2026-11-25 주인님 「직업도 나오면 좋겠는데 파워 앞에」)★ — 서버가 이미 주는 char_class. 모르면 아무것도 안 그린다(자리표시 없음).
+//   색은 캐릭터 표 직업 열과 같은 표(classColors)를 쓴다.
+const AI_CLS_COLOR = {'궁성':'text-green-400','검성':'text-orange-400','치유성':'text-pink-400','호법성':'text-purple-400','정령성':'text-blue-400','살성':'text-red-400','마도성':'text-cyan-400'};
+function aiClsHtml(v){
+  const t = (v == null) ? '' : String(v).trim();
+  if (!t || t === '-' || t === '—') return '';
+  return `<span class="text-xs font-bold ${AI_CLS_COLOR[t] || 'text-gray-300'}">${esc(t)}</span> `;
+}
 function aiGakinTxt(v){ const n = Number(v); return (v === '' || v == null || !isFinite(n) || n <= 0) ? '모름' : n.toLocaleString(); }
 // ★PC 번호순(2026-11-23 주인님)★ — PC-01, 02 … 숫자순, 같은 PC 안에서는 본카드 → b → c → d. 모르는 이름은 맨 뒤(이름순).
 function aiPcOrder(pc){
@@ -4393,7 +4401,7 @@ function aiBuildPlan(){
     if (_cq !== '' && _cq != null && _t >= acc[pc]._cqT) { acc[pc].cq = _cq; acc[pc]._cqT = _t; }
     if (_tr !== '' && _tr != null && _t >= acc[pc]._trT) { acc[pc].tr = _tr; acc[pc]._trT = _t; }
     acc[pc].chars.push({slot:r.slot, name:r.name||'', pw:Number(r.power_power)||0,
-                        daily:oe.daily, bonus:oe.bonus, sanc:r.sanctuary, gk:r.gakin_kina});
+                        daily:oe.daily, bonus:oe.bonus, sanc:r.sanctuary, gk:r.gakin_kina, cls:r.char_class});
   });
   const out = [];
   Object.values(acc).forEach(a => {
@@ -4867,7 +4875,7 @@ function renderAiPlan(){
                style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
         <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
         <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
-        <span class="text-xs text-gray-400">${T.power} <b style="color:${aiPowerK(c.pw).color}">${aiPowerK(c.pw).txt}</b></span>
+        ${aiClsHtml(c.cls)}<span class="text-xs text-gray-400">${T.power} <b style="color:${aiPowerK(c.pw).color}">${aiPowerK(c.pw).txt}</b></span>
         <span class="text-xs text-gray-400">${T.energy} ${aiEnergyFull(c.daily, a.max)
           ? `<b style="color:#2563eb;font-weight:800" data-full="1">${c.daily}/${a.max}</b>`
           : `<b class="text-cyan-300">${c.daily}</b>/${a.max}`}</span>

@@ -19,7 +19,7 @@ async def t_energy():
         return
     src = main.HTML_DASHBOARD
     code = _grab(src, ("esc", "aiParseOdd", "collectedAtDate", "kstGameDayNum", "lastWeeklyReset", "isBeforeReset",
-                       "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiGakinTxt", "aiPcOrder", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
+                       "resetAwarePlays", "aiPowerK", "aiEnergyFull", "aiSancTxt", "aiGakinTxt", "aiClsHtml", "aiPcOrder", "aiCountFmt", "aiBuildPlan", "renderAiPlan"))
     i = src.index("const AI_T = ")
     ai_t = src[i:src.index("};\n", i) + 2]
     rows = [
@@ -29,7 +29,7 @@ async def t_energy():
         {"pc_id": "PC-02", "slot": 1, "name": "sub800", "power_power": 1, "odd_energy": "800/800", "collected_at": NEW},
     ]
     js = _DOM + ai_t + "\nconst SUB_DEN_MIN = 700;\nconst KST_OFF_MS = 9 * 3600000, GAME_RESET_MS = 5 * 3600000;\n" + code + r"""
-let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []}; let aiPwFilter = ''; const AI_PW_BANDS = []; function aiPwMatch(){ return true; }
+let aiLang = 'ko', aiFilter = 'dg', aiDone = {keys: []}; const AI_CLS_COLOR = {}; let aiPwFilter = ''; const AI_PW_BANDS = []; function aiPwMatch(){ return true; }
 function baseId(x){ return x; } function acctTagSpread(){ return ''; } function aiAcctInfo(){ return ''; } function isExcludedPc(){ return false; }
 let charTableData = %s;
 renderAiPlan();

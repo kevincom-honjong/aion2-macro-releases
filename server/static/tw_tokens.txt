@@ -732,6 +732,7 @@ c._rot
 c._rot_full
 c.align
 c.class
+c.cls
 c.command
 c.completed
 c.created_at
@@ -849,6 +850,7 @@ clone
 close
 closest-side
 cls
+cls:r.char_class
 cls]
 cm-acct-
 cm-acct-box
