@@ -1850,7 +1850,6 @@ min-width:280px
 min-width:36px
 min-width:5.5rem
 min-width:640px
-min-width:7rem
 min-width:auto
 min:200000
 min:280000
@@ -3027,7 +3026,6 @@ vs
 vs.length
 vs.length-1
 vs.map
-w-10
 w-2
 w-2.5
 w-3
@@ -3063,8 +3061,10 @@ width:170px
 width:17px
 width:18px
 width:190px
+width:2.8rem
 width:220px!important
 width:26px
+width:3.2rem
 width:360px
 width:48%
 width:4px

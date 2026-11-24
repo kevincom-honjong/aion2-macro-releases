@@ -5008,7 +5008,7 @@ HTML_DASHBOARD = r"""<!DOCTYPE html>
 <!-- 버그 모달 -->
 <!-- ★★AI 던전 추천 모달 (2026-08-22)★★ 기본 언어 = 베트남어(직원분들), 한국어 전환 가능 -->
 <div id="ai-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4">
-  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-4xl max-h-[92vh] flex flex-col">
+  <div class="bg-gray-900 rounded-2xl shadow-2xl border border-gray-800 w-full max-w-5xl max-h-[92vh] flex flex-col">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
       <div class="flex items-center gap-2 flex-wrap">
         <h2 class="font-extrabold text-lg text-fuchsia-300" id="ai-title">🤖 Hầm ngục hôm nay</h2>
@@ -9385,11 +9385,15 @@ function aiEnergyFull(daily, max){ return Number(max) > 0 && Number(daily) >= Nu
 // ★직업(2026-11-25 주인님 「직업도 나오면 좋겠는데 파워 앞에」)★ — 서버가 이미 주는 char_class. 모르면 아무것도 안 그린다(자리표시 없음).
 //   색은 캐릭터 표 직업 열과 같은 표(classColors)를 쓴다.
 const AI_CLS_COLOR = {'궁성':'text-green-400','검성':'text-orange-400','치유성':'text-pink-400','호법성':'text-purple-400','정령성':'text-blue-400','살성':'text-red-400','마도성':'text-cyan-400'};
+//   ★열 맞춤(2026-11-25 주인님 「직업이 다르다고 삐뚤빼뚤」)★ — 직업 글자 수(살성 2·치유성 3)와 무관하게 칸 폭 고정. 모르면 빈 칸(폭 유지).
 function aiClsHtml(v){
   const t = (v == null) ? '' : String(v).trim();
-  if (!t || t === '-' || t === '—') return '';
-  return `<span class="text-xs font-bold ${AI_CLS_COLOR[t] || 'text-gray-300'}">${esc(t)}</span> `;
+  const w = 'display:inline-block;flex:none;width:3.2rem';
+  if (!t || t === '-' || t === '—') return `<span class="text-xs" style="${w}"></span>`;
+  return `<span class="text-xs font-bold ${AI_CLS_COLOR[t] || 'text-gray-300'}" style="${w}">${esc(t)}</span>`;
 }
+// 칸 폭 한 곳(각 칸이 flex 에서 줄어들지 않게 flex:none) — 값 길이가 달라도 다음 칸 시작 x 가 같다
+function aiCell(w){ return `display:inline-block;flex:none;width:${w}`; }
 function aiGakinTxt(v){ const n = Number(v); return (v === '' || v == null || !isFinite(n) || n <= 0) ? '모름' : n.toLocaleString(); }
 // ★PC 번호순(2026-11-23 주인님)★ — PC-01, 02 … 숫자순, 같은 PC 안에서는 본카드 → b → c → d. 모르는 이름은 맨 뒤(이름순).
 function aiPcOrder(pc){
@@ -10038,14 +10042,14 @@ function renderAiPlan(){
       h += `<div class="flex items-center gap-2 px-3 py-1.5" style="${done?'opacity:.45':''}">
         <input type="checkbox" ${done?'checked':''} data-k="${esc(c.key)}" onchange="aiToggleDone(this.dataset.k, this)"
                style="width:18px;height:18px;accent-color:#22c55e;cursor:pointer;flex:none">
-        <span class="text-xs text-gray-500 w-10">${T.slot}${esc(c.slot)}</span>
-        <span class="text-sm font-bold text-gray-100 truncate" style="min-width:7rem;${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
-        ${aiClsHtml(c.cls)}<span class="text-xs text-gray-400">${T.power} <b style="color:${aiPowerK(c.pw).color}">${aiPowerK(c.pw).txt}</b></span>
-        <span class="text-xs text-gray-400">${T.energy} ${aiEnergyFull(c.daily, a.max)
+        <span class="text-xs text-gray-500" style="${aiCell('2.2rem')}">${T.slot}${esc(c.slot)}</span>
+        <span class="text-sm font-bold text-gray-100 truncate" style="${aiCell('7rem')};${done?'text-decoration:line-through':''}">${esc(c.name)}</span>
+        ${aiClsHtml(c.cls)}<span class="text-xs text-gray-400" style="${aiCell('6.5rem')}">${T.power} <b style="color:${aiPowerK(c.pw).color};display:inline-block;width:2.8rem;text-align:right;font-variant-numeric:tabular-nums">${aiPowerK(c.pw).txt}</b></span>
+        <span class="text-xs text-gray-400" style="${aiCell('8rem')};font-variant-numeric:tabular-nums">${T.energy} ${aiEnergyFull(c.daily, a.max)
           ? `<b style="color:#2563eb;font-weight:800" data-full="1">${c.daily}/${a.max}</b>`
           : `<b class="text-cyan-300">${c.daily}</b>/${a.max}`}</span>
-        <span class="text-xs text-gray-400">${T.sanc} <b class="text-amber-200">${esc(aiSancTxt(c.sanc))}</b></span>
-        <span class="text-xs text-gray-400">${T.gakin} <b class="text-emerald-400">${esc(aiGakinTxt(c.gk))}</b></span>
+        <span class="text-xs text-gray-400" style="${aiCell('6.5rem')}">${T.sanc} <b class="text-amber-200">${esc(aiSancTxt(c.sanc))}</b></span>
+        <span class="text-xs text-gray-400" style="${aiCell('9rem')};font-variant-numeric:tabular-nums">${T.gakin} <b class="text-emerald-400">${esc(aiGakinTxt(c.gk))}</b></span>
         <span class="text-xs text-gray-500">(${T.bonus} +${c.bonus.toLocaleString()})</span>
       </div>`;
     });
