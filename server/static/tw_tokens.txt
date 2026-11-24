@@ -45,6 +45,7 @@
 !j.armed
 !j.ok
 !keep.has
+!key
 !keys.length
 !la
 !lab
@@ -73,6 +74,7 @@
 !pid
 !pl
 !plan.length
+!plan[i].chars.length
 !plat
 !ppw
 !r.collected_at
@@ -130,6 +132,7 @@
 @property
 a-b
 a.busy
+a.chars
 a.chars.filter
 a.chars.length
 a.chars.slice
@@ -293,6 +296,7 @@ ai-kina-tbody
 ai-lang-ko
 ai-lang-vi
 ai-modal
+ai-pw-bar
 ai-refresh
 ai-summary
 ai-title
@@ -368,7 +372,10 @@ awakening_wait
 awakening_wait:[
 b.disabled
 b.filename
+b.k
 b.length
+b.max
+b.min
 b.n
 b.pc
 b.size/1024
@@ -1034,6 +1041,7 @@ data-label
 data-orig
 data-pc
 data-pt
+data-pw
 data-rt
 data-v
 data.bugs
@@ -1478,6 +1486,7 @@ hunt
 hunt_test.js
 hunting
 hunting/selling/collecting/switching/tasking/
+i--
 icon
 id
 id.slice
@@ -1801,6 +1810,9 @@ max-width:760px
 max-width:90vw
 max-width:none
 max:0
+max:280000
+max:400000
+max:800000
 max:840
 max:a.max
 max:n
@@ -1838,6 +1850,10 @@ min-width:5.5rem
 min-width:640px
 min-width:7rem
 min-width:auto
+min:200000
+min:280000
+min:400000
+min:800000
 min_mins
 minmax
 mins
@@ -2187,6 +2203,7 @@ placeholder-gray-500
 plan
 plan.length
 plan.reduce
+plan.splice
 plat
 plats
 plrow_shot
@@ -3086,6 +3103,7 @@ x.collected_at
 x.daily_ticket
 x.html
 x.id
+x.k
 x.kina
 x.left
 x.length

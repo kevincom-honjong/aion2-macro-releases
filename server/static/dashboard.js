@@ -4107,6 +4107,29 @@ function aiStLabel(st) {
 let aiFilter = localStorage.getItem('aiFilter') || 'dg';   // 'dg' 던전 / 'hunt' 사냥 / 'kina' 키나
 if (aiFilter === 'hi' || aiFilter === 'lo') aiFilter = 'dg';
 let aiDone = { day: '', keys: [] };
+// ★파워 필터(2026-11-24 주인님 「800K 이상, 800아래 400이상, 400아래 280이상, 280아래 200이상」)★
+//   구간은 [min, max) — 800K 이상 / 400K~800K 미만 / 280K~400K 미만 / 200K~280K 미만. '' = 전체.
+//   파워 모름(0)·200K 미만은 «전체»에서만 보인다. 같은 버튼을 다시 누르면 해제.
+const AI_PW_BANDS = [
+  {k:'800', min:800000, max:Infinity, ko:'800K 이상', vi:'≥800K'},
+  {k:'400', min:400000, max:800000, ko:'400K~800K', vi:'400K~800K'},
+  {k:'280', min:280000, max:400000, ko:'280K~400K', vi:'280K~400K'},
+  {k:'200', min:200000, max:280000, ko:'200K~280K', vi:'200K~280K'},
+];
+let aiPwFilter = '';
+try { const _pf = localStorage.getItem('aiPwFilter') || ''; if (AI_PW_BANDS.some(b => b.k === _pf)) aiPwFilter = _pf; } catch(e) {}
+function aiPwMatch(pw, key){
+  if (!key) return true;
+  const b = AI_PW_BANDS.find(x => x.k === key);
+  const n = Number(pw);
+  if (!b || !isFinite(n) || n <= 0) return false;
+  return n >= b.min && n < b.max;
+}
+function setAiPw(k){
+  aiPwFilter = (aiPwFilter === k) ? '' : (AI_PW_BANDS.some(b => b.k === k) ? k : '');
+  try{ localStorage.setItem('aiPwFilter', aiPwFilter); }catch(e){}
+  renderAiPlan();
+}
 
 const AI_T = {
   vi: { title:'🤖 Hầm ngục hôm nay', power:'Lực', energy:'Năng lượng', bonus:'thêm', conquest:'Chinh phục', transcend:'Siêu việt', sanc:'Thánh địa', gakin:'Kina khắc',
@@ -4793,10 +4816,25 @@ function renderAiPlan(){
     const onKina = 'text-xs px-2.5 py-1 rounded font-bold bg-amber-600 text-white';
     if (bKi) { bKi.textContent = T.fKina || '💰'; bKi.className = (aiFilter === 'kina') ? onKina : off; }
   }
+  // ★파워 필터 바 — 던전 탭에서만 보인다★
+  const pwBar = document.getElementById('ai-pw-bar');
+  if (pwBar) {
+    if (aiFilter !== 'dg') { pwBar.classList.add('hidden'); pwBar.innerHTML = ''; }
+    else {
+      pwBar.classList.remove('hidden');
+      const onC = 'text-xs px-2.5 py-1 rounded font-bold bg-fuchsia-700 text-white';
+      const offC = 'text-xs px-2.5 py-1 rounded font-bold bg-gray-700 text-gray-300 hover:bg-gray-600';
+      pwBar.innerHTML = `<button data-pw="" onclick="setAiPw('')" class="${aiPwFilter===''?onC:offC}">${aiLang==='ko'?'전체':'Tất cả'}</button>`
+        + AI_PW_BANDS.map(b => `<button data-pw="${b.k}" onclick="setAiPw('${b.k}')" class="${aiPwFilter===b.k?onC:offC}">${aiLang==='ko'?b.ko:b.vi}</button>`).join('');
+    }
+  }
   // ★사냥 탭은 state(실시간 카드)를 보므로 여기서 갈라 나간다★
   if (aiFilter === 'hunt') { renderAiHunt(); return; }
   if (aiFilter === 'kina') { renderAiKina(); return; }
   const plan = aiBuildPlan();
+  // ★파워 구간 거르기(화면만)★ — 맞는 캐릭이 없는 PC 는 통째로 뺀다. 완료 체크 키(pc:slot)는 그대로.
+  if (aiPwFilter) plan.forEach(a => { a.chars = a.chars.filter(c => aiPwMatch(c.pw, aiPwFilter)); });
+  for (let i = plan.length - 1; i >= 0; i--) if (aiPwFilter && !plan[i].chars.length) plan.splice(i, 1);
   const body = document.getElementById('ai-body');
   if (!plan.length) { body.innerHTML = `<div class="text-gray-400 text-sm py-8 text-center">${T.empty}</div>`;
                       document.getElementById('ai-summary').textContent = ''; return; }
